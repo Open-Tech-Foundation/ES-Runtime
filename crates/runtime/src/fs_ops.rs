@@ -127,6 +127,17 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
         .requires(Capability::FileWrite),
     )?;
 
+    // `file().type`: a name's extension, looked up — no capability and no
+    // provider, because nothing is read. The one table esdev serves with too.
+    engine.register_op(OpDecl::sync("fs_content_type", move |args| {
+        let path = arg_str(&args, 0);
+        Ok(Value::String(
+            es_runtime_common::mime::content_type(&path)
+                .unwrap_or_default()
+                .to_string(),
+        ))
+    }))?;
+
     // glob match is pure pattern matching — no capability (still needs a
     // provider, which holds the matcher implementation).
     let f = fs.clone();

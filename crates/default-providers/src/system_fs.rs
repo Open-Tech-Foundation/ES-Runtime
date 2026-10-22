@@ -158,6 +158,7 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
 
 impl FileSystem for SystemFileSystem {
     fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         // Pinned like a write. A read that follows a swapped component hands
         // the guest the contents of a file outside the jail, which is a smaller
         // catastrophe than writing one and is still a catastrophe.
@@ -174,7 +175,7 @@ impl FileSystem for SystemFileSystem {
             // doing: a large file is a blocking read however it is spelled.
             tokio::task::spawn_blocking(move || read_all(&anchored))
                 .await
-                .map_err(|e| other(&path, std::io::Error::other(e)))?
+                .map_err(|e| other(&shown, std::io::Error::other(e)))?
         })
     }
 
@@ -184,6 +185,7 @@ impl FileSystem for SystemFileSystem {
         data: Vec<u8>,
         append: bool,
     ) -> BoxFuture<Result<u64, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         // Following, as this has always done: `write` through a symlink that is
         // *already there* writes the file it points at, which is what every
         // runtime does and what a symlinked config file needs. `jailed`
@@ -199,7 +201,7 @@ impl FileSystem for SystemFileSystem {
             let res = (|| -> Result<(), ProviderError> {
                 use std::io::Write;
                 let mut f = anchored.create(append)?;
-                f.write_all(&data).map_err(|e| other(&path, e))?;
+                f.write_all(&data).map_err(|e| other(&shown, e))?;
                 Ok(())
             })();
             return Box::pin(std::future::ready(res.map(|()| len)));
@@ -208,7 +210,7 @@ impl FileSystem for SystemFileSystem {
             let anchored = resolved?;
             let file = anchored.create(append)?;
             let mut f = tokio::fs::File::from_std(file);
-            f.write_all(&data).await.map_err(|e| other(&path, e))?;
+            f.write_all(&data).await.map_err(|e| other(&shown, e))?;
             // `tokio::fs::File` dispatches writes to the blocking pool and
             // returns before they land, so `write_all` alone leaves the promise
             // resolving over a file that is still empty or half-written — and
@@ -217,12 +219,13 @@ impl FileSystem for SystemFileSystem {
             // method's contract ("resolves to the number of bytes written")
             // true. The sub-64 KiB branch is a synchronous `std::fs` write and
             // was never affected, which is why only large writes tore.
-            f.flush().await.map_err(|e| other(&path, e))?;
+            f.flush().await.map_err(|e| other(&shown, e))?;
             Ok(len)
         })
     }
 
     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         let resolved = self.jail.jailed(&path, Access::Read);
         if let Ok(p) = &resolved
             && let Ok(md) = std::fs::metadata(p)
@@ -240,7 +243,9 @@ impl FileSystem for SystemFileSystem {
         }
         Box::pin(async move {
             let p = resolved?;
-            let md = tokio::fs::metadata(&p).await.map_err(|e| other(&path, e))?;
+            let md = tokio::fs::metadata(&p)
+                .await
+                .map_err(|e| other(&shown, e))?;
             let is_symlink = tokio::fs::symlink_metadata(&p)
                 .await
                 .map(|m| m.file_type().is_symlink())
@@ -256,16 +261,18 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn exists(&self, path: String) -> BoxFuture<Result<bool, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         let resolved = self.jail.jailed(&path, Access::Read);
         if let Ok(p) = &resolved {
             return Box::pin(std::future::ready(
-                p.try_exists().map_err(|e| other(&path, e)),
+                p.try_exists().map_err(|e| other(&shown, e)),
             ));
         }
         Box::pin(std::future::ready(Ok(false)))
     }
 
     fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         let p = match self.jail.jailed(&path, Access::Read) {
             Ok(p) => p,
             // Propagate the jail-escape error, like read/write/stat.
@@ -285,7 +292,7 @@ impl FileSystem for SystemFileSystem {
             }
             Ok(out)
         })();
-        Box::pin(std::future::ready(res.map_err(|e| other(&path, e))))
+        Box::pin(std::future::ready(res.map_err(|e| other(&shown, e))))
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
@@ -384,6 +391,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn copy(&self, from: String, to: String) -> BoxFuture<Result<u64, ProviderError>> {
+        let shown = self.jail.spelled(&from);
         let from_r = self.jail.jailed(&from, Access::Read);
         let to_r = self.jail.jailed(&to, Access::Write);
         Box::pin(async move {
@@ -402,11 +410,12 @@ impl FileSystem for SystemFileSystem {
                     ),
                 });
             }
-            tokio::fs::copy(&a, &b).await.map_err(|e| other(&from, e))
+            tokio::fs::copy(&a, &b).await.map_err(|e| other(&shown, e))
         })
     }
 
     fn real_path(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
+        let shown = self.jail.spelled(&path);
         let resolved = self.jail.jailed(&path, Access::Read);
         let roots = self.jail.roots(Access::Read).to_vec();
         Box::pin(async move {
@@ -417,9 +426,9 @@ impl FileSystem for SystemFileSystem {
             // defeat the point of the jail.
             let real = crate::path::canonicalize_async(&p)
                 .await
-                .map_err(|e| other(&path, e))?;
+                .map_err(|e| other(&shown, e))?;
             let real =
-                crate::jail::confine(&real, &roots).map_err(|refused| refused.named(&path))?;
+                crate::jail::confine(&real, &roots).map_err(|refused| refused.named(&shown))?;
             Ok(real.to_string_lossy().into_owned())
         })
     }
@@ -443,6 +452,8 @@ impl FileSystem for SystemFileSystem {
         path: String,
         kind: Option<SymlinkKind>,
     ) -> BoxFuture<Result<(), ProviderError>> {
+        #[cfg(not(unix))]
+        let shown = self.jail.spelled(&path);
         // Not `jailed`: the link does not exist yet, and where one *does* the
         // call is about to fail with EEXIST — following it to decide where it
         // may be created would be answering about the wrong file either way.
@@ -474,7 +485,7 @@ impl FileSystem for SystemFileSystem {
                     SymlinkKind::Dir => tokio::fs::symlink_dir(&target_path, link.path()).await,
                     SymlinkKind::File => tokio::fs::symlink_file(&target_path, link.path()).await,
                 }
-                .map_err(|e| other(&path, e))
+                .map_err(|e| other(&shown, e))
             }
         })
     }
@@ -497,6 +508,7 @@ impl FileSystem for SystemFileSystem {
         }
         #[cfg(not(unix))]
         {
+            let shown = self.jail.spelled(&path);
             let resolved = self.jail.jailed(&path, Access::Write);
             Box::pin(async move {
                 let p = resolved?;
@@ -505,12 +517,12 @@ impl FileSystem for SystemFileSystem {
                 // the platform can represent (the same mapping Node makes).
                 let mut perms = tokio::fs::metadata(&p)
                     .await
-                    .map_err(|e| other(&path, e))?
+                    .map_err(|e| other(&shown, e))?
                     .permissions();
                 perms.set_readonly(mode & 0o200 == 0);
                 tokio::fs::set_permissions(&p, perms)
                     .await
-                    .map_err(|e| other(&path, e))
+                    .map_err(|e| other(&shown, e))
             })
         }
     }
@@ -658,6 +670,83 @@ mod tests {
                 .with_write_allowlist(PathAllowlist::parse(["out"], &root).unwrap()),
         ));
         (root, fs)
+    }
+
+    /// A bundle at `dist/server.js` reads `public/index.html`, which lands at
+    /// `dist/public/index.html`. Naming only what it wrote made a denial look
+    /// like `--allow-read=public` not covering its own subtree; the error now
+    /// says where the path went, in the spelling a grant would use.
+    #[tokio::test]
+    async fn an_error_from_a_bundle_below_the_root_says_where_its_path_landed() {
+        let (root, _) = jail("spelled-bundle");
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::create_dir_all(root.join("public")).unwrap();
+        std::fs::write(root.join("public/index.html"), b"<p>").unwrap();
+        let base = root.join("dist");
+
+        let scoped = SystemFileSystem::with_jail(Arc::new(
+            Jail::new(&base, &root)
+                .with_read_allowlist(PathAllowlist::parse(["public"], &root).unwrap()),
+        ));
+        let denied = scoped.read("public/index.html".into()).await.unwrap_err();
+        assert_eq!(denied.code(), Some(ErrorCode::PermissionDenied), "{denied}");
+        assert_eq!(
+            denied.to_string(),
+            "public/index.html (dist/public/index.html in the project) \
+             is not an allowed path (read)"
+        );
+        // The grant does cover its subtree, spelled from where the bundle is.
+        assert_eq!(
+            scoped.read("../public/index.html".into()).await.unwrap(),
+            b"<p>"
+        );
+
+        let open = SystemFileSystem::new(&base, &root);
+        let missing = open.read("public/index.html".into()).await.unwrap_err();
+        assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing}");
+        assert!(
+            missing
+                .to_string()
+                .starts_with("public/index.html (dist/public/index.html in the project):"),
+            "{missing}"
+        );
+        let missing = open.stat("./public/x.css".into()).await.err().unwrap();
+        assert!(
+            missing
+                .to_string()
+                .starts_with("./public/x.css (dist/public/x.css in the project):"),
+            "{missing}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Nothing is added where it would say nothing new — an entry at the root,
+    /// an absolute path — or where it would say something D141 keeps out of
+    /// errors: how far a path that leaves the root went.
+    #[tokio::test]
+    async fn the_landing_is_left_out_where_it_adds_nothing_or_leaves_the_root() {
+        let (root, _) = jail("spelled-plain");
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+
+        let at_root = SystemFileSystem::new(&root, &root);
+        let err = at_root.read("public/a.txt".into()).await.unwrap_err();
+        assert!(err.to_string().starts_with("public/a.txt:"), "{err}");
+
+        let below = SystemFileSystem::new(root.join("dist"), &root);
+        // Climbing out of the base but not the root is still in the project.
+        let err = below.read("../a.txt".into()).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("../a.txt (a.txt in the project):"),
+            "{err}"
+        );
+        let err = below.read("../../outside.txt".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        assert!(!err.to_string().contains("in the project"), "{err}");
+        let absolute = root.join("dist/none.txt").to_string_lossy().into_owned();
+        let err = below.read(absolute.clone()).await.unwrap_err();
+        assert!(!err.to_string().contains("in the project"), "{err}");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// `base.join("")` is `base`, so an empty path used to resolve to the root

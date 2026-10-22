@@ -281,6 +281,27 @@ fn a_file_body_is_served_host_side_and_readable_everywhere_else() {
     );
 }
 
+/// `file().type` names the media type of the file's extension, and a file body
+/// takes its `Content-Type` from it as a Blob body does — so a server sending
+/// `new Response(file("public/site.css"))` needs no table of its own. A header
+/// the handler sets still wins, and an unknown extension sets none.
+#[test]
+fn a_file_body_is_typed_by_its_extension() {
+    let out = run_file("http-file-type.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for line in [
+        r#"types:["text/css; charset=utf-8","text/html; charset=utf-8","","",""]"#,
+        r#"served:text/css; charset=utf-8 body:"body { margin: 0; }\n""#,
+        "own:text/plain",
+        "upload:text/css; charset=utf-8",
+        "local:text/css; charset=utf-8",
+        "FILE_TYPE_OK",
+    ] {
+        assert!(s.lines().any(|l| l == line), "missing {line:?} in:\n{s}");
+    }
+}
+
 /// A file body is a file read, so it needs FileRead like `file().text()`: a
 /// server without the grant answers 500 and reports the refusal.
 #[test]

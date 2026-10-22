@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `file(path).type` in `runtime:fs`: the media type the file's extension
+  names (`"text/css; charset=utf-8"`), or `""` when it is not a known one, as
+  `Blob.type` reports. A file body takes its `Content-Type` from it, so
+  `new Response(file("public/site.css"))` is served as CSS without a table of
+  your own; a header you set still wins (DECISIONS D184).
+- A *Static files* guide: build a server's pages and assets into its bundle so
+  one path reaches them under `esdev start` and `esrun dist/server.js`.
+
 - An `esrun` container image, `ghcr.io/open-tech-foundation/esrun`, for
   linux/amd64 and linux/arm64: the release's own binary on a distroless
   `cc-debian13:nonroot` base, with `esrun` as the entrypoint and signed build
@@ -20,6 +28,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `.github/workflows/container.yml` after each esrun release.
 
 ### Changed
+
+- A filesystem error from a program whose entry is below the project root
+  says where a relative path landed: `public/site.css (dist/public/site.css
+  in the project) is not an allowed path (read)`. Code resolves against the
+  entry's directory and `--allow-read` against the working directory, and
+  naming only `public/site.css` made a correct refusal read as a grant that
+  did not cover its own subtree. The same on I/O failures. Error codes are
+  unchanged (DECISIONS D184).
 
 - A *Deployment* section on the site: an overview of what a deployment holds,
   and a guide per target. *Containers*: a two-stage Dockerfile (`esdev build`,

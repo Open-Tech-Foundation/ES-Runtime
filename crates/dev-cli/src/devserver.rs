@@ -888,38 +888,15 @@ fn hex(byte: u8) -> Option<u8> {
     }
 }
 
-/// The `Content-Type` for a file, by extension.
+/// The `Content-Type` for a file, by extension — the runtime's table
+/// (`es_runtime_common::mime`), so a file esdev serves in development is typed
+/// as `new Response(file(path))` types it in production.
 ///
-/// Short and explicit rather than a table of every type there is: what a dev
-/// server hands a browser is what the build wrote, and the build writes
-/// JavaScript, documents, stylesheets and whatever the author put in `public`.
 /// The default is `application/octet-stream`, which a browser downloads rather
 /// than guesses at — the safe direction to be wrong in.
 pub(crate) fn content_type(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "woff2" => "font/woff2",
-        "woff" => "font/woff",
-        "wasm" => "application/wasm",
-        "txt" | "map" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    es_runtime_common::mime::content_type(&path.to_string_lossy())
+        .unwrap_or("application/octet-stream")
 }
 
 /// [`respond`] for a body that is not text.

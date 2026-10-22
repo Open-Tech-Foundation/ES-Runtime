@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- The dev server types files with the runtime's table
+  (`es_runtime_common::mime`), the one `file(path).type` uses in production,
+  so a file is typed the same in development and once deployed. Same types as
+  before.
+
 ### Fixed
 
 - The dev-loop tests stop the supervisor by signalling its process group

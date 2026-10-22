@@ -62,8 +62,13 @@ impl Jail {
     pub fn new(base: impl AsRef<Path>, root: impl AsRef<Path>) -> Self {
         let root =
             path::canonicalize(root.as_ref()).unwrap_or_else(|_| root.as_ref().to_path_buf());
+        // Spelled the way the root is, so `spelled` can find one in the other
+        // where the two differ only by a link (`/tmp` on macOS). Resolution
+        // canonicalizes every path it joins onto the base anyway.
+        let base =
+            path::canonicalize(base.as_ref()).unwrap_or_else(|_| base.as_ref().to_path_buf());
         Jail {
-            base: base.as_ref().to_path_buf(),
+            base,
             read_roots: vec![root.clone()],
             write_roots: vec![root.clone()],
             root,
@@ -95,6 +100,42 @@ impl Jail {
         self.write_roots = roots_with(&self.root, &allow);
         self.allow_write = Some(Arc::new(allow));
         self
+    }
+
+    /// The path as an error names it: what the program wrote, and — when that
+    /// was relative to a base below the root — where it lands in the project.
+    ///
+    /// A bundle at `dist/server.js` that reads `public/index.html` reaches
+    /// `dist/public/index.html`, and a refusal naming only `public/index.html`
+    /// reads as though `--allow-read=public` had failed to cover it. The second
+    /// spelling is the one a grant has to name, because grants and the root are
+    /// both the working directory (D79).
+    ///
+    /// Lexical, not resolved: the base and the program's own spelling are all
+    /// it is made of, both of which the program already knows, so it says
+    /// nothing about where a link leads (D141). A path whose join leaves the
+    /// root is shown as written, as D141 shows every escape.
+    pub(crate) fn spelled(&self, p: &str) -> String {
+        let raw = Path::new(p);
+        if raw.is_absolute() || self.base == self.root {
+            return p.to_string();
+        }
+        let mut joined = self.base.clone();
+        for part in raw.components() {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    joined.pop();
+                }
+                other => joined.push(other),
+            }
+        }
+        match joined.strip_prefix(&self.root) {
+            Ok(rel) if !rel.as_os_str().is_empty() && rel != raw => {
+                format!("{p} ({} in the project)", path::to_slash(rel))
+            }
+            _ => p.to_string(),
+        }
     }
 
     /// The roots an access of this kind may resolve under.
@@ -199,7 +240,7 @@ impl Jail {
         {
             return reject_root_mutation(real, self.roots(access), access)
                 .and_then(|real| self.scoped(real, access))
-                .map_err(|refused| refused.named(shown));
+                .map_err(|refused| refused.named(&self.spelled(shown)));
         }
         let (parent, name) = match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
@@ -207,14 +248,14 @@ impl Jail {
             _ => {
                 return self
                     .admit(&abs, access)
-                    .map_err(|refused| refused.named(shown));
+                    .map_err(|refused| refused.named(&self.spelled(shown)));
             }
         };
         let resolved = confine(&parent, self.roots(access))
             .map(|parent| parent.join(name))
             .and_then(|resolved| reject_root_mutation(resolved, self.roots(access), access))
             .and_then(|resolved| self.scoped(resolved, access))
-            .map_err(|refused| refused.named(shown))?;
+            .map_err(|refused| refused.named(&self.spelled(shown)))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
         Ok(resolved)
     }
@@ -238,7 +279,7 @@ impl Jail {
         access: Access,
     ) -> Result<Anchored, ProviderError> {
         let real = self.jailed_as(p, shown, access)?;
-        anchor::anchor(&real, self.roots(access), shown)
+        anchor::anchor(&real, self.roots(access), &self.spelled(shown))
     }
 
     /// The same, without resolving the final component — for an operation
@@ -259,7 +300,7 @@ impl Jail {
         access: Access,
     ) -> Result<Anchored, ProviderError> {
         let real = self.jailed_nofollow_as(p, shown, access)?;
-        anchor::anchor(&real, self.roots(access), shown)
+        anchor::anchor(&real, self.roots(access), &self.spelled(shown))
     }
 
     /// Pins the directory `p` for writing beneath it (D180). Admitted like any
@@ -287,8 +328,8 @@ impl Jail {
             },
         }
         .and_then(|real| self.scoped(real, access))
-        .map_err(|refused| refused.named(p))?;
-        let anchored = anchor::anchor(&real, self.roots(access), p)?;
+        .map_err(|refused| refused.named(&self.spelled(p)))?;
+        let anchored = anchor::anchor(&real, self.roots(access), &self.spelled(p))?;
         PinnedTree::pin(&anchored)
     }
 
@@ -355,7 +396,7 @@ impl Jail {
         // a refusal should answer.
         let resolved = self
             .admit(&abs, access)
-            .map_err(|refused| refused.named(shown))?;
+            .map_err(|refused| refused.named(&self.spelled(shown)))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
         Ok(resolved)
     }

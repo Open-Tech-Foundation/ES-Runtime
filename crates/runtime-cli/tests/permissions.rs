@@ -961,6 +961,41 @@ fn allow_read_reaches_the_listed_paths_and_refuses_the_rest() {
     assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
 }
 
+/// A bundle runs from `dist/`, so its `public/index.html` is
+/// `dist/public/index.html` — outside `--allow-read=public`, which the command
+/// line resolved from the working directory. The refusal says so in the
+/// spelling the grant would need, and the grant does cover its subtree.
+#[test]
+fn a_refusal_from_a_bundle_names_where_its_path_landed() {
+    let root = scoped_tree("scoped_bundle");
+    std::fs::create_dir_all(root.join("dist")).expect("mkdir dist");
+    std::fs::create_dir_all(root.join("public")).expect("mkdir public");
+    std::fs::write(root.join("public/index.html"), "<p>hi</p>").expect("write");
+    std::fs::write(
+        root.join("dist/server.js"),
+        "import { file } from 'runtime:fs';\n\
+         try { await file('public/index.html').text(); console.log('NO THROW'); }\n\
+         catch (e) { console.log('refused', e.code, e.message); }\n\
+         console.log('read', await file('../public/index.html').text());\n",
+    )
+    .expect("write bundle");
+    let out = esrun()
+        .current_dir(&root)
+        .args(["--deny-all", "--allow-read=public", "dist/server.js"])
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        s.contains(
+            "refused ERR_PERMISSION_DENIED public/index.html \
+             (dist/public/index.html in the project) is not an allowed path (read)"
+        ),
+        "{s}"
+    );
+    assert!(s.contains("read <p>hi</p>"), "{s}");
+}
+
 #[test]
 fn allow_write_is_a_separate_list_from_allow_read() {
     let root = scoped_tree("scoped_write");

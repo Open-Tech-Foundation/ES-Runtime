@@ -1,0 +1,109 @@
+---
+title: Static files
+description: Ship a server's pages, stylesheets and images inside its bundle, and serve them with the same path in development and production.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Static files
+
+A server that sends its own pages, stylesheets and images ships them **inside
+its bundle**. The server then finds them at the same relative path wherever the
+bundle runs: `esdev start` in development, `esrun dist/server.js` in production.
+
+## Build them into the bundle
+
+Add a `web` target whose output sits beside the server's, and name `public` as
+its assets. The page itself is `index.html` at the project root.
+
+```json title="esdev.json"
+{
+  "build": {
+    "targets": {
+      "server": { "entry": "src/server.js", "out": "dist/server.js" },
+      "web": { "entry": "index.html", "outdir": "dist/public", "assets": ["public"] }
+    }
+  },
+  "dev": { "run": "server" }
+}
+```
+
+`esdev build` writes:
+
+```
+dist/
+├── server.js
+└── public/
+    ├── index.html
+    ├── site.css          ← copied from public/
+    └── assets/…          ← the page's bundled scripts and styles
+```
+
+`esdev start` writes the same tree under `.dev/` and runs
+`.dev/dist/server.js`, so `public/` is beside the server in both.
+
+## Serve them
+
+A relative path in `runtime:fs` resolves against the server's own directory, so
+`public/` names the copy the build made.
+
+```js title="src/server.js"
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
+
+// The file a URL path names under public/, or null. Plain names only — no
+// `..`, no dotfiles, no backslashes — so `/../.env` or `/src/server.js` is a
+// 404 rather than a file.
+function assetName(pathname) {
+  let name;
+  try {
+    name = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
+  } catch {
+    return null; // a malformed escape
+  }
+  const plain = name.split("/").every((part) => part !== "" && !part.startsWith("."));
+  return plain && !name.includes("\\") ? name : null;
+}
+
+serve({ port: 8080 }, async (request) => {
+  const name = assetName(new URL(request.url).pathname);
+  const asset = name && file(`public/${name}`);
+  if (asset && (await asset.stat().catch(() => null))?.isFile) return new Response(asset);
+  return new Response("Not found", { status: 404 });
+});
+```
+
+- **`Content-Type`** comes from the file's extension (`file(path).type`). Set
+  the header yourself for a type the [table](/api/fs#fsfile--the-filepath-handle)
+  does not know.
+- **`HEAD`** is answered by `serve`: the same headers, including
+  `Content-Length`, and no body.
+- **Checked per request**, so a file added to `public/` while `esdev start`
+  runs is served at once: a browser-only change does not restart the server.
+
+## Grant the read
+
+esrun grants nothing by default. Grant the directory, which covers everything
+under it:
+
+```sh
+esrun --allow-read=dist/public --allow-listen=8080 dist/server.js
+```
+
+<Callout type="note" title="Two spellings of one directory">
+  The grant is `dist/public` and the code says `public`. A command-line path
+  resolves against the working directory, where you typed it; a path in code
+  resolves against the server's file. An error shows both:
+  `public/x.css (dist/public/x.css in the project) is not an allowed path (read)`.
+</Callout>
+
+`esdev start` grants everything, so development needs no flag.
+
+## How other tools compare
+
+- **Vite** copies `publicDir` into the build output on its own; here the copy
+  is the `assets` entry, which also lets you name more than one directory.
+- **Deno** serves a directory with `serveDir` from `@std/http`, behind
+  `--allow-read`.
+- **Bun** sets `Content-Type` from `Bun.file(path).type`, as `file(path).type`
+  does here.

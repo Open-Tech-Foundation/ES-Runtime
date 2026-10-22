@@ -75,6 +75,7 @@ const NAV = [
           { title: "Overview", path: "/docs/http" },
           { title: "Basics", path: "/docs/http/basics" },
           { title: "Lifecycle & shutdown", path: "/docs/http/lifecycle" },
+          { title: "Static files", path: "/docs/http/static" },
           { title: "HTTPS, HTTP/2 & trailers", path: "/docs/http/protocols" },
           { title: "Identity & deployment", path: "/docs/http/production" },
         ],

@@ -1871,6 +1871,14 @@ await write("data/copy.json", f);          // any web body: string|Blob|ArrayBuf
 
 Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 
+A relative path resolves against the **entry file's directory** (the base
+directory, D25): under `esrun dist/server.js`, `file("public/site.css")` is
+`dist/public/site.css`. Entries in `--allow-read` / `--allow-write` resolve
+against the working directory, where they were typed (D79), so that file is
+granted by `--allow-read=dist/public`. A refusal or I/O error names the path as
+written and, when it lands somewhere else in the project, where:
+`public/site.css (dist/public/site.css in the project) is not an allowed path (read)`.
+
 ### Module functions
 
 | Export                | Type                                            | Description                                                                 |
@@ -1925,8 +1933,18 @@ as is writing entries *inside* it.
 ### `FsFile` (from `file(path)`)
 
 `text()`, `json()`, `bytes()` (`Uint8Array`), `arrayBuffer()`, `stream()`
-(`ReadableStream`), `exists()`, `stat()`, `write(data)`, `delete()`, and the
-`path` it points at — the Blob read surface plus convenience writes/deletes.
+(`ReadableStream`), `exists()`, `stat()`, `write(data)`, `delete()`, the
+`path` it points at, and `type` — the Blob read surface plus convenience
+writes/deletes.
+
+`type` is the media type the file's extension names (`"text/css; charset=utf-8"`
+for `.css`), and `""` for an extension it does not know, as `Blob.type` reports
+one. Nothing is read to answer it. As a Fetch body — `new Response(file(path))`,
+`fetch(url, { body: file(path) })` — the file sets `Content-Type` from `type`,
+unless the headers already name one or `type` is `""`. Known: `html`/`htm`,
+`js`/`mjs`, `css`, `json`, `svg`, `png`, `jpg`/`jpeg`, `webp`, `avif`, `gif`,
+`ico`, `woff2`, `woff`, `wasm`, `txt`, `map` — the same table esdev's dev server
+serves with.
 
 ---
 

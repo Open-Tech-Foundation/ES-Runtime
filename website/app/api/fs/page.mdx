@@ -27,6 +27,19 @@ writes that accept any web body.
 import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "runtime:fs";
 ```
 
+## Paths
+
+A relative path resolves against the **entry file's directory**: under
+`esrun dist/server.js`, `file("public/site.css")` is `dist/public/site.css`.
+Entries in `--allow-read` / `--allow-write` resolve against the **working
+directory**, where they were typed, so that file is granted by
+`--allow-read=dist/public`. An error names the path as written and, when it
+lands somewhere else in the project, where:
+
+```
+public/site.css (dist/public/site.css in the project) is not an allowed path (read)
+```
+
 ## Functions
 
 | Function | Type | Description | Example |
@@ -64,6 +77,7 @@ import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "r
 | Member | Returns | Description |
 | --- | --- | --- |
 | `path` | `string` | The path this handle points at. |
+| `type` | `string` | The media type the extension names (`"text/css; charset=utf-8"`), or `""` if unknown. Nothing is read. |
 | `text()` | `Promise<string>` | Read the whole file as UTF-8 text. |
 | `json()` | `Promise<any>` | Read and `JSON.parse` the file. |
 | `bytes()` | `Promise<Uint8Array>` | Read the whole file as bytes. |
@@ -76,7 +90,13 @@ import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "r
 | `delete()` | `Promise<void>` | Delete this file. |
 
 An `FsFile` is also a Fetch body: `new Response(file(path))`,
-`fetch(url, { body: file(path) })`. The file is read when the body is read.
+`fetch(url, { body: file(path) })`. The file is read when the body is read, and
+`Content-Type` comes from `type` unless the headers already set one or `type`
+is `""`.
+
+`type` knows `html`/`htm`, `js`/`mjs`, `css`, `json`, `svg`, `png`,
+`jpg`/`jpeg`, `webp`, `avif`, `gif`, `ico`, `woff2`, `woff`, `wasm`, `txt` and
+`map`.
 
 ## Temporary entries
 

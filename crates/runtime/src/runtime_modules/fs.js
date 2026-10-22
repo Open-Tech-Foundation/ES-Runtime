@@ -31,6 +31,12 @@ class FsFile {
   constructor(path) {
     this.path = path;
   }
+  // The media type its extension names, as `Blob.type` reports one: "" when
+  // unknown. A body takes its `Content-Type` from this, so
+  // `new Response(file("public/site.css"))` is served as CSS.
+  get type() {
+    return ops.fs_content_type(this.path);
+  }
   async bytes() {
     return ops.fs_read(this.path); // Uint8Array
   }

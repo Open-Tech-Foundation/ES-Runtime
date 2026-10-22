@@ -103,9 +103,16 @@ await remove("./logs", { recursive: true });
 
 ## Capabilities & the jail
 
-Reads need `FileRead`, writes need `FileWrite` (the CLI grants both), and every
-path is confined to the project root — escapes via `..` or a symlink are
-rejected.
+Reads need `FileRead`, writes need `FileWrite`, and esrun grants neither by
+default: pass `--allow-read` / `--allow-write`, whole or narrowed to paths
+(`esdev` grants everything). Every path is confined to the project root —
+escapes via `..` or a symlink are rejected.
+
+A relative path in code resolves against the entry file's directory; a path on
+the command line resolves against the working directory. A bundle at
+`dist/server.js` reads `public/site.css` as `dist/public/site.css`, which
+`--allow-read=dist/public` grants. See [Paths](/api/fs#paths) and, for a
+server's own pages and assets, [Static files](/docs/http/static).
 
 ## How other runtimes compare
 

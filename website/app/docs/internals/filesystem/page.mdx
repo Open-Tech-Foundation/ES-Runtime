@@ -201,6 +201,18 @@ The resolution helpers return refusals that carry no path, and turning one into
 an error takes the program's spelling, so a later change cannot put the
 canonical path back by accident.
 
+**Where a relative path landed is added, because it is not the canonical
+path.** Code resolves against the entry file's directory and the command line
+against the working directory, so a bundle at `dist/server.js` that reads
+`public/site.css` reaches `dist/public/site.css` — outside
+`--allow-read=public`. Named alone, `public/site.css` reads as a grant that
+failed to cover its own subtree. The error now adds the join, relative to the
+project: `public/site.css (dist/public/site.css in the project)`. It is
+computed lexically from the base and the spelling — both things the program
+already knows — so it follows no link and says nothing about the host. A join
+that leaves the root is not added: how far a path climbed out is what D141
+keeps out of errors. The decision is D184.
+
 The module loader follows the same rule. A module that fails to load is named
 by its specifier, a path is shown only relative to the project, and a module
 outside the root is refused as outside whether or not the file exists, so an

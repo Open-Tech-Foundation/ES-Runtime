@@ -229,7 +229,8 @@
       };
     }
     if (input instanceof ReadableStream) return { stream: input };
-    if (typeof input[FILE_BODY] === "function") return { file: input };
+    // As a Blob body does: its `type`, when it has one, is the Content-Type.
+    if (typeof input[FILE_BODY] === "function") return { file: input, type: input.type || null };
     return { bytes: encoder.encode(String(input)), type: "text/plain;charset=UTF-8" };
   }
 

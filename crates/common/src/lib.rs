@@ -10,6 +10,7 @@
 //! - [`capability`] — deny-by-default [`CapabilitySet`] tokens threaded from the
 //!   embedder (ARCHITECTURE.md §7; DECISIONS.md D7).
 //! - [`config`] — resource-[`Limits`] primitives the runtime enforces.
+//! - [`mime`] — the media type a file is served as, by its extension.
 //! - [`telemetry`] — `tracing` setup for binaries and tests (ARCHITECTURE.md §8).
 //! - [`uncaught`] — an [`UncaughtError`], the description of a JS failure that
 //!   escaped every handler and reached the host.
@@ -20,6 +21,7 @@
 pub mod capability;
 pub mod config;
 pub mod error;
+pub mod mime;
 pub mod telemetry;
 pub mod uncaught;
 

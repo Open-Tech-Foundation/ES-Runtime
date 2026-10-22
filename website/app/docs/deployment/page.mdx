@@ -18,7 +18,9 @@ Every target follows the same steps:
 
 1. **Install `esrun`**. See [Installation](/docs/install), which also shows how
    to pin a version; on Linux it needs glibc 2.39 or newer.
-2. **Copy the bundle** — the `dist/` directory — and nothing else.
+2. **Copy the bundle** — the `dist/` directory — and nothing else. Pages,
+   stylesheets and images the server sends are built into it; see
+   [Static files](/docs/http/static).
 3. **Grant only what the service uses** on the command line: the port it
    listens on, the hosts it calls, the variables it reads. Nothing is granted
    by default. See [Permissions & capabilities](/docs/security/permissions).
