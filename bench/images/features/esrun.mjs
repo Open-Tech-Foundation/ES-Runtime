@@ -23,6 +23,15 @@ await probe(args[0], args[1], args[2], {
   // GIF output is a single frame even for an animated input.
   animatedGif: (b) => new Image(b).resize(16).gif().bytes(),
   progressiveJpeg: (b) => new Image(b).jpeg({ progressive: true }).bytes(),
+  extend: (b) => png(new Image(b).extend(8)),
+  trim: (b) => png(new Image(b).trim()),
+  convolve: (b) => png(new Image(b).convolve({ width: 3, height: 3, kernel: [1, 1, 1, 1, 1, 1, 1, 1, 1] })),
+  blend: (b) => png(new Image(b).composite([{ input: b, blend: "multiply" }])),
+  rawIn: (b, raw) => png(new Image(b, { raw })),
+  rawOut: (b) => new Image(b).raw().bytes(),
+  create: ({ width, height }) => png(new Image({ create: { width, height, channels: 3, background: "#ff0000" } })),
+  keepExif: (b) => new Image(b).keepExif().jpeg().bytes(),
+  blueMean: async (b) => (await new Image(b).stats()).channels[2].mean,
   reencode: (b) => png(new Image(b)),
   frames: async (b) => (await new Image(b).metadata()).animation?.frames ?? null,
 });

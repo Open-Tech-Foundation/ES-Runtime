@@ -5,7 +5,7 @@ Runs every case in cases.mjs on esrun (runtime:images), Node.js (sharp), Bun
 case, and judges what each wrote with Pillow: sizes, pixels and the magic bytes
 of an encoded file. Prints the comparison table as the site renders it.
 
-    python3 bench/images/features/features.py     (needs Pillow; sharp via pnpm install)
+    python3 bench/images/features/features.py     (needs Pillow, libjxl's cjxl; sharp via pnpm install)
 """
 
 import json
@@ -23,8 +23,8 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 SAMPLES = os.path.join(HERE, ".samples")
 OUT = os.path.join(HERE, ".out")
 ESRUN = os.environ.get("ESRUN", os.path.join(ROOT, "target", "release", "esrun"))
-FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic"]
-EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif", "gif": "gif", "tiff": "tiff", "heic": "heic"}
+FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic", "jxl"]
+EXT = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif", "gif": "gif", "tiff": "tiff", "heic": "heic", "jxl": "jxl"}
 
 RUNTIMES = {
     "esrun": [ESRUN, "--allow-read", "--allow-write", "--allow-imports", "esrun.mjs"],
@@ -39,9 +39,7 @@ def chunk(kind, body):
 
 
 def samples():
-    if os.path.exists(os.path.join(SAMPLES, "photo.jpg")) and os.path.exists(
-        os.path.join(SAMPLES, "progressive.jpg")
-    ):
+    if all(os.path.exists(os.path.join(SAMPLES, n)) for n in ("photo.jpg", "progressive.jpg", "sample.jxl", "framed.png")):
         return
     os.makedirs(SAMPLES, exist_ok=True)
     s = os.path.join
@@ -53,6 +51,15 @@ def samples():
     img.save(s(SAMPLES, "sample.webp"), quality=90)
     img.save(s(SAMPLES, "sample.gif"))
     img.save(s(SAMPLES, "sample.tiff"))
+    # The same pixels with no header at all, for raw input.
+    open(s(SAMPLES, "sample.rgb"), "wb").write(img.tobytes())
+    # Neither Pillow nor sharp's prebuilt libvips writes JPEG XL; libjxl's own
+    # encoder does, so no runtime under test made its own input.
+    subprocess.run(["cjxl", "--quiet", "-d", "1", s(SAMPLES, "sample.png"), s(SAMPLES, "sample.jxl")], check=True)
+    # A 20x10 red box on a white border, for trim.
+    framed = Image.new("RGB", (64, 48), (255, 255, 255))
+    framed.paste((255, 0, 0), (22, 19, 42, 29))
+    framed.save(s(SAMPLES, "framed.png"))
     # Pillow writes no AVIF; sharp does, so none of the runtimes made its own input.
     subprocess.run(
         ["node", "-e", "require('sharp')(process.argv[1]).avif().toFile(process.argv[2])",
@@ -90,7 +97,8 @@ CASES = (
     + [f"encode:{f}" for f in FORMATS]
     + ["fit:cover", "fit:contain", "fit:outside", "crop", "rotate", "rotate-free",
        "blur", "composite", "text", "animated-out", "progressive-jpg",
-       "progressive-in", "orient", "bomb", "malformed", "animation", "offthread"]
+       "progressive-in", "extend", "trim", "convolve", "blend", "raw-in", "raw-out", "create",
+       "orient", "keep-exif", "stats", "bomb", "malformed", "animation", "offthread"]
 )
 
 MAGIC = {
@@ -102,6 +110,8 @@ MAGIC = {
     "tiff": lambda b: b[:4] in (b"II*\0", b"MM\0*"),
     "heic": lambda b: b[4:8] == b"ftyp" and b[8:12] in (
         b"heic", b"heix", b"hevc", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"),
+    # A bare codestream, or the ISO box container.
+    "jxl": lambda b: b[:2] == b"\xff\x0a" or b[:12] == b"\0\0\0\x0cJXL \r\n\x87\n",
 }
 
 
@@ -128,6 +138,9 @@ def judge(case, result):
         return result.get("value") == 2
     if name == "offthread":
         return (result.get("value") or 0) > 0
+    if name == "stats":
+        # sample.png's blue channel is 128 everywhere.
+        return abs((result.get("value") or 0) - 128) < 1
     if "out" not in result:
         return False
     if name == "decode":
@@ -168,6 +181,29 @@ def judge(case, result):
         # A progressive JPEG carries a Start Of Frame marker for each scan
         # (SOF2, 0xFFC2); a baseline one carries none.
         return b"\xff\xc2" in open(result["out"], "rb").read()
+    if name == "extend":
+        return size(result) == (80, 64)
+    if name == "trim":
+        return size(result) == (20, 10)
+    if name == "convolve":
+        # A 3x3 box over the red/white edge at x=50 mixes the two.
+        return size(result) == (200, 100) and pixel(result, (50, 50))[:3] not in ((255, 0, 0), (255, 255, 255))
+    if name == "blend":
+        # Multiply over itself: (40, 50, 128) at (10, 10) becomes about (6, 10, 64).
+        r, g, b, _ = pixel(result, (10, 10))
+        return r < 12 and g < 16 and 60 <= b <= 68
+    if name == "raw-in":
+        return size(result) == (64, 48) and pixel(result, (10, 10))[:3] == (40, 50, 128)
+    if name == "raw-out":
+        data = open(result["out"], "rb").read()
+        channels = len(data) // (64 * 48)
+        at = (10 * 64 + 10) * channels
+        return channels in (3, 4) and len(data) == 64 * 48 * channels and tuple(data[at:at + 3]) == (40, 50, 128)
+    if name == "create":
+        return size(result) == (32, 16) and pixel(result, (5, 5))[:3] == (255, 0, 0)
+    if name == "keep-exif":
+        with Image.open(result["out"]) as im:
+            return im.format == "JPEG" and len(im.getexif()) > 0
     if name in ("blur", "composite"):
         return size(result) == (64, 48)
     if name == "orient":
@@ -194,12 +230,13 @@ GROUPS = [
     ("Decoding", [
         ("Decode JPEG", ["decode:jpeg"]), ("Decode PNG", ["decode:png"]), ("Decode WebP", ["decode:webp"]),
         ("Decode AVIF", ["decode:avif"]), ("Decode GIF", ["decode:gif"]), ("Decode TIFF", ["decode:tiff"]),
-        ("Decode HEIC", ["decode:heic"]), ("Decode progressive JPEG", ["progressive-in"]),
+        ("Decode HEIC", ["decode:heic"]), ("Decode JPEG XL", ["decode:jxl"]),
+        ("Decode progressive JPEG", ["progressive-in"]),
     ]),
     ("Encoding", [
         ("Encode JPEG", ["encode:jpeg"]), ("Encode PNG", ["encode:png"]), ("Encode WebP", ["encode:webp"]),
         ("Encode AVIF", ["encode:avif"]), ("Encode GIF", ["encode:gif"]), ("Encode TIFF", ["encode:tiff"]),
-        ("Encode HEIC", ["encode:heic"]),
+        ("Encode HEIC", ["encode:heic"]), ("Encode JPEG XL", ["encode:jxl"]),
     ]),
     ("Transforms", [
         ("Resize: `cover`", ["fit:cover"]), ("Resize: `contain`", ["fit:contain"]),
@@ -207,9 +244,14 @@ GROUPS = [
         ("Crop", ["crop"]), ("Rotate 90°", ["rotate"]), ("Rotate 45° (any angle)", ["rotate-free"]),
         ("Blur", ["blur"]), ("Composite", ["composite"]), ("Text overlay", ["text"]),
         ("Animated output keeps frames", ["animated-out"]), ("Progressive JPEG", ["progressive-jpg"]),
+        ("Extend the canvas", ["extend"]), ("Trim a border", ["trim"]), ("Convolve with a kernel", ["convolve"]),
+        ("Blend modes (`multiply`)", ["blend"]), ("Raw pixels in", ["raw-in"]), ("Raw pixels out", ["raw-out"]),
+        ("Create a blank canvas", ["create"]),
     ]),
     ("Behaviour & safety", [
         ("EXIF orientation applied by default", ["orient"]),
+        ("Keeps EXIF when asked", ["keep-exif"]),
+        ("Pixel statistics", ["stats"]),
         ("Refuses a decompression bomb", ["bomb"]),
         ("Error code on malformed input", ["malformed"]),
         ("Reports animation frames", ["animation"]),

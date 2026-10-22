@@ -248,8 +248,8 @@ Deno's `createImageBitmap`, and [sharp](https://sharp.pixelplumbing.com) for
 Node, which has none. Every cell was produced by **running** the operation,
 not by reading docs.
 
-`bench/images/features/features.py`, Linux x86-64: esrun 0.38.0, sharp 0.35.5
-on Node 24.21.0, Bun 1.4.2, Deno 2.9.7 (2026-10-08). Bun's AVIF/TIFF follow
+`bench/images/features/features.py`, Linux x86-64: esrun 0.42.0, sharp 0.35.5
+on Node 24.21.0, Bun 1.4.3, Deno 2.9.7 (2026-10-23). Bun's AVIF/TIFF follow
 the OS codecs, so macOS/Windows differ.
 
 ### Decoding
@@ -263,6 +263,7 @@ the OS codecs, so macOS/Windows differ.
 | Decode GIF | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Decode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Decode HEIC | <No /> | <No /> | <Partial /> | <No /> |
+| Decode JPEG XL | <Yes /> | <No /> | <No /> | <No /> |
 | Decode progressive JPEG | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 
 ### Encoding
@@ -276,6 +277,7 @@ the OS codecs, so macOS/Windows differ.
 | Encode GIF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Encode TIFF | <Yes /> | <Yes /> | <No /> | <No /> |
 | Encode HEIC | <No /> | <No /> | <Partial /> | <No /> |
+| Encode JPEG XL | <Yes /> | <No /> | <No /> | <No /> |
 
 ### Transforms
 
@@ -292,20 +294,29 @@ the OS codecs, so macOS/Windows differ.
 | Text overlay | <No /> | <Yes /> | <No /> | <No /> |
 | Animated output keeps frames | <No /> | <Yes /> | <No /> | <No /> |
 | Progressive JPEG | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Extend the canvas | <Yes /> | <Yes /> | <No /> | <No /> |
+| Trim a border | <Yes /> | <Yes /> | <No /> | <No /> |
+| Convolve with a kernel | <Yes /> | <Yes /> | <No /> | <No /> |
+| Blend modes (`multiply`) | <Yes /> | <Yes /> | <No /> | <No /> |
+| Raw pixels in | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Raw pixels out | <Yes /> | <Yes /> | <No /> | <No /> |
+| Create a blank canvas | <Yes /> | <Yes /> | <No /> | <No /> |
 
 ### Behaviour & safety
 
 | | esrun<br/>`runtime:images` | Node.js<br/>sharp | Bun<br/>`Bun.Image` | Deno<br/>`createImageBitmap` |
 | --- | :---: | :---: | :---: | :---: |
 | EXIF orientation applied by default | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Keeps EXIF when asked | <Yes /> | <Yes /> | <No /> | <No /> |
+| Pixel statistics | <Yes /> | <Yes /> | <No /> | <No /> |
 | Refuses a decompression bomb | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Error code on malformed input | <Yes /> | <No /> | <Yes /> | <No /> |
 | Reports animation frames | <Yes /> | <Yes /> | <No /> | <No /> |
 | Event loop runs while decoding | <Yes /> | <Yes /> | <Yes /> | <No /> |
 
-- **Formats:** the six everywhere on esrun/sharp; Bun follows the OS; Deno writes PNG/JPEG only (WebP/AVIF requests return PNG per spec).
+- **Formats:** the six everywhere on esrun/sharp; JPEG XL in and out on esrun only (sharp's prebuilt libvips has no libjxl); Bun follows the OS; Deno writes PNG/JPEG only (WebP/AVIF/JXL requests return PNG per spec).
 - **HEIC:** esrun `ERR_IMAGE_FORMAT_UNSUPPORTED` — convert to AVIF/JPEG; Bun <Partial />, `img.heic({ quality: 80 })` on macOS/Windows; sharp here lacks the HEVC plugin; Deno none.
-- **Operations:** sharp's compositing, `extend`/`trim`, encoder options and metadata keeping — no free rotation, text or multi-frame output. For those, use sharp.
+- **Operations:** sharp's compositing with its blend modes, `extend`/`trim`, `convolve`, raw pixels in and out, blank canvases, `stats()`, encoder options and metadata keeping — no free rotation, text or multi-frame output. For those, use sharp.
 - **Safety:** 400 MP bomb refused at header by all but Deno; sharp skips EXIF unless asked and its errors carry no code; Deno decode blocks the loop.
 - **Speed:** [Benchmarks](/docs/benchmarks#images).
 

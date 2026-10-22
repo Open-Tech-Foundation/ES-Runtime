@@ -2,8 +2,8 @@
 // prints one JSON line: `{ "out": file }` for an image it wrote, `{ "value": x }`
 // for a number it measured, or `{ "error": message, "code": code }`. features.py
 // judges the answer, so no probe decides whether it passed.
-export const FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic"];
-export const EXT = { jpeg: "jpg", png: "png", webp: "webp", avif: "avif", gif: "gif", tiff: "tiff", heic: "heic" };
+export const FORMATS = ["jpeg", "png", "webp", "avif", "gif", "tiff", "heic", "jxl"];
+export const EXT = { jpeg: "jpg", png: "png", webp: "webp", avif: "avif", gif: "gif", tiff: "tiff", heic: "heic", jxl: "jxl" };
 
 export async function probe(kase, data, out, api) {
   try {
@@ -52,6 +52,25 @@ async function run(name, arg, data, out, api) {
       return write(await api.reencode(await api.read(`${data}/bomb.png`)));
     case "malformed":
       return write(await api.reencode(await api.read(`${data}/malformed.png`)));
+    case "extend":
+      return write(await api.extend(await api.read(`${data}/sample.png`)));
+    case "trim":
+      return write(await api.trim(await api.read(`${data}/framed.png`)));
+    case "convolve":
+      return write(await api.convolve(await api.read(`${data}/stripes.png`)));
+    case "blend":
+      return write(await api.blend(await api.read(`${data}/sample.png`)));
+    // sample.rgb is sample.png's pixels, 64x48, three channels, no header.
+    case "raw-in":
+      return write(await api.rawIn(await api.read(`${data}/sample.rgb`), { width: 64, height: 48, channels: 3 }));
+    case "raw-out":
+      return write(await api.rawOut(await api.read(`${data}/sample.png`)), "raw");
+    case "create":
+      return write(await api.create({ width: 32, height: 16 }));
+    case "keep-exif":
+      return write(await api.keepExif(await api.read(`${data}/oriented.jpg`)), "jpg");
+    case "stats":
+      return { value: await api.blueMean(await api.read(`${data}/sample.png`)) };
     case "animation":
       return { value: await api.frames(await api.read(`${data}/animated.gif`)) };
     case "offthread": {

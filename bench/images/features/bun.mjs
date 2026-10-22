@@ -22,6 +22,17 @@ await probe(process.argv[2], process.argv[3], process.argv[4], {
   text: () => unsupported(),
   animatedGif: (b) => (has("gif") ? new Bun.Image(b).resize(16).gif().bytes() : unsupported()),
   progressiveJpeg: (b) => new Bun.Image(b).jpeg({ progressive: true }).bytes(),
+  // Bun.Image 1.4 has no extend, trim, convolve, blend, raw pixels, canvas,
+  // EXIF passthrough or statistics: each is a method it would need.
+  extend: (b) => (has("extend") ? png(new Bun.Image(b).extend(8)) : unsupported()),
+  trim: (b) => (has("trim") ? png(new Bun.Image(b).trim()) : unsupported()),
+  convolve: () => unsupported(),
+  blend: () => unsupported(),
+  rawIn: () => unsupported(),
+  rawOut: (b) => (has("raw") ? new Bun.Image(b).raw().bytes() : unsupported()),
+  create: () => unsupported(),
+  keepExif: (b) => new Bun.Image(b).jpeg().bytes(),
+  blueMean: () => unsupported(),
   reencode: (b) => png(new Bun.Image(b)),
   frames: async (b) => {
     const m = await new Bun.Image(b).metadata();

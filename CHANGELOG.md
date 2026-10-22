@@ -29,6 +29,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- The comparison page's images tables cover what `runtime:images` gained in
+  D181 and D182: JPEG XL in and out, extending, trimming, convolving, blend
+  modes, raw pixels in and out, blank canvases, keeping EXIF and pixel
+  statistics, each measured on esrun, sharp, Bun and Deno by new cases in
+  `bench/images/features` (JPEG XL samples made with libjxl's `cjxl`).
+
 - A filesystem error from a program whose entry is below the project root
   says where a relative path landed: `public/site.css (dist/public/site.css
   in the project) is not an allowed path (read)`. Code resolves against the
