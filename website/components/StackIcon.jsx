@@ -4,7 +4,8 @@
 // Sources, all vendored under public/img/brands/ so the site makes no
 // external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
-// WebAssembly, JavaScript, RabbitMQ, MQTT and NATS from Simple Icons (CC0). The JSX tile is that
+// WebAssembly, JavaScript, RabbitMQ, MQTT and NATS from Simple Icons (CC0); Valkey's
+// mark from valkey.io (img/Valkey-logo.svg; a trademark of LF Projects, LLC). The JSX tile is that
 // JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
 // WebSocket, images, archives, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
@@ -40,6 +41,9 @@ export default function StackIcon({ name }) {
       )}
       {name === "redis" && (
         <img src="/img/brands/redis.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "valkey" && (
+        <img src="/img/brands/valkey.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "rabbitmq" && (
         <img src="/img/brands/rabbitmq.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />

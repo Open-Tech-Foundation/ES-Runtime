@@ -27,13 +27,14 @@ const groups = [
   },
   {
     name: "Store",
-    desc: "Embedded SQLite plus first-party Postgres, MySQL/MariaDB, and Redis.",
+    desc: "Embedded SQLite plus first-party Postgres, MySQL/MariaDB, Redis, and Valkey.",
     tiles: [
-      { icon: "sqlite", label: "SQLite", to: "/docs/db" },
-      { icon: "postgres", label: "PostgreSQL", to: "/docs/db" },
-      { icon: "mysql", label: "MySQL", to: "/docs/db" },
-      { icon: "mariadb", label: "MariaDB", to: "/docs/db" },
+      { icon: "sqlite", label: "SQLite", to: "/docs/db/sqlite" },
+      { icon: "postgres", label: "PostgreSQL", to: "/docs/db/postgres" },
+      { icon: "mysql", label: "MySQL", to: "/docs/db/mysql" },
+      { icon: "mariadb", label: "MariaDB", to: "/docs/db/mysql" },
       { icon: "redis", label: "Redis", to: "/docs/db/redis" },
+      { icon: "valkey", label: "Valkey", to: "/docs/db/valkey" },
     ],
   },
   {
