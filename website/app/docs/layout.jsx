@@ -34,28 +34,6 @@ const NAV = [
       { title: "Glob matching", path: "/docs/glob" },
       { title: "Process & Env", path: "/docs/process" },
       { title: "Path handling", path: "/docs/path" },
-      { title: "Databases", path: "/docs/db" },
-      {
-        title: "Redis",
-        items: [
-          { title: "Overview", path: "/docs/db/redis" },
-          { title: "Concepts & connections", path: "/docs/db/redis/core" },
-          { title: "Transactions & blocking", path: "/docs/db/redis/transactions" },
-          { title: "Operations & reliability", path: "/docs/db/redis/operations" },
-          { title: "Compatibility & limits", path: "/docs/db/redis/compatibility" },
-        ],
-      },
-      { title: "Valkey", path: "/docs/db/valkey" },
-      {
-        title: "Drivers & ORMs",
-        items: [
-          { title: "Overview", path: "/docs/db/authoring" },
-          { title: "Driver implementation", path: "/docs/db/authoring/backend" },
-          { title: "Rows & value types", path: "/docs/db/authoring/data" },
-          { title: "Production pitfalls", path: "/docs/db/authoring/production" },
-          { title: "ORM checklist", path: "/docs/db/authoring/checklist" },
-        ],
-      },
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Sending email", path: "/docs/guides/email" },
@@ -115,6 +93,39 @@ const NAV = [
           { title: "MessagePack", path: "/docs/serialization/msgpack" },
           { title: "CBOR", path: "/docs/serialization/cbor" },
           { title: "Protobuf", path: "/docs/serialization/protobuf" },
+        ],
+      },
+    ],
+  },
+  {
+    // One section for every database, so a reader looking for theirs finds it
+    // by name: the shared API first, then SQL engines, then key-value stores,
+    // then building a driver.
+    title: "Databases",
+    items: [
+      { title: "Overview", path: "/docs/db" },
+      { title: "SQLite", path: "/docs/db/sqlite" },
+      { title: "PostgreSQL", path: "/docs/db/postgres" },
+      { title: "MySQL & MariaDB", path: "/docs/db/mysql" },
+      {
+        title: "Redis",
+        items: [
+          { title: "Overview", path: "/docs/db/redis" },
+          { title: "Concepts & connections", path: "/docs/db/redis/core" },
+          { title: "Transactions & blocking", path: "/docs/db/redis/transactions" },
+          { title: "Operations & reliability", path: "/docs/db/redis/operations" },
+          { title: "Compatibility & limits", path: "/docs/db/redis/compatibility" },
+        ],
+      },
+      { title: "Valkey", path: "/docs/db/valkey" },
+      {
+        title: "Drivers & ORMs",
+        items: [
+          { title: "Overview", path: "/docs/db/authoring" },
+          { title: "Driver implementation", path: "/docs/db/authoring/backend" },
+          { title: "Rows & value types", path: "/docs/db/authoring/data" },
+          { title: "Production pitfalls", path: "/docs/db/authoring/production" },
+          { title: "ORM checklist", path: "/docs/db/authoring/checklist" },
         ],
       },
     ],

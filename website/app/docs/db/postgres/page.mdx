@@ -1,0 +1,99 @@
+---
+title: PostgreSQL
+description: Connect to PostgreSQL with the driver built into esrun — TLS, parameters, Temporal types, LISTEN/NOTIFY, and scripts.
+---
+
+# PostgreSQL
+
+`postgres` is built into [`runtime:db`](/api/db): the wire protocol runs in the
+runtime, so there is no package to install.
+
+```js
+import { connect, postgres, sql } from "runtime:db";
+
+const db = await connect("postgres://app@db.internal:5432/app", { driver: postgres });
+
+const user = await (await db.query(sql`SELECT * FROM users WHERE email = ${email}`)).first();
+```
+
+`postgres:` and `postgresql:` URLs are both accepted. Queries, results,
+transactions and errors work as described in [Databases](/docs/db).
+
+## Permissions
+
+Connecting needs `--allow-net` for the server's host and port:
+
+```sh
+esrun --allow-net=db.internal:5432 app.js
+```
+
+With `--allow-env` as well, the `PG*` environment variables fill in whatever the
+URL leaves out. Options win over the URL, and the URL over the environment.
+
+## TLS
+
+`sslmode` is `"prefer"` by default: TLS when the server offers it. Use
+`"require"` to refuse a connection without it, and pass `sslRootCert` (PEM) to
+trust a private certificate authority:
+
+```js
+import { file } from "runtime:fs";
+
+const db = await connect("postgres://app@db.internal/app", {
+  driver: postgres,
+  sslmode: "require",
+  sslRootCert: await file("./certs/ca.pem").text(),
+});
+```
+
+## Parameters
+
+Parameters bind by position, as `$1`, `$2`, …, or through the `` sql`` `` tag.
+Named parameters are refused with `ERR_DB_UNSUPPORTED`.
+
+```js
+await db.execute("INSERT INTO users (name, email) VALUES ($1, $2)", ["Ada", email]);
+```
+
+## Types
+
+`timestamptz` arrives as a `Temporal.Instant` and `jsonb` as the parsed
+document. Pass `temporal: false` to get `Date` and strings instead.
+
+## LISTEN and NOTIFY
+
+`subscribe` issues `LISTEN` and resolves once the server has confirmed it. The
+connection is then given over to delivering notifications, so send `NOTIFY` from
+another one:
+
+```js
+const listener = await connect(url, { driver: postgres });
+await listener.subscribe("orders", (payload, { channel }) => console.log(channel, payload));
+
+await db.execute(sql`SELECT pg_notify(${"orders"}, ${"42"})`);
+```
+
+A pooled connection cannot subscribe: a listener needs a connection of its own.
+
+## Scripts
+
+`executeScript(sql)` runs several statements without parameters, which is the
+shape of a migration, and returns a `{ command, changes }` per statement:
+
+```js
+await db.executeScript(`
+  CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL);
+  CREATE INDEX users_name ON users (name);
+`);
+```
+
+## Cancelling
+
+Pass a `signal` to stop a query. The driver sends a cancel on a second
+connection and waits for it, so the connection stays usable:
+
+```js
+await db.query("SELECT pg_sleep(60)", [], { signal: AbortSignal.timeout(5_000) });
+```
+
+Every `postgres` option is listed in the [`connect()` reference](/api/db/connection#connect-url-options).

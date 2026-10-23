@@ -1,6 +1,6 @@
 ---
 title: Databases
-description: Talk to a database from esrun — SQLite today, with a driver kit third parties build the rest on.
+description: Talk to a database from esrun — one connect() for SQLite, PostgreSQL, MySQL, MariaDB, Redis and Valkey, with the same queries, rows, transactions and errors.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -8,8 +8,20 @@ import { Callout } from "@opentf/web-docs";
 # Databases
 
 [`runtime:db`](/api/db) connects to a database, runs queries, and streams the
-results. It ships with a SQLite driver; anything else is a package, and the
-pieces those drivers are built from are exported alongside.
+results. SQLite, PostgreSQL and MySQL/MariaDB drivers are built in; Redis and
+Valkey are packages; and the pieces those drivers are built from are exported
+alongside.
+
+| Database | Driver | Guide |
+| --- | --- | --- |
+| SQLite | built in: `sqlite` | [SQLite](/docs/db/sqlite) |
+| PostgreSQL | built in: `postgres` | [PostgreSQL](/docs/db/postgres) |
+| MySQL, MariaDB | built in: `mysql` | [MySQL and MariaDB](/docs/db/mysql) |
+| Redis | [`@opentf/esrun-redis`](https://www.npmjs.com/package/@opentf/esrun-redis) | [Redis](/docs/db/redis) |
+| Valkey | [`@opentf/esrun-valkey`](https://www.npmjs.com/package/@opentf/esrun-valkey) | [Valkey](/docs/db/valkey) |
+
+This page covers what is the same on all of them. Connecting, permissions and
+each database's own features are on its page.
 
 **One call opens every database, and you pass the driver to it.** A driver is a
 value you import, not a global you install by importing it for its side effects
@@ -38,13 +50,8 @@ for await (const user of await db.query("SELECT id, name FROM users")) {
 await db.close();
 ```
 
-<Callout type="info" title="Capability: FileRead / FileWrite">
-  A database file is a file, and is scoped like one — the same root jail and
-  `--allow-read` / `--allow-write` lists as [file handling](/docs/guides/file-handling).
-  `esrun --allow-read=./data --allow-write=./data app.js` is enough to
-  open `sqlite:./data/app.db` for writing and nothing else. See
-  [Securing the runtime](/docs/guides/securing-runtime).
-</Callout>
+The example uses SQLite because it needs no server; [SQLite](/docs/db/sqlite)
+says which grants a database file needs.
 
 ## Passing values
 
@@ -63,6 +70,10 @@ The template keeps the fragments and the values apart until the backend renders
 them, so there is no arrangement of it that puts a value into the text — and the
 same template works against a backend that spells placeholders `$1` instead
 of `?`.
+
+Placeholders in plain text are the backend's own spelling: `?` and `:name` on
+SQLite, `$1` on PostgreSQL, `?` on MySQL and MariaDB. The tag works on all of
+them; the examples on this page use SQLite's.
 
 Fragments compose:
 
@@ -166,36 +177,9 @@ try {
 A denied capability keeps its own code (`ERR_CAPABILITY_DENIED`) rather than
 being flattened into a database error, so the two stay distinguishable.
 
-## In-memory databases
-
-`sqlite::memory:` gives you a database that exists only in memory — ideal for
-tests, and for using SQL as a query language over data you already have:
-
-```js
-const db = await connect("sqlite::memory:", { driver: sqlite });
-```
-
-It touches no filesystem, so it needs **no capability**: it works under
-`esrun` with nothing granted. Each connection gets its own database.
-
-## Encryption
-
-```js
-const key = crypto.getRandomValues(new Uint8Array(32));
-const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
-```
-
-<Callout type="warning" title="Experimental, and the key belongs in the options">
-  Encryption is experimental upstream. The key goes in the options object — a
-  key in the connection string ends up in logs, error messages and stack traces,
-  so `connect("sqlite:./app.db?key=…", { driver: sqlite })` is refused rather than honoured quietly.
-</Callout>
-
 ## Other databases
 
-`sqlite`, `postgres` and `mysql` ship **in** the runtime. Every other driver is a package
-over [`runtime:net`](/docs/guides/networking). Either way the driver is passed
-the same way:
+Every driver is passed the same way, built in or from a package:
 
 ```js
 import { connect, postgres } from "runtime:db";
@@ -206,8 +190,8 @@ const cache = await connect("redis://localhost", { driver: redis });
 ```
 
 Everything above — `sql`, streaming rows, transactions, the portable error
-codes — works the same against it, because drivers are built on the same
-exported pieces the built-in one is. Pooling is the same call too:
+codes — works the same against each, because drivers are built on the same
+exported pieces the built-in ones are. Pooling is the same call too:
 `connect(url, { driver, pool: { max: 20 } })` gives a pool that presents
 exactly what one connection does.
 
@@ -215,14 +199,6 @@ Every driver package exports its driver under the same name — `driver` — and
 nothing as a default, so the import reads the same whichever backend it is and
 `{ driver }` is the whole of the option. Two of them in one module are
 `import { driver as redis }`.
-
-| Package | Schemes | |
-| --- | --- | --- |
-| built in: `sqlite` | `sqlite:` | a file format and a SQL dialect |
-| built in: `postgres` | `postgres:` `postgresql:` | the wire protocol (in the runtime), Temporal types, LISTEN/NOTIFY |
-| built in: `mysql` | `mysql:` `mariadb:` | the client/server protocol (in the runtime), verified TLS, Temporal types; MySQL and MariaDB |
-| [`@opentf/esrun-redis`](/docs/db/redis) | `redis:` `rediss:` | RESP3, pub/sub, pipelining, cluster, Sentinel, and a Redis client alongside the backend |
-| [`@opentf/esrun-valkey`](/docs/db/valkey) | `valkey:` `valkeys:` `redis:` `rediss:` | the Redis driver under Valkey's names, for Valkey 8 and 9 |
 
 ### A backend that is not a SQL database
 

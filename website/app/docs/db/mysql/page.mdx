@@ -1,0 +1,92 @@
+---
+title: MySQL and MariaDB
+description: Connect to MySQL or MariaDB with the driver built into esrun — verified TLS, authentication, parameters, and scripts.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# MySQL and MariaDB
+
+`mysql` is built into [`runtime:db`](/api/db) and serves MySQL and MariaDB
+alike: there is no package to install.
+
+```js
+import { connect, mysql, sql } from "runtime:db";
+
+const db = await connect("mysql://app@db.internal:3306/app", { driver: mysql });
+
+const user = await (await db.query(sql`SELECT * FROM users WHERE email = ${email}`)).first();
+```
+
+`mysql:` and `mariadb:` URLs are both accepted, for either server. After
+connecting, `db.mariadb` says which one answered and `db.serverVersion` its
+version. Queries, results, transactions and errors work as described in
+[Databases](/docs/db).
+
+## Permissions
+
+Connecting needs `--allow-net` for the server's host and port:
+
+```sh
+esrun --allow-net=db.internal:3306 app.js
+```
+
+With `--allow-env` as well, `MYSQL_HOST`, `MYSQL_TCP_PORT` and `MYSQL_PWD` fill
+in whatever the URL leaves out.
+
+## TLS
+
+TLS is verified. A stock MySQL or MariaDB server presents a certificate it
+signed itself, so connecting to one fails until you trust its authority:
+
+```js
+import { file } from "runtime:fs";
+
+const db = await connect(url, {
+  driver: mysql,
+  sslRootCert: await file("./certs/ca.pem").text(),
+});
+```
+
+<Callout type="warning" title="sslmode: &quot;disable&quot; sends everything in the clear">
+  It is the way to reach a local development server without a certificate, and
+  it sends the password and every row unencrypted. Keep it out of production.
+</Callout>
+
+Without TLS, MySQL's default `caching_sha2_password` authentication needs the
+server's RSA key: pass it as `serverPublicKey`, or set
+`allowPublicKeyRetrieval: true` to ask the server for it. Retrieval is off by
+default, because the key then arrives over the connection it is meant to
+protect.
+
+## Parameters
+
+Parameters bind by position, as `?`, or through the `` sql`` `` tag. Named
+parameters are refused with `ERR_DB_UNSUPPORTED`.
+
+```js
+const { lastInsertRowid } = await db.execute(
+  "INSERT INTO users (name, email) VALUES (?, ?)",
+  ["Ada", email],
+);
+```
+
+## Types
+
+`DATETIME` arrives as a `Temporal.PlainDateTime`. Pass `temporal: false` to get
+`Date` and strings instead.
+
+## Scripts
+
+`executeScript(sql)` runs several statements without parameters, which is the
+shape of a migration, and returns a `{ changes, lastInsertRowid }` per
+statement:
+
+```js
+await db.executeScript(`
+  CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY, name TEXT NOT NULL);
+  CREATE INDEX users_name ON users (name(32));
+`);
+```
+
+Every `mysql` option is listed in the [`connect()` reference](/api/db/connection#connect-url-options).

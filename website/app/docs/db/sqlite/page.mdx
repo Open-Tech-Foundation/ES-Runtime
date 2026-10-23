@@ -1,0 +1,59 @@
+---
+title: SQLite
+description: Use the SQLite driver built into esrun — database files under the filesystem grants, in-memory databases, and encryption.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# SQLite
+
+`sqlite` is built into [`runtime:db`](/api/db): there is no package to install.
+
+```js
+import { connect, sqlite } from "runtime:db";
+
+const db = await connect("sqlite:./app.db", { driver: sqlite });
+```
+
+Queries, results, transactions and errors work as described in
+[Databases](/docs/db). Parameters bind by position (`?`) or by name (`:email`).
+
+## Permissions
+
+<Callout type="info" title="Capability: FileRead / FileWrite">
+  A database file is a file, and is scoped like one — the same root jail and
+  `--allow-read` / `--allow-write` lists as [file handling](/docs/guides/file-handling).
+  `esrun --allow-read=./data --allow-write=./data app.js` is enough to
+  open `sqlite:./data/app.db` for writing and nothing else. See
+  [Securing the runtime](/docs/guides/securing-runtime).
+</Callout>
+
+Open with `readOnly: true` when the program only reads; it then needs only the
+read grant.
+
+## In-memory databases
+
+`sqlite::memory:` gives you a database that exists only in memory — ideal for
+tests, and for using SQL as a query language over data you already have:
+
+```js
+const db = await connect("sqlite::memory:", { driver: sqlite });
+```
+
+It touches no filesystem, so it needs **no capability**: it works under
+`esrun` with nothing granted. Each connection gets its own database.
+
+## Encryption
+
+```js
+const key = crypto.getRandomValues(new Uint8Array(32));
+const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
+```
+
+<Callout type="warning" title="Experimental, and the key belongs in the options">
+  Encryption is experimental upstream. The key goes in the options object — a
+  key in the connection string ends up in logs, error messages and stack traces,
+  so `connect("sqlite:./app.db?key=…", { driver: sqlite })` is refused rather than honoured quietly.
+</Callout>
+
+Every `sqlite` option is listed in the [`connect()` reference](/api/db/connection#connect-url-options).
