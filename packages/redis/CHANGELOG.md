@@ -13,6 +13,8 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
 ### Added
 
 - **Server families**, for a package built on this one. `defineFamily` names a

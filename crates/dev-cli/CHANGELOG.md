@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-23
+
 ### Changed
 
 - The dev server types files with the runtime's table
