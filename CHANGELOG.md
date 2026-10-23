@@ -11,6 +11,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- `ctutils` is updated to 0.4.4 for RUSTSEC-2026-0385 (mask generation and
+  `u128` comparisons that were not constant-time). It reaches the runtime
+  through `digest`, under `crypto.subtle`'s Ed25519, X25519 and HMAC. `cargo
+  audit` passes again.
+
 ## [0.43.0] - 2026-10-23
 
 ### Added
