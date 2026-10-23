@@ -11,8 +11,6 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 const r = await connect(url, { driver: redis });
 await r.flushdb();
 
-const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1] ?? 0);
-
 // -- string ranges and bits -------------------------------------------------
 
 {
@@ -237,9 +235,14 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
   is(await r.zrange("zdest", 0, -1), ["a", "b"], "and stored the right ones");
 }
 
-// -- hash-field TTLs (Redis 7.4+) -------------------------------------------
+// -- hash-field TTLs (Redis 7.4+, Valkey 9+) --------------------------------
 
-if (version >= 7) {
+// Asked of the server rather than read off its version. Redis 7.0 to 7.3 have
+// none of these, and Valkey reports `redis_version:7.2.4` whatever its own
+// version is, so no version number says. `COMMAND INFO` answers null for a
+// command the server does not know.
+const [hexpireInfo] = await r.call(["COMMAND", "INFO", "HEXPIRE"]);
+if (hexpireInfo != null) {
   await r.del("h");
   await r.hset("h", { keep: "1", expire: "2" });
   is(await r.hexpire("h", 100, "expire"), [1], "HEXPIRE sets a TTL on one field");
@@ -258,7 +261,7 @@ if (version >= 7) {
   is(await r.hget("h", "expire"), null, "the expired field is gone");
   is(await r.hget("h", "keep"), "1", "and the others are untouched");
 } else {
-  console.log("    (hash-field TTLs need Redis 7.4+; server is", version, ")");
+  console.log("    (skipped: this server has no HEXPIRE — Redis 7.4+ and Valkey 9+ do)");
 }
 
 await r.flushdb();

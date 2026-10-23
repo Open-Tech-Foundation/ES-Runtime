@@ -13,6 +13,13 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+### Fixed
+
+- The hash-field TTL tests run when the server has `HEXPIRE`, asked with
+  `COMMAND INFO`, rather than when `redis_version` is 7 or more. Valkey reports
+  `redis_version:7.2.4` whatever its own version, so Valkey 8, which has no
+  `HEXPIRE`, failed the suite; Redis 7.0 to 7.3 would have too.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

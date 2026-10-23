@@ -457,7 +457,7 @@ export abstract class RedisCommands {
   }
 
   /**
-   * Expires individual hash **fields** (Redis 7.4+).
+   * Expires individual hash **fields** (Redis 7.4+, Valkey 9+).
    *
    * Answers one status per field: `1` set, `0` refused because the condition
    * failed, `2` the field was deleted because the TTL was in the past, `-2` no
