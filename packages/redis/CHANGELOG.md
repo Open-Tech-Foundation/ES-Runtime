@@ -13,6 +13,12 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+### Fixed
+
+- The authentication tests reach the server `REDIS_AUTH_URL` names. Five of
+  them were spelled `127.0.0.1:6380`, so against a server on any other address
+  they created an ACL user on one server and logged in to another.
+
 ## [0.1.12] - 2026-10-01
 
 _Dependency updates._

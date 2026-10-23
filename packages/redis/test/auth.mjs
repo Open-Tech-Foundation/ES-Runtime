@@ -19,6 +19,16 @@ import { is, ok, report } from "./unit/assert.mjs";
 const url = unmask(env.REDIS_AUTH_URL) ?? "redis://:esrun@127.0.0.1:6380";
 const plain = unmask(env.REDIS_URL) ?? "redis://127.0.0.1:6379";
 
+// The authenticated server's address with other credentials, for the cases
+// that need a wrong password, none, or another user. Built from `url`, so they
+// reach the same server the rest of the file does.
+function withAuth(username, password) {
+  const target = new URL(url);
+  target.username = username;
+  target.password = password;
+  return target.href.replace(/\/$/, "");
+}
+
 /** The code a connection attempt failed with, or `null`. */
 async function codeOf(target, options = {}) {
   try {
@@ -41,7 +51,7 @@ async function codeOf(target, options = {}) {
 
 {
   // The same credential, passed as an option rather than in the URL.
-  const r = await connect("redis://127.0.0.1:6380", { driver: redis, password: "esrun" });
+  const r = await connect(withAuth("", ""), { driver: redis, password: "esrun" });
   is(await r.ping(), "PONG", "a password as an option authenticates too");
   await r.close();
 }
@@ -49,12 +59,12 @@ async function codeOf(target, options = {}) {
 // -- a password that does not ------------------------------------------------
 
 is(
-  await codeOf("redis://:wrong@127.0.0.1:6380"),
+  await codeOf(withAuth("", "wrong")),
   DbErrorCode.AuthFailed,
   "a wrong password is an authentication failure",
 );
 is(
-  await codeOf("redis://127.0.0.1:6380"),
+  await codeOf(withAuth("", "")),
   DbErrorCode.AuthFailed,
   "and so is no password at all against a server that wants one",
 );
@@ -64,7 +74,7 @@ is(
 {
   let connected = false;
   try {
-    const db = await connect("redis://:wrong@127.0.0.1:6380", { driver: redis });
+    const db = await connect(withAuth("", "wrong"), { driver: redis });
     // If this is reached the handshake let a bad credential through.
     await db.execute(queryAst(["PING"]));
     connected = true;
@@ -81,7 +91,7 @@ is(
   const admin = await connect(url, { driver: redis });
   await admin.call(["ACL", "SETUSER", "reader", "on", ">readerpass", "~*", "+@read", "+ping"]);
 
-  const reader = await connect("redis://reader:readerpass@127.0.0.1:6380", { driver: redis });
+  const reader = await connect(withAuth("reader", "readerpass"), { driver: redis });
   is(await reader.ping(), "PONG", "an ACL user connects with username and password");
   is(await reader.get("anything"), null, "and may read");
   {
