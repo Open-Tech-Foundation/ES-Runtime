@@ -13,8 +13,9 @@
  * just become a replica, and a client that wrote to it would lose the writes.
  */
 import { DbError, DbErrorCode, type Driver, defineDriver, type PoolSettings } from "runtime:db";
-import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
+import type { RedisConnection, RedisOptions } from "./connection.js";
 import { openConnection } from "./driver.js";
+import { REDIS, type ServerFamily, schemeFor } from "./family.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import { parseConnectionString } from "./url.js";
 
@@ -53,10 +54,11 @@ export interface SentinelDriverOptions extends Omit<SentinelOptions, "sentinels"
 /** Where the master is, and how to ask again when it moves. */
 export class SentinelResolver {
   readonly #options: SentinelOptions;
+  readonly #family: ServerFamily;
   /** The sentinels, reordered as they answer — see {@link resolve}. */
   #sentinels: string[];
 
-  constructor(options: SentinelOptions) {
+  constructor(options: SentinelOptions, family: ServerFamily = REDIS) {
     if (options.sentinels.length === 0) {
       throw new DbError("a sentinel client needs at least one sentinel address", {
         code: DbErrorCode.Unsupported,
@@ -68,6 +70,7 @@ export class SentinelResolver {
       });
     }
     this.#options = options;
+    this.#family = family;
     this.#sentinels = [...options.sentinels];
   }
 
@@ -96,15 +99,19 @@ export class SentinelResolver {
       const address = this.#sentinels[i]!;
       let sentinel: RedisConnection | null = null;
       try {
-        sentinel = await openConnection(address, {
-          connectTimeout: this.#options.sentinelTimeout ?? 1000,
-          ...(this.#options.sentinelPassword === undefined
-            ? {}
-            : { password: this.#options.sentinelPassword }),
-          ...(this.#options.sentinelUsername === undefined
-            ? {}
-            : { username: this.#options.sentinelUsername }),
-        });
+        sentinel = await openConnection(
+          address,
+          {
+            connectTimeout: this.#options.sentinelTimeout ?? 1000,
+            ...(this.#options.sentinelPassword === undefined
+              ? {}
+              : { password: this.#options.sentinelPassword }),
+            ...(this.#options.sentinelUsername === undefined
+              ? {}
+              : { username: this.#options.sentinelUsername }),
+          },
+          this.#family,
+        );
         const reply = (await sentinel.call([
           "SENTINEL",
           "get-master-addr-by-name",
@@ -144,12 +151,16 @@ export class SentinelResolver {
 
   /** Refuses an address that is not actually a master any more. */
   async #verifyMaster(host: string, port: number): Promise<void> {
-    const candidate = await openConnection(`redis://${host}:${port}`, {
-      ...dataOptions(this.#options),
-      host,
-      port,
-      connectTimeout: this.#options.sentinelTimeout ?? 1000,
-    });
+    const candidate = await openConnection(
+      `${schemeFor(this.#family, false)}://${host}:${port}`,
+      {
+        ...dataOptions(this.#options),
+        host,
+        port,
+        connectTimeout: this.#options.sentinelTimeout ?? 1000,
+      },
+      this.#family,
+    );
     try {
       // `ROLE` answers `["master", …]` or `["slave", …]`. Redis has not renamed
       // the reply, whatever the documentation now calls it.
@@ -208,18 +219,31 @@ function dataOptions(options: SentinelOptions): RedisOptions {
  * same reason.
  */
 export const redisSentinel: Driver<RedisConnection, SentinelDriverOptions, RedisPooled> =
-  defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
-    name: "redis-sentinel",
-    schemes: ["redis", "rediss"],
-    dialect: REDIS_DIALECT,
+  createSentinelDriver(REDIS);
+
+/** The Sentinel driver for a family: what {@link redisSentinel} is for Redis. */
+export function createSentinelDriver(
+  family: ServerFamily,
+): Driver<RedisConnection, SentinelDriverOptions, RedisPooled> {
+  const name = `${family.name}-sentinel`;
+  // Never dialled: the address it stands for is whatever the resolver answers.
+  const resolved = `${schemeFor(family, false)}://sentinel-resolved`;
+  return defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
+    name,
+    schemes: [...family.schemes],
+    dialect: family.dialect,
     async open(url: string, options: SentinelDriverOptions): Promise<RedisConnection> {
-      const resolver = new SentinelResolver(sentinelOptions(url, options));
+      const resolver = new SentinelResolver(sentinelOptions(url, options), family);
       const first = await resolver.resolve();
-      const address = `redis://${first.host}:${first.port}`;
-      return openConnection(address, {
-        ...parseConnectionString(address, dataOptions(sentinelOptions(url, options))),
-        resolve: () => resolver.resolve(),
-      });
+      const address = `${schemeFor(family, false)}://${first.host}:${first.port}`;
+      return openConnection(
+        address,
+        {
+          ...parseConnectionString(address, dataOptions(sentinelOptions(url, options)), family),
+          resolve: () => resolver.resolve(),
+        },
+        family,
+      );
     },
     /**
      * A pool whose connections each find the master when they are opened.
@@ -241,29 +265,26 @@ export const redisSentinel: Driver<RedisConnection, SentinelDriverOptions, Redis
       poolOptions: PoolSettings,
     ): Promise<RedisPooled> {
       const settings = sentinelOptions(url, options);
-      const resolver = new SentinelResolver(settings);
+      const resolver = new SentinelResolver(settings, family);
       await resolver.resolve();
       // A driver is a value, so the pool gets one of its own: every slot it fills
       // resolves through *this* resolver rather than starting a lookup from
       // scratch.
       const perPool = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
-        name: "redis-sentinel",
-        schemes: ["redis", "rediss"],
-        dialect: REDIS_DIALECT,
+        name,
+        schemes: [...family.schemes],
+        dialect: family.dialect,
         open: (_url: string, connectionOptions: RedisOptions = {}) =>
-          openConnection("redis://sentinel-resolved", {
-            ...connectionOptions,
-            resolve: () => resolver.resolve(),
-          }),
+          openConnection(
+            resolved,
+            { ...connectionOptions, resolve: () => resolver.resolve() },
+            family,
+          ),
       });
-      return new RedisPooled(
-        perPool,
-        "redis://sentinel-resolved",
-        dataOptions(settings),
-        poolOptions,
-      );
+      return new RedisPooled(perPool, resolved, dataOptions(settings), poolOptions);
     },
   });
+}
 
 /** The URL is the first sentinel; `sentinels` names any others. */
 function sentinelOptions(url: string, options: SentinelDriverOptions): SentinelOptions {

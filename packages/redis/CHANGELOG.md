@@ -13,6 +13,16 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+### Added
+
+- **Server families**, for a package built on this one. `defineFamily` names a
+  server that speaks RESP (its name, URL schemes and TLS schemes), and
+  `createDriver`, `createClusterDriver` and `createSentinelDriver` build this
+  package's drivers under it: URLs are checked against its schemes, and
+  `backend`, the dialect and errors use its name. `@opentf/esrun-valkey` is
+  this package under Valkey's names. `REDIS` is the default family, so nothing
+  changes for Redis.
+
 ### Fixed
 
 - The authentication tests reach the server `REDIS_AUTH_URL` names. Five of

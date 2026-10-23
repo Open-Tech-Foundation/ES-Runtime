@@ -1,5 +1,5 @@
 /**
- * `redis://` and `rediss://`, as options.
+ * `redis://` and `rediss://`, as options — or whichever schemes the family names.
  *
  * The format is the IANA-registered one every Redis client accepts:
  * `redis://[[username][:password]@]host[:port][/db][?option=value]`. Two parts
@@ -11,22 +11,30 @@
 import { DbError, DbErrorCode } from "runtime:db";
 
 import type { RedisOptions } from "./connection.js";
+import { REDIS, type ServerFamily } from "./family.js";
 
-export function parseConnectionString(url: string, overrides: RedisOptions = {}): RedisOptions {
+export function parseConnectionString(
+  url: string,
+  overrides: RedisOptions = {},
+  family: ServerFamily = REDIS,
+): RedisOptions {
+  const name = family.name;
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    throw new DbError(`${url} is not a redis: connection string`, {
+    throw new DbError(`${url} is not a ${name}: connection string`, {
       code: DbErrorCode.Unsupported,
     });
   }
 
   const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
-  if (scheme !== "redis" && scheme !== "rediss") {
-    throw new DbError(`${scheme}: is not a redis scheme — use redis:// or rediss://`, {
-      code: DbErrorCode.Unsupported,
-    });
+  if (!family.schemes.includes(scheme)) {
+    const spellings = family.schemes.map((s) => `${s}://`);
+    throw new DbError(
+      `${scheme}: is not a ${name} scheme — use ${spellings.slice(0, -1).join(", ")} or ${spellings.at(-1)}`,
+      { code: DbErrorCode.Unsupported },
+    );
   }
 
   const options: RedisOptions = {};
@@ -42,7 +50,7 @@ export function parseConnectionString(url: string, overrides: RedisOptions = {})
     const db = Number(path);
     if (!Number.isInteger(db) || db < 0) {
       throw new DbError(
-        `the path of a redis: URL is a database index, and ${JSON.stringify(path)} is not one`,
+        `the path of a ${name}: URL is a database index, and ${JSON.stringify(path)} is not one`,
         { code: DbErrorCode.Unsupported },
       );
     }
@@ -90,7 +98,7 @@ export function parseConnectionString(url: string, overrides: RedisOptions = {})
   // logger does not know to strip.
   if (search.has("password")) {
     throw new DbError(
-      "put the password in the URL's userinfo (redis://:password@host) or in the options object, not in a query parameter",
+      `put the password in the URL's userinfo (${family.schemes[0]}://:password@host) or in the options object, not in a query parameter`,
       { code: DbErrorCode.Unsupported },
     );
   }
@@ -98,7 +106,7 @@ export function parseConnectionString(url: string, overrides: RedisOptions = {})
   return {
     host: "localhost",
     port: 6379,
-    tls: scheme === "rediss",
+    tls: family.tlsSchemes.includes(scheme),
     ...stripUndefined(options),
     ...stripUndefined(overrides),
   };

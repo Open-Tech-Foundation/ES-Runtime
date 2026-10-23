@@ -22,7 +22,7 @@ import {
   type DbInput,
   type MessageContext as DbMessageContext,
   type DbParams,
-  Dialect,
+  type Dialect,
   type ExecuteResult,
   type NormalizedQuery,
   type Queryable,
@@ -32,6 +32,7 @@ import {
 import { connect as netConnect } from "runtime:net";
 
 import { mixinCommands, type RedisCommands } from "./commands.js";
+import { REDIS, type ServerFamily } from "./family.js";
 import { blocksForever, foreverMessage } from "./protocol/blocking.js";
 import { parseRedirect, portableCode, type Redirect, redirectMessage } from "./protocol/errors.js";
 import { type CommandArg, encodeCommand, type Reply, RespReader } from "./protocol/resp.js";
@@ -42,42 +43,8 @@ type RedisSocket = ReturnType<typeof netConnect>;
 
 const _BATCH_BYTES = 64 * 1024;
 
-/**
- * Redis's dialect, which is mostly a list of things it is not.
- *
- * `queryText: false` and `queryAst: true` are the two that matter: this backend
- * refuses SQL by name, and takes command arrays. Everything else follows from
- * Redis rather than from a choice made here — there are no placeholders because
- * there is no statement to put them in, and no savepoints because there is
- * nothing to nest.
- */
-export const REDIS_DIALECT: Dialect = new Dialect({
-  name: "redis",
-  // A query builder that reaches for this is building SQL for a backend that
-  // has none. Failing loudly beats returning `$1` and letting it be
-  // concatenated into a string nothing will ever parse.
-  placeholder: () => {
-    throw new DbError(
-      "the redis backend has no SQL and no placeholders — pass a command array to queryAst()",
-      { code: DbErrorCode.QueryForm },
-    );
-  },
-  supports: {
-    returning: false,
-    savepoints: false,
-    namedParameters: false,
-    queryText: false,
-    queryAst: true,
-    // Pub/sub, behind `runtime:db`'s portable subscription surface.
-    subscriptions: true,
-    // MULTI/EXEC is not a transaction in the sense `transaction(fn)` promises.
-    // It queues commands and applies them together, but a command that fails at
-    // EXEC time does not roll back the ones beside it — so a `transaction()`
-    // built on it would commit half a body that threw. Declared absent rather
-    // than approximated; see the README.
-    transactions: false,
-  },
-});
+/** Redis's dialect — see `respDialect` in `family.ts`. */
+export const REDIS_DIALECT: Dialect = REDIS.dialect;
 
 export interface RedisOptions extends DecodeOptions {
   host?: string;
@@ -292,8 +259,12 @@ export class RedisConnection extends BaseConnection {
   /** Set while `_close` is tearing down, so the pump's failure is not news. */
   #closing = false;
 
-  constructor() {
-    super({ dialect: REDIS_DIALECT, backend: "redis" });
+  /** Which server this is — Redis unless a driver built on this one says otherwise. */
+  readonly family: ServerFamily;
+
+  constructor(family: ServerFamily = REDIS) {
+    super({ dialect: family.dialect, backend: family.name });
+    this.family = family;
   }
 
   /**
@@ -1273,15 +1244,18 @@ export class RedisConnection extends BaseConnection {
   #commandOf(q: NormalizedQuery): CommandArg[] {
     if (q.named.length > 0) {
       throw new DbError(
-        "Redis commands take positional arguments only; pass an array rather than an object",
+        `${this.family.name} commands take positional arguments only; pass an array rather than an object`,
         { code: DbErrorCode.Unsupported },
       );
     }
     const ast = q.ast;
     if (!Array.isArray(ast) || ast.length === 0) {
-      throw new DbError('a redis query is a non-empty command array: queryAst(["GET", key])', {
-        code: DbErrorCode.QueryForm,
-      });
+      throw new DbError(
+        `a ${this.family.name} query is a non-empty command array: queryAst(["GET", key])`,
+        {
+          code: DbErrorCode.QueryForm,
+        },
+      );
     }
     return guard([...ast, ...q.positional] as CommandArg[], this.#blocking);
   }
@@ -1320,15 +1294,18 @@ export class RedisConnection extends BaseConnection {
   ): Promise<ExecuteResult> {
     if (query.named.length > 0 || sets.some(([, named]) => named.length > 0)) {
       throw new DbError(
-        "Redis commands take positional arguments only; pass arrays rather than objects",
+        `${this.family.name} commands take positional arguments only; pass arrays rather than objects`,
         { code: DbErrorCode.Unsupported },
       );
     }
     const ast = query.ast;
     if (!Array.isArray(ast) || ast.length === 0) {
-      throw new DbError('a redis query is a non-empty command array: queryAst(["SET"])', {
-        code: DbErrorCode.QueryForm,
-      });
+      throw new DbError(
+        `a ${this.family.name} query is a non-empty command array: queryAst(["SET"])`,
+        {
+          code: DbErrorCode.QueryForm,
+        },
+      );
     }
     const commands = sets.map(([positional]) =>
       guard([...ast, ...positional] as CommandArg[], this.#blocking),

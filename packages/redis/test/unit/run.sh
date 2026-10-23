@@ -13,7 +13,7 @@ esrun="${ESRUN:-$here/../../../../target/release/esrun}"
 [ -f "$here/../../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 
 status=0
-for test in resp values url blocking slots; do
+for test in resp values url family blocking slots; do
   # --allow-imports: esrun grants nothing by default (DECISIONS D65) and
   # these load the built package out of dist/. Nothing else is needed —
   # a wire codec touches no network and no disk.

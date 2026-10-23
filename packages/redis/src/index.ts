@@ -34,7 +34,12 @@
  */
 
 import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
-import { RedisCluster, type RedisClusterOptions, redisCluster } from "./cluster.js";
+import {
+  createClusterDriver,
+  RedisCluster,
+  type RedisClusterOptions,
+  redisCluster,
+} from "./cluster.js";
 import { mixinCommands, RedisCommands } from "./commands.js";
 import {
   type MessageContext,
@@ -46,9 +51,11 @@ import {
   type RedisPayload,
   type ServerHello,
 } from "./connection.js";
-import { driver, openConnection } from "./driver.js";
+import { createDriver, driver, openConnection } from "./driver.js";
+import { defineFamily, REDIS, type ServerFamily } from "./family.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import {
+  createSentinelDriver,
   redisSentinel,
   type SentinelDriverOptions,
   type SentinelOptions,
@@ -67,6 +74,11 @@ export type {
 } from "./commands.js";
 export type { CommandArg, Reply } from "./protocol/resp.js";
 export {
+  createClusterDriver,
+  // For a package for another server that speaks RESP — see `family.ts`.
+  createDriver,
+  createSentinelDriver,
+  defineFamily,
   // The drivers — what `connect` takes.
   driver,
   type MessageContext,
@@ -75,6 +87,7 @@ export {
   mixinCommands,
   openConnection,
   parseConnectionString,
+  REDIS,
   REDIS_DIALECT,
   type ReconnectOptions,
   RedisBatch,
@@ -94,5 +107,6 @@ export {
   type SentinelDriverOptions,
   type SentinelOptions,
   SentinelResolver,
+  type ServerFamily,
   type ServerHello,
 };

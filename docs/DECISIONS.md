@@ -3825,3 +3825,21 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **A static-file helper in `runtime:http` (`serveDir`).** Out of scope (maintainer, 2026-10-23): serving a directory is framework and application level, as `express.static` is for Node and `serveStatic` is for Hono, not the runtime's. The runtime's part is what this entry adds — a typed file body and errors that say where a path went; the guide shows a lookup that admits plain names only.
 
 **Consequences:** refusal and I/O messages from a bundle below the root are longer; codes are unchanged, and messages were never the contract. `new Response(file(path))` now carries a `Content-Type` it did not before, which a client that sniffed bodies will notice only as being told the truth. Documented in the `runtime:fs` reference (paths, `type`), a *Static files* guide under the HTTP server docs, and the filesystem internals page. Verified by provider tests for the landing (scoped denial, not-found on read and stat, the cases left out), an end-to-end bundle-in-`dist/` refusal, and an end-to-end test of `file().type`, a served file's header, a header the handler sets, and an upload.
+
+### D185 — `@opentf/esrun-valkey`: Valkey's own package, over the Redis driver's protocol · *Accepted (2026-10-23)* · *follows D56's driver model*
+
+**Context:** Valkey forked Redis 7.2.4 and kept its protocol. `@opentf/esrun-redis` already works against it: the whole live suite, cluster, Sentinel and TLS included, passes against Valkey 9.1.2 with no change. What it lacks is a name. Someone who runs Valkey searches npm for "valkey", writes `valkey://` URLs (iovalkey and valkey-py both take them) and reads errors that say `redis`. The two servers are diverging, but in commands rather than in protocol: Redis 8.4 added `DELEX`, `DIGEST` and `MSETEX`, Valkey 9.0 added `DELIFEQ` and multiple databases in cluster mode, and Redis 8 ships search, JSON and time series that Valkey does not. RESP2/RESP3 and `HELLO` are unchanged on both.
+
+**Decision (maintainer, 2026-10-23 — adoption is the priority):**
+
+- **A separate package, `@opentf/esrun-valkey`, that depends on `@opentf/esrun-redis`** rather than copying it. One RESP implementation: a protocol, pool, cluster or Sentinel fix lands once and both packages get it.
+- **`esrun-redis` learns a server family** (`ServerFamily`: a name, the URL schemes, the TLS schemes, a dialect) and builds its drivers from one (`createDriver`, `createClusterDriver`, `createSentinelDriver`). Redis is the default family, so nothing a Redis user sees changes. The family decides what a URL may be spelled as, what scheme internal URLs use, and what `connection.backend` and every message call the server.
+- **The Valkey drivers take `valkey://` and `valkeys://`, and `redis://` and `rediss://` as well**, as iovalkey does: an existing `REDIS_URL` keeps working when the package is swapped. `backend` is `valkey` (`valkey-cluster` for the cluster client). Exports follow the Redis package: `driver`, `valkeyCluster`, `valkeySentinel`, and the classes under Valkey names (`ValkeyConnection` is `RedisConnection`, so `instanceof` holds either way).
+- **No Valkey-only helpers in the first release.** `call(["DELIFEQ", key, value])` reaches any command. Typed helpers for Valkey-only commands belong in this package when they are added, which is where it stops being thin.
+
+**Rejected:**
+- **`valkey://` in `esrun-redis` with no new package.** Correct, and smaller; but nobody finds a Valkey client in a package named after Redis, and adoption was the point.
+- **A second copy of the protocol.** Every fix twice, and the two drifting apart is the likely outcome.
+- **A re-export under new names only.** Errors and `backend` would still say `redis`, which is the thing a Valkey user notices first.
+
+**Consequences:** `esrun-redis` exports the family and the three factories, for a driver built on it. CI runs the Valkey package's suite against Valkey 8 and 9, and the Redis suite against Valkey 9 too, since that is the code doing the work. A divergence that matters shows up as a failing test there. Documented on the Valkey page under the database docs.

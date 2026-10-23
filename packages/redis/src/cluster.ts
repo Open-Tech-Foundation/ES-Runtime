@@ -30,8 +30,9 @@ import {
 } from "runtime:db";
 
 import { RedisCommands } from "./commands.js";
-import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
-import { driver, openConnection } from "./driver.js";
+import type { RedisConnection, RedisOptions } from "./connection.js";
+import { createDriver, openConnection } from "./driver.js";
+import { REDIS, type ServerFamily, schemeFor } from "./family.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import type { Redirect } from "./protocol/errors.js";
 import type { CommandArg } from "./protocol/resp.js";
@@ -64,13 +65,13 @@ export interface RedisClusterOptions extends RedisPoolOptions {
  * single-connection backend refuses it with, because it is the same refusal —
  * Redis has no SQL, in a cluster or out of one.
  */
-function commandOf(q: unknown): readonly CommandArg[] {
+function commandOf(q: unknown, family: ServerFamily): readonly CommandArg[] {
   if (Array.isArray(q)) return q as readonly CommandArg[];
   if (typeof q === "object" && q !== null && (q as { __queryAst?: boolean }).__queryAst === true) {
     return (q as { ast: readonly CommandArg[] }).ast;
   }
   throw new DbError(
-    "the redis backend takes a query AST, not SQL text — build one with queryAst()",
+    `the ${family.name} backend takes a query AST, not SQL text — build one with queryAst()`,
     { code: DbErrorCode.QueryForm },
   );
 }
@@ -81,6 +82,7 @@ type NodeKey = string;
 export class RedisCluster extends RedisCommands {
   readonly #seeds: RedisOptions[];
   readonly #options: RedisClusterOptions;
+  readonly #family: ServerFamily;
   readonly #pools = new Map<NodeKey, RedisPooled>();
   /** slot → node. Empty until the first refresh. */
   #slots: (NodeKey | undefined)[] = new Array(SLOTS);
@@ -89,8 +91,15 @@ export class RedisCluster extends RedisCommands {
   #refreshing: Promise<void> | null = null;
   #closed = false;
 
-  constructor(seeds: RedisOptions[], options: RedisClusterOptions = {}) {
+  constructor(
+    seeds: RedisOptions[],
+    options: RedisClusterOptions = {},
+    family: ServerFamily = REDIS,
+  ) {
     super();
+    this.#family = family;
+    this.dialect = family.dialect;
+    this.backend = `${family.name}-cluster`;
     if (seeds.length === 0) {
       throw new DbError("a cluster needs at least one seed node", {
         code: DbErrorCode.Unsupported,
@@ -110,11 +119,13 @@ export class RedisCluster extends RedisCommands {
   static async connect(
     urls: string | readonly string[],
     options: RedisClusterOptions = {},
+    family: ServerFamily = REDIS,
   ): Promise<RedisCluster> {
     const list = typeof urls === "string" ? [urls] : [...urls];
     const cluster = new RedisCluster(
-      list.map((url) => parseConnectionString(url, options)),
+      list.map((url) => parseConnectionString(url, options, family)),
       options,
+      family,
     );
     await cluster.refresh();
     return cluster;
@@ -163,7 +174,7 @@ export class RedisCluster extends RedisCommands {
     for (const target of candidates) {
       let connection: RedisConnection | null = null;
       try {
-        connection = await openConnection(hostPort(target), target);
+        connection = await openConnection(this.#url(target), target, this.#family);
         const reply = (await connection.call(["CLUSTER", "SLOTS"])) as unknown[];
         this.#apply(reply);
         return;
@@ -233,11 +244,16 @@ export class RedisCluster extends RedisCommands {
     };
   }
 
+  #url(options: RedisOptions): string {
+    const scheme = schemeFor(this.#family, options.tls === true);
+    return `${scheme}://${options.host ?? "localhost"}:${options.port ?? 6379}`;
+  }
+
   #poolFor(key: NodeKey): RedisPooled {
     let pool = this.#pools.get(key);
     if (pool === undefined) {
       const target = this.#optionsFor(key);
-      pool = new RedisPooled(driver, hostPort(target), target, this.#options);
+      pool = new RedisPooled(createDriver(this.#family), this.#url(target), target, this.#options);
       this.#pools.set(key, pool);
     }
     return pool;
@@ -267,8 +283,8 @@ export class RedisCluster extends RedisCommands {
   // the node that owns it, through the same redirect-following path the command
   // surface uses.
 
-  readonly dialect: Dialect = REDIS_DIALECT;
-  readonly backend = "redis-cluster";
+  readonly dialect: Dialect;
+  readonly backend: string;
 
   /** A command read as rows, on whichever node owns its key. */
   query(
@@ -276,7 +292,7 @@ export class RedisCluster extends RedisCommands {
     params?: DbParams,
     options?: CallOptions,
   ): Promise<Rows<Row<unknown>>> {
-    const args = commandOf(q);
+    const args = commandOf(q, this.#family);
     return this.#follow(args, (pool) => pool.query(queryAst(args), params, options));
   }
 
@@ -285,7 +301,7 @@ export class RedisCluster extends RedisCommands {
     params?: DbParams,
     options?: CallOptions,
   ): Promise<ExecuteResult> {
-    const args = commandOf(q);
+    const args = commandOf(q, this.#family);
     return this.#follow(args, (pool) => pool.execute(queryAst(args), params, options));
   }
 
@@ -300,7 +316,7 @@ export class RedisCluster extends RedisCommands {
     q: Queryable | readonly CommandArg[],
     rows: readonly DbParams[],
   ): Promise<ExecuteResult> {
-    const args = commandOf(q);
+    const args = commandOf(q, this.#family);
     let changes = 0;
     for (const row of rows) {
       const result = await this.execute(args, row);
@@ -555,11 +571,6 @@ export class RedisCluster extends RedisCommands {
   }
 }
 
-function hostPort(options: RedisOptions): string {
-  const scheme = options.tls === true ? "rediss" : "redis";
-  return `${scheme}://${options.host ?? "localhost"}:${options.port ?? 6379}`;
-}
-
 /** The redirect an error (or an error sitting in a result array) carries. */
 function redirectOf(value: unknown): Redirect | null {
   if (typeof value !== "object" || value === null) return null;
@@ -707,26 +718,30 @@ export function routingKey(args: readonly CommandArg[]): string | null {
  * it returns is a `RedisCluster`. Making that a flag would mean one call whose
  * return type depended on a boolean.
  */
-export const redisCluster: Driver<RedisCluster, RedisClusterOptions, never> = defineDriver<
-  RedisCluster,
-  RedisClusterOptions,
-  never
->({
-  name: "redis-cluster",
-  schemes: ["redis", "rediss"],
-  dialect: REDIS_DIALECT,
-  open(url: string, options: RedisClusterOptions = {}): Promise<RedisCluster> {
-    return RedisCluster.connect([url, ...(options.seeds ?? [])], options);
-  },
-  /**
-   * A cluster client already pools — one pool per node, sized by the same
-   * options. `pool: true` on top of it would be a second pool over the first,
-   * so it is refused by name rather than quietly built.
-   */
-  pooled(): never {
-    throw new DbError(
-      "a cluster client already holds a pool per node — pass max/idleTimeout as ordinary options instead of pool",
-      { code: DbErrorCode.Unsupported },
-    );
-  },
-});
+export const redisCluster: Driver<RedisCluster, RedisClusterOptions, never> =
+  createClusterDriver(REDIS);
+
+/** The cluster driver for a family: what {@link redisCluster} is for Redis. */
+export function createClusterDriver(
+  family: ServerFamily,
+): Driver<RedisCluster, RedisClusterOptions, never> {
+  return defineDriver<RedisCluster, RedisClusterOptions, never>({
+    name: `${family.name}-cluster`,
+    schemes: [...family.schemes],
+    dialect: family.dialect,
+    open(url: string, options: RedisClusterOptions = {}): Promise<RedisCluster> {
+      return RedisCluster.connect([url, ...(options.seeds ?? [])], options, family);
+    },
+    /**
+     * A cluster client already pools — one pool per node, sized by the same
+     * options. `pool: true` on top of it would be a second pool over the first,
+     * so it is refused by name rather than quietly built.
+     */
+    pooled(): never {
+      throw new DbError(
+        "a cluster client already holds a pool per node — pass max/idleTimeout as ordinary options instead of pool",
+        { code: DbErrorCode.Unsupported },
+      );
+    },
+  });
+}
