@@ -14,11 +14,14 @@
 set -euo pipefail
 
 name="${REDIS_CLUSTER_CONTAINER:-esrun-redis-cluster}"
+# Valkey ships redis-server and redis-cli beside its own binaries, so its image
+# works here unchanged: REDIS_IMAGE=valkey/valkey:9.
+image="${REDIS_IMAGE:-redis:8}"
 docker rm -f "$name" >/dev/null 2>&1 || true
 
 docker run -d --name "$name" \
   -p 7001-7003:7001-7003 -p 17001-17003:17001-17003 \
-  redis:8 sh -c '
+  "$image" sh -c '
     for p in 7001 7002 7003; do
       redis-server --port "$p" --cluster-enabled yes \
         --cluster-config-file "nodes-$p.conf" --cluster-node-timeout 5000 \

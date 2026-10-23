@@ -62,6 +62,14 @@ es-runtime-providers = []
     "**/test/**",
     "**/tests/**",
 ]
+"@opentf/esrun-valkey" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 es-runtime-engine = []
 "@opentf/esrun-mysql" = [
     "**/*.md",
@@ -141,6 +149,15 @@ matrix = false
 command = "tsr build"
 artifacts = ""
 manifest = "packages/redis/package.json"
+
+[[package]]
+name = "@opentf/esrun-valkey"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/valkey/package.json"
 
 [[package]]
 name = "@opentf/esrun-rabbitmq"

@@ -8,6 +8,9 @@
 set -euo pipefail
 
 name="${REDIS_TLS_CONTAINER:-esrun-redis-tls}"
+# Valkey ships redis-server and redis-cli beside its own binaries, so its image
+# works here unchanged: REDIS_IMAGE=valkey/valkey:9.
+image="${REDIS_IMAGE:-redis:8}"
 port="${REDIS_TLS_PORT:-6390}"
 # Docker refuses to mount paths it does not consider shared, and /tmp is
 # commonly one of those. A directory under $HOME is the portable choice.
@@ -38,7 +41,7 @@ docker rm -f "$name" >/dev/null 2>&1 || true
 # `--tls-port` with `--port 0` means TLS only: a test that could fall back to
 # the plaintext port would not be testing TLS.
 docker run -d --name "$name" -v "$dir:/certs:ro" \
-  -p "127.0.0.1:$port:$port" redis:8 \
+  -p "127.0.0.1:$port:$port" "$image" \
   redis-server --port 0 --tls-port "$port" \
   --tls-cert-file /certs/server.crt \
   --tls-key-file /certs/server.key \

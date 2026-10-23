@@ -1,4 +1,4 @@
-# Generated from release.toml by `release` · sha256:3b1067e7cf524a02fe2d9e8cbbbab6925c4e60f16c3a2afa2648880aa2fdbaef
+# Generated from release.toml by `release` · sha256:fe37f1390fd9ebff95c0187bf3a4737659b8726018f9e3db218d552f41a8c77c
 name: Release
 
 on:
@@ -24,6 +24,7 @@ jobs:
       release_opentf_esrun_postgres: ${{ steps.check.outputs.release_opentf_esrun_postgres }}
       release_opentf_esrun_nats: ${{ steps.check.outputs.release_opentf_esrun_nats }}
       release_opentf_esrun_redis: ${{ steps.check.outputs.release_opentf_esrun_redis }}
+      release_opentf_esrun_valkey: ${{ steps.check.outputs.release_opentf_esrun_valkey }}
       release_opentf_esrun_rabbitmq: ${{ steps.check.outputs.release_opentf_esrun_rabbitmq }}
       release_opentf_esrun_smtp: ${{ steps.check.outputs.release_opentf_esrun_smtp }}
       release_es_runtime_cli: ${{ steps.check.outputs.release_es_runtime_cli }}
@@ -49,12 +50,13 @@ jobs:
       - uses: ./.github/actions/setup-esdev
       - id: check
         run: |
-          echo "should_release=$(release check --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-mqtt --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-nats --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-rabbitmq --exclude-package @opentf/esrun-smtp --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "should_release=$(release check --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-mqtt --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-nats --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-valkey --exclude-package @opentf/esrun-rabbitmq --exclude-package @opentf/esrun-smtp --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_mysql=$(release check --package @opentf/esrun-mysql)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_mqtt=$(release check --package @opentf/esrun-mqtt)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_postgres=$(release check --package @opentf/esrun-postgres)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_nats=$(release check --package @opentf/esrun-nats)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_redis=$(release check --package @opentf/esrun-redis)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_valkey=$(release check --package @opentf/esrun-valkey)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_rabbitmq=$(release check --package @opentf/esrun-rabbitmq)" >> "$GITHUB_OUTPUT"
           echo "release_opentf_esrun_smtp=$(release check --package @opentf/esrun-smtp)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_cli=$(release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
@@ -418,6 +420,44 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-opentf-esrun-valkey:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_opentf_esrun_valkey == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - name: Build @opentf/esrun-valkey
+        run: npm run build
+        working-directory: packages/valkey
+      - name: Install release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.41.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+      - name: Expose release command
+        shell: bash
+        run: |
+          if ! command -v release >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/release-cli"
+            cp "$(command -v otf-release)" "$RUNNER_TEMP/release-cli/release"
+            echo "$RUNNER_TEMP/release-cli" >> "$GITHUB_PATH"
+          fi
+      - name: Publish
+        run: release publish --package @opentf/esrun-valkey
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-opentf-esrun-rabbitmq:
     needs: [check-release]
     if: needs.check-release.outputs.release_opentf_esrun_rabbitmq == 'true'
@@ -495,7 +535,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    needs: [check-release, publish-opentf-esrun-mysql, publish-opentf-esrun-mqtt, publish-opentf-esrun-postgres, publish-opentf-esrun-nats, publish-opentf-esrun-redis, publish-opentf-esrun-rabbitmq, publish-opentf-esrun-smtp]
+    needs: [check-release, publish-opentf-esrun-mysql, publish-opentf-esrun-mqtt, publish-opentf-esrun-postgres, publish-opentf-esrun-nats, publish-opentf-esrun-redis, publish-opentf-esrun-valkey, publish-opentf-esrun-rabbitmq, publish-opentf-esrun-smtp]
     if: >-
       always() &&
       needs.check-release.outputs.should_release == 'true' &&
@@ -509,6 +549,8 @@ jobs:
       needs.publish-opentf-esrun-nats.result != 'cancelled' &&
       needs.publish-opentf-esrun-redis.result != 'failure' &&
       needs.publish-opentf-esrun-redis.result != 'cancelled' &&
+      needs.publish-opentf-esrun-valkey.result != 'failure' &&
+      needs.publish-opentf-esrun-valkey.result != 'cancelled' &&
       needs.publish-opentf-esrun-rabbitmq.result != 'failure' &&
       needs.publish-opentf-esrun-rabbitmq.result != 'cancelled' &&
       needs.publish-opentf-esrun-smtp.result != 'failure' &&
@@ -540,7 +582,7 @@ jobs:
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - name: Publish
-        run: release publish --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-mqtt --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-nats --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-rabbitmq --exclude-package @opentf/esrun-smtp
+        run: release publish --exclude-package @opentf/esrun-mysql --exclude-package @opentf/esrun-mqtt --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-nats --exclude-package @opentf/esrun-redis --exclude-package @opentf/esrun-valkey --exclude-package @opentf/esrun-rabbitmq --exclude-package @opentf/esrun-smtp
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

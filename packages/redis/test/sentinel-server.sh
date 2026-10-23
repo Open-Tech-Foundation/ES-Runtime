@@ -15,11 +15,14 @@
 set -euo pipefail
 
 name="${REDIS_SENTINEL_CONTAINER:-esrun-redis-sentinel}"
+# Valkey ships redis-server and redis-cli beside its own binaries, so its image
+# works here unchanged: REDIS_IMAGE=valkey/valkey:9.
+image="${REDIS_IMAGE:-redis:8}"
 docker rm -f "$name" >/dev/null 2>&1 || true
 
 docker run -d --name "$name" \
   -p 7201-7202:7201-7202 -p 7301-7303:7301-7303 \
-  redis:8 sh -c '
+  "$image" sh -c '
     redis-server --port 7201 --appendonly no --daemonize yes
     redis-server --port 7202 --appendonly no --replicaof 127.0.0.1 7201 --daemonize yes
     sleep 1

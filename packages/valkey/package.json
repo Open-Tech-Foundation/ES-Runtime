@@ -1,0 +1,39 @@
+{
+  "name": "@opentf/esrun-valkey",
+  "version": "0.1.0",
+  "description": "Valkey client and runtime:db driver for esrun.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.22.0"
+  },
+  "scripts": {
+    "build": "esdev build --lib src"
+  },
+  "dependencies": {
+    "@opentf/esrun-redis": "workspace:^"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "workspace:*",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "valkey", "redis", "resp", "database", "driver", "cache"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/valkey"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/db/valkey",
+  "publishConfig": {
+    "access": "public"
+  }
+}

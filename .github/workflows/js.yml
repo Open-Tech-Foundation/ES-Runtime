@@ -1,5 +1,5 @@
 # CI for the JavaScript in this repo: the database drivers
-# (packages/postgres, packages/mysql, packages/redis) and the pure-JS half of
+# (packages/postgres, packages/mysql, packages/redis, packages/valkey) and the pure-JS half of
 # `runtime:serialization` (crates/runtime/js).
 #
 # Split out of ci.yml so it can be skipped when nothing here changed. These jobs
@@ -154,8 +154,10 @@ jobs:
       - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
       - run: tsr install
-      - run: tsr typecheck
       - run: tsr build
+      # After build: the Valkey package is checked against the Redis package's
+      # built declarations.
+      - run: tsr typecheck
       - run: tsr test:protocol
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
@@ -203,8 +205,10 @@ jobs:
       - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
       - run: tsr install
-      - run: tsr typecheck
       - run: tsr build
+      # After build: the Valkey package is checked against the Redis package's
+      # built declarations.
+      - run: tsr typecheck
       - run: tsr test:mysql
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
@@ -261,8 +265,10 @@ jobs:
       - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
       - run: tsr install
-      - run: tsr typecheck
       - run: tsr build
+      # After build: the Valkey package is checked against the Redis package's
+      # built declarations.
+      - run: tsr typecheck
 
       # The password-protected server, for the handshake half. A failed `HELLO`
       # has to be told apart from a wrong password, and only a server that wants
@@ -309,3 +315,109 @@ jobs:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           REDIS_URL: redis://127.0.0.1:6379
           REDIS_AUTH_URL: redis://:esrun@127.0.0.1:6380
+
+  # The Valkey driver (packages/valkey), on each Valkey major still maintained.
+  # The package is the Redis driver under Valkey's names, so this job runs the
+  # Redis package's whole suite against Valkey — that is the code doing the work
+  # — and then the Valkey package's own. The servers are the redis job's, from
+  # the same scripts, started from the Valkey image.
+  valkey:
+    name: valkey driver (${{ matrix.image }})
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["valkey/valkey:8", "valkey/valkey:9"]
+    env:
+      # The Redis package's server scripts start this image instead of Redis.
+      REDIS_IMAGE: ${{ matrix.image }}
+    services:
+      valkey:
+        image: ${{ matrix.image }}
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: packages/redis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
+          # and it lands beside the directories rust-cache caches by default
+          # rather than inside them — so without this every job downloads it
+          # again. The script skips the fetch when the `.sum` file next to the
+          # archive still names the same URL, which restoring this gives it.
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
+      # The debug binary, not release: these tests check behaviour rather than
+      # speed, and a release build of v8 is not worth the minutes here.
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr build
+      # After build: the Valkey package is checked against the Redis package's
+      # built declarations.
+      - run: tsr typecheck
+
+      # The password-protected server, for the handshake half. A failed `HELLO`
+      # has to be told apart from a wrong password, and only a server that wants
+      # one can show that.
+      - name: start the password-protected server
+        run: |
+          docker run -d --name esrun-redis-auth -p 6380:6379 "$REDIS_IMAGE" \
+            redis-server --requirepass esrun
+          for _ in $(seq 1 60); do
+            docker exec esrun-redis-auth redis-cli -a esrun ping 2>/dev/null | grep -q PONG && exit 0
+            sleep 0.5
+          done
+          echo "the password-protected server never answered" >&2
+          exit 1
+
+      # TLS, from a private authority — which is what an internal deployment
+      # looks like, and the case the public roots cannot cover. The script mints
+      # a CA and a certificate and writes the environment the test wants.
+      #
+      # Redirected into $GITHUB_ENV the way the two steps below are, rather than
+      # `eval`ed: command substitution discards the script's exit status, so a
+      # server that never came up used to leave the variables empty and this
+      # step green, and the tls case skipped itself without saying why.
+      - name: start the TLS server
+        run: ./test/tls-server.sh >> "$GITHUB_ENV"
+
+      # A three-primary cluster, for the slot map and the redirects. All three
+      # nodes share one container so that `--cluster-announce-ip 127.0.0.1` is
+      # true for the cluster bus and for the client at the same time.
+      - name: start the cluster
+        run: ./test/cluster-server.sh >> "$GITHUB_ENV"
+
+      # A Sentinel deployment — one master, one replica, three sentinels — for
+      # the discovery and the failover. Three because quorum is the part worth
+      # testing: one sentinel can announce a failover it agreed with nobody about.
+      - name: start the sentinel deployment
+        run: ./test/sentinel-server.sh >> "$GITHUB_ENV"
+
+      - run: tsr test:redis
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          REDIS_URL: redis://127.0.0.1:6379
+          REDIS_AUTH_URL: redis://:esrun@127.0.0.1:6380
+      - run: tsr test:valkey
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          VALKEY_URL: valkey://127.0.0.1:6379

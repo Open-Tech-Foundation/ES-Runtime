@@ -69,3 +69,6 @@ crates/dev-cli/templates/*/bun.lock
 crates/dev-cli/templates/*/package-lock.json
 crates/dev-cli/templates/*/yarn.lock
 crates/dev-cli/templates/*/pnpm-lock.yaml
+
+# The Valkey tests run against staged copies of the built packages.
+packages/valkey/test/.stage/
