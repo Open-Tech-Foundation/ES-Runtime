@@ -45,6 +45,7 @@ const NAV = [
           { title: "Compatibility & limits", path: "/docs/db/redis/compatibility" },
         ],
       },
+      { title: "Valkey", path: "/docs/db/valkey" },
       {
         title: "Drivers & ORMs",
         items: [

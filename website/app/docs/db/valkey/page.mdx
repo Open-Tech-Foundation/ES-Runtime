@@ -1,0 +1,78 @@
+---
+title: Valkey
+description: The Valkey driver for esrun — a client and a runtime:db backend for Valkey, with valkey:// URLs, cluster and Sentinel.
+---
+
+# Valkey
+
+`@opentf/esrun-valkey` connects `runtime:db` to [Valkey](https://valkey.io). It is
+the [Redis driver](/docs/db/redis) under Valkey's names: the same client, pool,
+pipelines, `MULTI`/`EXEC`, pub/sub, blocking commands, cluster and Sentinel, with
+URLs, backend names and errors that say Valkey.
+
+```sh
+npm install @opentf/esrun-valkey
+```
+
+```js
+import { connect } from "runtime:db";
+import { driver } from "@opentf/esrun-valkey";
+
+const v = await connect("valkey://localhost", { driver });
+
+await v.set("session:42", "ada", { ex: 3600 });
+await v.get("session:42"); // "ada"
+
+await v.close();
+```
+
+## Connection strings
+
+| Scheme | Connection |
+| --- | --- |
+| `valkey://` | plaintext |
+| `valkeys://` | TLS from the first byte |
+| `redis://`, `rediss://` | the same, so a URL written for Redis works unchanged |
+
+The rest of the URL is the Redis driver's:
+`valkey://[[username][:password]@]host[:port][/db][?option=value]`, with the
+path as a database index. See [Concepts and connections](/docs/db/redis/core).
+
+## Drivers
+
+| Export | Opens | `backend` |
+| --- | --- | --- |
+| `driver` | one connection; `pool: true` makes it a pool | `valkey` |
+| `valkeyCluster` | a cluster client, a pool per node | `valkey-cluster` |
+| `valkeySentinel` | a connection to the primary Sentinel names | `valkey` |
+
+```js
+import { valkeyCluster } from "@opentf/esrun-valkey";
+
+const cluster = await connect("valkey://10.0.0.1:7001", {
+  driver: valkeyCluster,
+  seeds: ["valkey://10.0.0.2:7001"],
+});
+```
+
+The classes are exported as `ValkeyConnection`, `ValkeyPooled` and
+`ValkeyCluster`. They are the Redis package's classes, so `instanceof` holds under
+either name. Options, commands and errors are as described in the
+[Redis guide](/docs/db/redis).
+
+## Valkey-only commands
+
+A command without a helper is sent with `call`:
+
+```js
+await v.call(["DELIFEQ", "lock:job", token]); // Valkey 9
+```
+
+## Supported versions
+
+The driver is tested against Valkey 8 and 9, cluster, Sentinel and TLS
+included.
+
+Why this is a separate package built on the Redis driver, rather than a copy of
+it, is recorded in
+[DECISIONS D185](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
