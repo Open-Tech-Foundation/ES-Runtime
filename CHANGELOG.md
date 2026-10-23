@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-23
+
 ### Added
 
 - `file(path).type` in `runtime:fs`: the media type the file's extension

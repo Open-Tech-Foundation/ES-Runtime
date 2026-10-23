@@ -11,6 +11,8 @@ package written entirely in JavaScript over `runtime:net`, built on
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-23
+
 ### Added
 
 - The `@opentf/esrun-valkey` package: a Valkey client and `runtime:db` driver,
