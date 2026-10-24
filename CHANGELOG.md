@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- The site's benchmark data is re-measured with esrun 0.43.0 (esdev 0.22.0,
+  node 24.21.0, bun 1.4.3, deno 2.9.7, llrt 0.9.0-beta) — the previous run
+  published 0.40.0. `website/src/versions.js` is regenerated along with it, so
+  the site's displayed versions match. Postgres QPS and MySQL QPS remain fast
+  hold-outs; requests/s and the workload rows all refresh. A slower
+  serialization cluster (msgpack, cbor, csv, protobuf, +10–25%) is visible and
+  recorded — see `bench/README.md`.
+
 ### Fixed
 
 - `ctutils` is updated to 0.4.4 for RUSTSEC-2026-0385 (mask generation and
