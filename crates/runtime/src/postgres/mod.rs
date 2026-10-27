@@ -10,7 +10,6 @@
 //! allowlist, the TLS roots and socket ownership apply exactly as they do to
 //! `runtime:net`, and it holds no authority `runtime:net` would not.
 
-mod scram;
 pub(crate) mod wire;
 
 use std::collections::HashMap;
@@ -270,7 +269,7 @@ impl Connection {
     }
 
     async fn authenticate(&mut self, options: &Options) -> Result<(), Failure> {
-        let mut exchange: Option<scram::Scram> = None;
+        let mut exchange: Option<crate::scram::Scram> = None;
         let password = || {
             options.password.as_deref().ok_or_else(|| {
                 Failure::Auth("the server asked for a password and none was given".into())
@@ -308,7 +307,12 @@ impl Connection {
                                 )));
                             }
                             password()?;
-                            let session = scram::Scram::new(&options.nonce, "");
+                            let session = crate::scram::Scram::new(
+                                crate::scram::Hash::Sha256,
+                                1,
+                                &options.nonce,
+                                "",
+                            );
                             let mut out = Out::default();
                             wire::sasl_initial(
                                 &mut out,

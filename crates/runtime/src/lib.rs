@@ -53,6 +53,7 @@ mod prelude;
 mod process_ops;
 mod rsa_ops;
 mod runtime_modules;
+mod scram;
 pub mod serialization_ops;
 mod sync_fs_ops;
 mod system_ops;
