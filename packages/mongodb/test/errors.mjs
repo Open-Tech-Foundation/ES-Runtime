@@ -51,5 +51,15 @@ try {
   e = error;
 }
 is(e?.code, "ERR_DB_UNSUPPORTED", "an unknown option is refused, not ignored");
+// A standalone has no transactions, and says so before sending anything.
+if (client._topology.type === "Single" && client._topology.servers[0]?.type === "Standalone") {
+  e = null;
+  try {
+    await client.transaction(async () => {});
+  } catch (error) {
+    e = error;
+  }
+  is(e?.code, "ERR_DB_UNSUPPORTED", "a standalone refuses a transaction");
+}
 await c.drop();
 if (report("errors") > 0) throw new Error("errors failed");

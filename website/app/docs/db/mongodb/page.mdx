@@ -25,8 +25,7 @@ and examples carry over: `insertOne`, `find`, `updateMany`, `aggregate`,
 [MongoDB reference](/api/db/mongodb).
 
 It connects to MongoDB 7.0 or later: one server or a replica set. Sharded
-clusters, transactions, `mongodb+srv://` and change streams are not supported
-yet.
+clusters, `mongodb+srv://` and change streams are not supported yet.
 
 ## Permissions
 
@@ -185,6 +184,30 @@ reach one member and nothing else, use `directConnection=true`.
 
 Every member must be reachable under the name the set's configuration gives it,
 and allowed by `--allow-net`.
+
+## Transactions
+
+On a replica set, `client.transaction` runs a function in a transaction and
+commits it: every write in it is kept, or none is.
+
+```js
+await client.transaction(async (tx) => {
+  const accounts = tx.db().collection("accounts");
+  await accounts.updateOne({ _id: from }, { $inc: { balance: -amount } });
+  await accounts.updateOne({ _id: to }, { $inc: { balance: amount } });
+});
+```
+
+Inside the function, `tx` is the client seen through the transaction: its
+databases and collections run in it without being passed a session. Throwing
+abandons the transaction. When the server reports a conflict, or the commit's
+outcome is unknown, the transaction or the commit is retried for up to two
+minutes, so the function may run more than once: keep anything that must not
+happen twice, like sending an email, outside it.
+
+A standalone server has no transactions, and `transaction` says so. For finer
+control, sessions have `startTransaction`, `commitTransaction` and
+`abortTransaction`.
 
 ## Pool size
 

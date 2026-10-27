@@ -666,10 +666,38 @@ declare module "runtime:db" {
     readonly clusterTime: MongoDocument | null;
     readonly operationTime: unknown;
     readonly hasEnded: boolean;
+    /** Whether a transaction is open on this session. */
+    readonly inTransaction: boolean;
+    /** Starts a transaction; the session's operations run in it until it ends. */
+    startTransaction(options?: TransactionOptions): void;
+    /**
+     * Commits. A commit of unknown outcome fails with the
+     * UnknownTransactionCommitResult label and may be committed again.
+     */
+    commitTransaction(): Promise<void>;
+    abortTransaction(): Promise<void>;
+    /**
+     * Runs `fn` in a transaction and commits it, retrying on
+     * TransientTransactionError and an unknown commit for up to 120 seconds.
+     */
+    withTransaction<T>(fn: (session: MongoSession) => Promise<T>, options?: TransactionOptions): Promise<T>;
     advanceClusterTime(clusterTime: MongoDocument): void;
     advanceOperationTime(operationTime: unknown): void;
     /** Ends the session; ending twice does nothing. */
     endSession(): Promise<void>;
+  }
+
+  export interface TransactionOptions {
+    readConcern?: { level: string };
+    writeConcern?: WriteConcern;
+    /** A transaction reads from the primary. */
+    readPreference?: "primary";
+    maxCommitTimeMS?: number;
+  }
+
+  /** The client as `transaction(fn)` hands it to `fn`: everything runs in the transaction. */
+  export interface MongoTransaction extends MongoConnection {
+    readonly session: MongoSession;
   }
 
   /** What every MongoDB call takes. */
@@ -855,8 +883,8 @@ declare module "runtime:db" {
 
   /**
    * A client opened with the built-in {@link mongodb} driver: a pool of
-   * connections to one server, kept by the runtime. `query`, `execute` and
-   * `transaction` refuse; MongoDB is reached through `db()`.
+   * connections to each server, kept by the runtime. `query` and `execute`
+   * refuse; MongoDB is reached through `db()`.
    */
   export interface MongoConnection extends Connection {
     /** The database `name`, or the connection string's (`test` if none). */
@@ -865,7 +893,12 @@ declare module "runtime:db" {
     command(command: MongoDocument, options?: MongoCallOptions & { db?: string }): Promise<MongoDocument>;
     ping(options?: MongoCallOptions): Promise<void>;
     /** Starts an explicit session. */
-    startSession(options?: { causalConsistency?: boolean }): MongoSession;
+    startSession(options?: { causalConsistency?: boolean; defaultTransactionOptions?: TransactionOptions }): MongoSession;
+    /**
+     * Runs `fn` in a transaction on a new session and commits it, retrying as
+     * `withTransaction` does. Needs a replica set.
+     */
+    transaction<T>(fn: (tx: MongoTransaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
   }
 
   /**

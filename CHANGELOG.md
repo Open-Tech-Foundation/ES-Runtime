@@ -37,8 +37,12 @@ namespace) is unstable and may change between minor releases until the API freez
   elections, with reads routed by `readPreference` (modes, tag sets,
   `maxStalenessSeconds`); discovery, monitoring and selection pass MongoDB's
   specification test suites. Single-document writes and reads are retried once
-  after a network or retryable error (`retryWrites`, `retryReads`). Sharded clusters, transactions, `mongodb+srv://`
-  and change streams are not supported yet.
+  after a network or retryable error (`retryWrites`, `retryReads`). On a
+  replica set, `client.transaction(fn)` runs `fn` in a transaction and commits
+  it, retrying transient errors and an unknown commit as MongoDB's convenient
+  transactions API does; sessions also have `startTransaction`,
+  `commitTransaction`, `abortTransaction` and `withTransaction`. Sharded
+  clusters, `mongodb+srv://` and change streams are not supported yet.
   `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 
 ### Changed

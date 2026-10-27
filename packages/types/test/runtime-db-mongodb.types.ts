@@ -36,6 +36,13 @@ const n: number = await users.countDocuments({}, { signal: AbortSignal.timeout(1
 const reply = await client.command({ ping: 1 }, { db: "admin", timeoutMS: 500 });
 await using session = client.startSession({ causalConsistency: true });
 await users.insertOne({ name: "Bo" }, { session });
+const total: number = await client.transaction(async (tx) => {
+  await tx.db().collection<User>("users").insertOne({ name: "Cy" });
+  return tx.db().collection<User>("users").countDocuments({}, { session: tx.session });
+});
+session.startTransaction({ writeConcern: { w: "majority" } });
+await session.commitTransaction();
+void total;
 // @ts-expect-error — a MongoDB option the driver does not take.
 await connect("mongodb://localhost/app", { driver: mongodb, maxPoolSize: "ten" });
 // @ts-expect-error — insertMany takes an array.

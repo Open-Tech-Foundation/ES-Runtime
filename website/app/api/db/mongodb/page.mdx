@@ -81,13 +81,13 @@ program that has finished exits without `close()`.
 | `db(name?)` | `Db` | The database `name`; the URL's, or `test`, by default. |
 | `command(command, options?)` | `Promise<object>` | Runs a command on `options.db` (default `admin`). |
 | `ping(options?)` | `Promise<void>` | `{ ping: 1 }`. |
-| `startSession({ causalConsistency? })` | `Session` | An explicit session. |
+| `startSession({ causalConsistency?, defaultTransactionOptions? })` | `Session` | An explicit session. |
+| `transaction(fn, options?)` | `Promise<T>` | Runs `fn(tx)` in a transaction and commits it; see [Transactions](#transactions). |
 | `close()` | `Promise<void>` | Closes every connection. `await using` calls it. |
 | `backend` | `"mongodb"` | |
 
-`query`, `execute` and `transaction` refuse with `ERR_DB_QUERY_FORM` or
-`ERR_DB_UNSUPPORTED`: MongoDB is reached through `db()`, and transactions need a
-replica set.
+`query` and `execute` refuse with `ERR_DB_QUERY_FORM`: MongoDB is reached
+through `db()`.
 
 Every operation below takes `session`, `signal` (an `AbortSignal`) and
 `timeoutMS` in its options. Either one stops the operation wherever it is: still waiting for a
@@ -115,6 +115,38 @@ makes the client check the deployment at once.
 Discovery, monitoring and selection follow MongoDB's server discovery and
 monitoring and server selection specifications, and pass their test suites
 (`tsr test:mongodb-specs`).
+
+## Transactions
+
+Transactions need a replica set; on a standalone, `transaction` and
+`startTransaction` fail with `ERR_DB_UNSUPPORTED`.
+
+`client.transaction(fn, options?)` starts a session, runs `fn(tx)` in a
+transaction and commits it, then ends the session, and returns what `fn`
+returned. `tx` is the client whose `db()` and `command()` run in the
+transaction; `tx.session` is the session. If `fn` throws, the transaction is
+aborted and the error propagates. As MongoDB's convenient transactions API
+specifies, an error labelled `TransientTransactionError` runs `fn` again in a
+new transaction, and a commit labelled `UnknownTransactionCommitResult` is
+committed again, for up to 120 seconds with a short jittered backoff; `fn` may
+therefore run more than once.
+
+| `Session` member | Meaning |
+| --- | --- |
+| `startTransaction(options?)` | Starts a transaction. Nothing is sent until the first operation in it. |
+| `commitTransaction()` | Commits. Committing again after a commit is allowed, and waits for a majority. |
+| `abortTransaction()` | Abandons the transaction. |
+| `withTransaction(fn, options?)` | What `client.transaction` does, on this session; `fn` receives the session. |
+| `inTransaction` | Whether a transaction is open. |
+
+Transaction options are `readConcern`, `writeConcern` (default: the client's)
+and `maxCommitTimeMS`; `readPreference` may only be `primary`. Operations in a
+transaction go to the primary, are not retried on their own, and refuse their
+own `writeConcern` or a read preference other than primary. A network error in
+one is labelled `TransientTransactionError`. A commit whose outcome is unknown
+(a lost connection, a time limit, a retryable error, or a write concern not
+yet satisfied) is labelled `UnknownTransactionCommitResult`. Ending a session
+with a transaction open aborts it.
 
 ## Retries
 

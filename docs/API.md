@@ -2011,7 +2011,11 @@ The built-in MongoDB driver (DECISIONS D186), for `mongodb:` URLs to MongoDB
 named (`replicaSet`, `directConnection`). Connecting needs `Net`; `tlsCAFile` is read through
 `runtime:fs` and needs `FileRead`. The client it returns pools connections in
 the host and is used through `db(name?)`, `command(command, { db? })`,
-`ping()` and `startSession({ causalConsistency? })`; `query`, `execute` and `transaction` refuse. A `Db` has `collection`,
+`ping()`, `startSession({ causalConsistency?, defaultTransactionOptions? })` and,
+on a replica set, `transaction(fn)`, which runs `fn` in a transaction and
+commits it, retrying as MongoDB's convenient transactions API does (sessions
+also have `startTransaction`, `commitTransaction`, `abortTransaction` and
+`withTransaction`); `query` and `execute` refuse. A `Db` has `collection`,
 `command`, `aggregate`, `listCollections`, `createCollection`,
 `dropCollection` and `dropDatabase`. A `Collection` has the official driver's
 methods: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,

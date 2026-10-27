@@ -19,8 +19,8 @@ const MONGO_DIALECT = new Dialect({
     );
   },
   // Neither SQL text nor a query AST: MongoDB is reached through db() and
-  // collection(). Transactions need a replica set, which comes later.
-  supports: { queryText: false, queryAst: false, transactions: false },
+  // collection(). Transactions need a replica set; a standalone refuses them.
+  supports: { queryText: false, queryAst: false, transactions: true },
 });
 
 const MONGO_DEFAULT_PORT = 27017;
@@ -561,14 +561,161 @@ function mongoTimestampAfter(a, b) {
 /// A session: a sequence of operations the server can relate. From
 /// `client.startSession()`; pass it as `{ session }` to any operation.
 class MongoSession {
-  constructor(client, { causalConsistency = true } = {}, implicit = false) {
+  constructor(client, { causalConsistency = true, defaultTransactionOptions = {} } = {}, implicit = false) {
     this.client = client;
     this.explicit = !implicit;
     this.causalConsistency = implicit ? false : causalConsistency !== false;
     this.clusterTime = null;
     this.operationTime = null;
     this.hasEnded = false;
+    this.defaultTransactionOptions = defaultTransactionOptions;
     this._server = null;
+    // none, starting, in_progress, committed, committed_empty or aborted, as
+    // the transactions specification's state machine names them.
+    this._txnState = "none";
+    this._txnOptions = null;
+  }
+
+  /// Whether a transaction is open on this session.
+  get inTransaction() {
+    return this._txnState === "starting" || this._txnState === "in_progress";
+  }
+
+  /// Starts a transaction. Operations passed this session run in it until
+  /// `commitTransaction()` or `abortTransaction()`. Nothing is sent until the
+  /// first of them.
+  startTransaction(options = {}) {
+    if (this.hasEnded) throw mongoBad("the session has ended");
+    if (this.inTransaction) throw mongoBad("a transaction is already in progress on this session");
+    if (!this.client._retryableWritesSupported()) {
+      throw mongoBad("MongoDB transactions need a replica set; this server is a standalone");
+    }
+    const merged = { ...this.defaultTransactionOptions, ...options };
+    if (merged.readPreference !== undefined && mongoPreference(merged.readPreference).mode !== "primary") {
+      throw mongoBad("a transaction reads from the primary");
+    }
+    const writeConcern = merged.writeConcern ?? this.client._settings.writeConcern;
+    if (writeConcern?.w === 0) throw mongoBad("a transaction cannot use an unacknowledged write concern (w: 0)");
+    this._txnOptions = {
+      readConcern: merged.readConcern ?? this.client._settings.readConcern,
+      writeConcern,
+      maxCommitTimeMS: merged.maxCommitTimeMS,
+    };
+    this._serverSession().txnNumber += 1n;
+    this._txnState = "starting";
+  }
+
+  #control(name) {
+    const writeConcern = { ...this._txnOptions.writeConcern };
+    // Committing again, after a commit whose outcome was unknown, waits for a
+    // majority, so the answer means what it says.
+    if (name === "commitTransaction" && this._txnState === "committed") {
+      writeConcern.w = "majority";
+      writeConcern.wtimeout ??= 10_000;
+    }
+    return {
+      [name]: 1,
+      txnNumber: this._serverSession().txnNumber,
+      autocommit: false,
+      ...(Object.keys(writeConcern).length > 0 ? { writeConcern } : {}),
+      ...(name === "commitTransaction" && this._txnOptions.maxCommitTimeMS !== undefined
+        ? { maxTimeMS: this._txnOptions.maxCommitTimeMS }
+        : {}),
+    };
+  }
+
+  /// Commits the transaction. A commit whose outcome is unknown — its
+  /// connection lost, or its write concern not yet satisfied — fails with the
+  /// UnknownTransactionCommitResult label, and may be committed again.
+  async commitTransaction() {
+    switch (this._txnState) {
+      case "none":
+        throw mongoBad("no transaction has been started");
+      case "aborted":
+        throw mongoBad("the transaction was aborted, so it cannot be committed");
+      case "starting":
+      case "committed_empty":
+        // Nothing was sent, so there is nothing to commit.
+        this._txnState = "committed_empty";
+        return;
+    }
+    const command = this.#control("commitTransaction");
+    this._txnState = "committed";
+    let doc;
+    try {
+      doc = await this.client._run("admin", command, { session: this, _txnControl: true });
+    } catch (e) {
+      throw mongoCommitError(e, false);
+    }
+    if (doc.writeConcernError !== undefined) {
+      throw mongoCommitError(mongoServerError({ ...doc.writeConcernError, errorLabels: doc.errorLabels }), true);
+    }
+  }
+
+  /// Abandons the transaction. The server's answer is not reported: the
+  /// transaction is over either way.
+  async abortTransaction() {
+    switch (this._txnState) {
+      case "none":
+        throw mongoBad("no transaction has been started");
+      case "committed":
+      case "committed_empty":
+        throw mongoBad("the transaction was committed, so it cannot be aborted");
+      case "aborted":
+        throw mongoBad("the transaction was already aborted");
+      case "starting":
+        this._txnState = "aborted";
+        return;
+    }
+    const command = this.#control("abortTransaction");
+    this._txnState = "aborted";
+    await this.client._run("admin", command, { session: this, _txnControl: true }).catch(() => {});
+  }
+
+  /// Runs `fn` in a transaction and commits it, retrying the whole of it on a
+  /// TransientTransactionError and the commit on an
+  /// UnknownTransactionCommitResult, for up to 120 seconds with the jittered
+  /// backoff the convenient transactions API specifies. Returns what `fn`
+  /// returns; `fn` receives this session.
+  async withTransaction(fn, options = {}) {
+    const started = Date.now();
+    const limit = 120_000;
+    let attempt = 0;
+    let lastError = null;
+    for (;;) {
+      if (attempt > 0) {
+        const backoff = Math.random() * Math.min(5 * 1.5 ** attempt, 500);
+        if (Date.now() + backoff - started >= limit) throw lastError;
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+      }
+      this.startTransaction(options);
+      attempt++;
+      let result;
+      try {
+        result = await fn(this);
+      } catch (e) {
+        lastError = e;
+        if (this.inTransaction) await this.abortTransaction().catch(() => {});
+        if (mongoHasLabel(e, "TransientTransactionError") && Date.now() - started < limit) continue;
+        throw e;
+      }
+      // The callback ended the transaction itself.
+      if (!this.inTransaction) return result;
+      for (;;) {
+        try {
+          await this.commitTransaction();
+          return result;
+        } catch (e) {
+          lastError = e;
+          if (e.backendCode !== 50 && mongoHasLabel(e, "UnknownTransactionCommitResult")) {
+            if (Date.now() - started >= limit) throw e;
+            continue;
+          }
+          if (mongoHasLabel(e, "TransientTransactionError")) break;
+          throw e;
+        }
+      }
+    }
   }
 
   /// The session id the server knows it by.
@@ -598,6 +745,8 @@ class MongoSession {
   /// does nothing.
   async endSession() {
     if (this.hasEnded) return;
+    // A transaction still open when its session ends is abandoned.
+    if (this.inTransaction) await this.abortTransaction().catch(() => {});
     this.hasEnded = true;
     if (this._server !== null) {
       this.client._sessions.release(this._server, this.client._sessionTimeout);
@@ -615,6 +764,50 @@ const MONGO_WRITES = new Set([
   "insert", "update", "delete", "findAndModify", "create", "drop", "dropDatabase", "createIndexes",
   "dropIndexes", "collMod", "renameCollection", "commitTransaction", "abortTransaction",
 ]);
+
+/// What `client.transaction(fn)` hands `fn`: the client itself, as a
+/// connection is in every other runtime:db driver, except that its databases
+/// and commands run in the transaction's session, which is `tx.session`.
+function mongoTransactionView(client, session) {
+  const view = Object.create(client);
+  Object.defineProperties(view, {
+    session: { value: session },
+    db: { value: (name = client._settings.database ?? "test") => new MongoDb(client, name, session) },
+    command: { value: (command, options = {}) => view.db(options.db ?? "admin").command(command, options) },
+  });
+  return view;
+}
+
+function mongoHasLabel(e, label) {
+  return e?.server?.errorLabels?.includes(label) === true;
+}
+
+function mongoAddLabel(e, label) {
+  if (!(e instanceof DbError)) return e;
+  e.server ??= { code: e.backendCode ?? 0, codeName: "", errorLabels: [] };
+  e.server.errorLabels ??= [];
+  if (!e.server.errorLabels.includes(label)) e.server.errorLabels.push(label);
+  return e;
+}
+
+/// A commit whose outcome is unknown gets the UnknownTransactionCommitResult
+/// label: a lost connection, no server to send it to, a retryable error, a
+/// time limit, or a write concern not satisfied (other than one that can never
+/// be: CannotSatisfyWriteConcern and UnknownReplWriteConcern).
+function mongoCommitError(e, writeConcern) {
+  const unknown =
+    (e instanceof DbError && e.code === DbErrorCode.ConnectionLost) ||
+    e?.mongoSelection === true ||
+    mongoHasLabel(e, "RetryableWriteError") ||
+    e?.backendCode === 50 ||
+    (writeConcern && e?.backendCode !== 100 && e?.backendCode !== 79);
+  if (unknown) {
+    mongoAddLabel(e, "UnknownTransactionCommitResult");
+    // Unknown is not transient: retrying the whole transaction could apply it twice.
+    if (e.server?.errorLabels) e.server.errorLabels = e.server.errorLabels.filter((l) => l !== "TransientTransactionError");
+  }
+  return e;
+}
 
 // Reads that wait for an explicit causally consistent session's last write.
 const MONGO_CAUSAL_READS = new Set(["find", "aggregate", "count", "distinct"]);
@@ -677,7 +870,7 @@ class MongoConnection extends BaseConnection {
   /// none).
   db(name = this._settings.database ?? "test") {
     this._open();
-    return new MongoDb(this, name);
+    return new MongoDb(this, name, null);
   }
 
   /// Runs a command against `options.db` (default `admin`) and returns its reply.
@@ -689,11 +882,19 @@ class MongoConnection extends BaseConnection {
     await this.command({ ping: 1 }, options);
   }
 
-  async transaction() {
-    throw dbError(
-      "MongoDB transactions need a replica set, which this driver does not connect to yet",
-      DbErrorCode.Unsupported,
-    );
+  /// Runs `fn` in a transaction on a new session and commits it, retrying as
+  /// `withTransaction` does. `fn` receives this client seen through the
+  /// transaction: its databases and collections run in it without being
+  /// passed `{ session }`, and the session is `tx.session`. Returns what `fn`
+  /// returns.
+  async transaction(fn, options = {}) {
+    this._open();
+    const session = this.startSession();
+    try {
+      return await session.withTransaction(() => fn(mongoTransactionView(this, session)), options);
+    } finally {
+      await session.endSession();
+    }
   }
 
   async _close() {
@@ -753,11 +954,63 @@ class MongoConnection extends BaseConnection {
     }
     const unacknowledged = command.writeConcern?.w === 0;
     const { session, owned } = this._sessionFor(options, unacknowledged);
+    const inTransaction = session !== null && this.#transactional(session, name, body, options);
+    if (inTransaction) {
+      // Inside a transaction an operation is neither retried nor routed on its
+      // own: the transaction is retried as a whole, on the primary.
+      options = {
+        ...options,
+        _retryableWrite: false,
+        _retryableRead: false,
+        _inTransaction: true,
+        _inheritPreference: false,
+        readPreference: undefined,
+      };
+    }
     try {
       return await this.#retrying(dbName, name, body, session, options, timeoutMS, signal, sequence, unacknowledged);
+    } catch (e) {
+      // A network error inside a transaction leaves it to be retried whole.
+      if (inTransaction && e instanceof DbError && e.code === DbErrorCode.ConnectionLost) {
+        mongoAddLabel(e, "TransientTransactionError");
+      }
+      throw e;
     } finally {
       if (owned) await session.endSession();
     }
+  }
+
+  /// Adds a transaction's fields to a command run in one, and says whether it
+  /// is. The first command starts the transaction and carries its read
+  /// concern; every command carries the transaction number, and none its own
+  /// write concern.
+  #transactional(session, name, body, options) {
+    if (name === "commitTransaction" || name === "abortTransaction") return false;
+    // An operation after a transaction ended runs outside one.
+    if (!session.inTransaction) {
+      if (session._txnState !== "none") session._txnState = "none";
+      return false;
+    }
+    if (options.writeConcern !== undefined) {
+      throw mongoBad("an operation in a transaction cannot set a write concern; set it on the transaction");
+    }
+    if (options.readPreference !== undefined && mongoPreference(options.readPreference).mode !== "primary") {
+      throw mongoBad("an operation in a transaction reads from the primary");
+    }
+    delete body.writeConcern;
+    delete body.readConcern;
+    body.txnNumber = session._serverSession().txnNumber;
+    body.autocommit = false;
+    if (session._txnState === "starting") {
+      body.startTransaction = true;
+      const readConcern = { ...session._txnOptions.readConcern };
+      if (session.causalConsistency && session.operationTime !== null) {
+        readConcern.afterClusterTime = session.operationTime;
+      }
+      if (Object.keys(readConcern).length > 0) body.readConcern = readConcern;
+      session._txnState = "in_progress";
+    }
+    return true;
   }
 
   /// Whether the deployment takes retryable writes: it has sessions, and is not
@@ -773,14 +1026,18 @@ class MongoConnection extends BaseConnection {
   /// txnNumber, so the server applies it at most once.
   async #retrying(dbName, name, body, session, options, timeoutMS, signal, sequence, unacknowledged) {
     const send = () => this.#send(dbName, name, body, session, options, timeoutMS, signal, sequence);
+    // commitTransaction and abortTransaction are retryable writes whatever
+    // retryWrites says, and keep the transaction's number.
+    const control = options._txnControl === true;
     const write =
-      options._retryableWrite === true &&
-      session !== null &&
-      !unacknowledged &&
-      this._settings.retryWrites &&
-      this._retryableWritesSupported();
+      control ||
+      (options._retryableWrite === true &&
+        session !== null &&
+        !unacknowledged &&
+        this._settings.retryWrites &&
+        this._retryableWritesSupported());
     const read = options._retryableRead === true && this._settings.retryReads;
-    if (write) {
+    if (write && !control) {
       const server = session._serverSession();
       server.txnNumber += 1n;
       body.txnNumber = server.txnNumber;
@@ -801,6 +1058,9 @@ class MongoConnection extends BaseConnection {
       if (first.doc !== undefined) return first.doc;
       throw first.error;
     };
+    if (control && name === "commitTransaction") {
+      body.writeConcern = { ...body.writeConcern, w: "majority", wtimeout: body.writeConcern?.wtimeout ?? 10_000 };
+    }
     try {
       return await send();
     } catch (e) {
@@ -821,7 +1081,8 @@ class MongoConnection extends BaseConnection {
         session.explicit &&
         session.causalConsistency &&
         session.operationTime !== null &&
-        MONGO_CAUSAL_READS.has(name)
+        MONGO_CAUSAL_READS.has(name) &&
+        options._inTransaction !== true
       ) {
         body.readConcern = { ...body.readConcern, afterClusterTime: session.operationTime };
       }
@@ -927,9 +1188,15 @@ function mongoName(kind, name) {
 
 /// A database.
 class MongoDb {
-  constructor(client, name) {
+  constructor(client, name, session) {
     this.client = client;
     this.databaseName = mongoName("database", name);
+    // Set when reached through a transaction's view: every operation runs in it.
+    this._session = session;
+  }
+
+  _withSession(options) {
+    return this._session === null || options.session !== undefined ? options : { ...options, session: this._session };
   }
 
   collection(name) {
@@ -942,7 +1209,7 @@ class MongoDb {
     if (command === null || typeof command !== "object" || Array.isArray(command)) {
       throw new TypeError("a command is a document, e.g. { ping: 1 }");
     }
-    return this.client._run(this.databaseName, command, options);
+    return this.client._run(this.databaseName, command, this._withSession(options));
   }
 
   /// A database-level aggregation (`$currentOp`, `$documents`, …).
@@ -1167,7 +1434,7 @@ class MongoCollection {
   }
 
   _run(command, options, sequence) {
-    return this.db.client._run(this.db.databaseName, command, options, sequence);
+    return this.db.client._run(this.db.databaseName, command, this.db._withSession(options), sequence);
   }
 
   async insertOne(document, options = {}) {
@@ -1528,7 +1795,7 @@ class MongoCursor {
       if (!this._started) {
         this._started = true;
         const client = this._db.client;
-        if (this._options.session === undefined && client._sessionTimeout !== null) {
+        if (this._options.session === undefined && this._db._session === null && client._sessionTimeout !== null) {
           this._implicit = new MongoSession(client, {}, true);
         }
         let reply;

@@ -224,9 +224,8 @@ not a gate.
 
 ## What is not here yet
 
-- **More of MongoDB.** Transactions and retried operations, `mongodb+srv://`,
-  sharded clusters, compression, change streams, and authentication other than
-  SCRAM (DECISIONS D186).
+- **More of MongoDB.** `mongodb+srv://`, sharded clusters, compression, change
+  streams, and authentication other than SCRAM (DECISIONS D186).
 - **Zero-copy at the op boundary.** Batches are copied across today; that is the
   largest remaining native lever on throughput, and it is a runtime-wide change
   rather than a database one.
