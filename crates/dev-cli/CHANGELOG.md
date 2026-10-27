@@ -24,6 +24,12 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, a deeply nested BSON or CBOR document (or deep JavaScript calling
+  native code) could overflow the 1 MiB main-thread stack and abort `esdev`. It
+  now reserves 8 MiB for the main thread, as Linux and macOS give (D189).
+
 ## [0.22.0] - 2026-10-23
 
 ### Changed
