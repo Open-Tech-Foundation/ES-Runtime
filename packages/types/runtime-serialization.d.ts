@@ -232,6 +232,147 @@ declare module "runtime:serialization" {
     export function encode(obj: any): Uint8Array;
   }
 
+  /**
+   * BSON, MongoDB's document format. Encoding and decoding walk live values in
+   * the engine; malformed bytes are a `SyntaxError`, a value with no BSON form a
+   * `TypeError`, and a value out of range (an int64, nesting past 256 levels) a
+   * `RangeError`.
+   */
+  export namespace BSON {
+    /**
+     * Encodes a document — an object or a `Map` with string keys — as BSON. A
+     * whole `number` in the int32 range writes as int32 and any other `number`
+     * as a double; a `bigint` writes as int64; `undefined` fields are omitted;
+     * a `RegExp` keeps the `i`, `m`, `s` and `u` flags.
+     */
+    export function encode(document: object): Uint8Array;
+
+    /**
+     * Decodes BSON bytes into a document. int64 reads as `bigint`, datetime as
+     * `Date`, binary subtype 0 as `Uint8Array`, subtype 4 as `UUID`, other
+     * subtypes as `Binary`, and a regular expression as `BSONRegExp`.
+     */
+    export function decode(bytes: Uint8Array | ArrayBuffer): Record<string, any>;
+
+    /** Validates BSON bytes, agreeing with `decode`. */
+    export function validate(bytes: Uint8Array, options?: ValidationOptions): boolean | ValidationDetailedResult;
+
+    /** A 12-byte object id. */
+    export class ObjectId {
+      /** A new id, or the one given as 24 hex digits, 12 bytes, or another ObjectId. */
+      constructor(id?: string | Uint8Array | ObjectId);
+      static isValid(id: unknown): boolean;
+      static createFromHexString(hex: string): ObjectId;
+      /** An id for `seconds` with every other byte zero, for range queries on `_id`. */
+      static createFromTime(seconds: number): ObjectId;
+      /** The 12 bytes. */
+      readonly id: Uint8Array;
+      /** When the id was made, to the second. */
+      getTimestamp(): Date;
+      equals(other: ObjectId | string | null | undefined): boolean;
+      toHexString(): string;
+      toString(): string;
+      toJSON(): string;
+    }
+
+    /** A 128-bit decimal, exactly as the server stores it. */
+    export class Decimal128 {
+      /** From decimal text, exactly (inexact or malformed text is a `SyntaxError`), or the 16 stored bytes. */
+      constructor(value: string | Uint8Array);
+      static fromString(text: string): Decimal128;
+      /** The 16 bytes, as stored. */
+      readonly bytes: Uint8Array;
+      toString(): string;
+      toJSON(): { $numberDecimal: string };
+    }
+
+    /** A UUID, stored as binary subtype 4. */
+    export class UUID {
+      /** A new random (version 4) UUID, or the one given as text (dashes optional) or 16 bytes. */
+      constructor(value?: string | Uint8Array | UUID);
+      static isValid(value: unknown): boolean;
+      readonly bytes: Uint8Array;
+      equals(other: UUID | string | null | undefined): boolean;
+      toHexString(includeDashes?: boolean): string;
+      toString(): string;
+      toJSON(): string;
+    }
+
+    /** A server timestamp: seconds (`t`) and an ordinal within the second (`i`). */
+    export class Timestamp {
+      constructor(value: { t: number; i: number } | bigint);
+      readonly t: number;
+      readonly i: number;
+      toJSON(): { $timestamp: { t: number; i: number } };
+    }
+
+    /** Binary data of any subtype. A plain `Uint8Array` is subtype 0 and needs no wrapper. */
+    export class Binary {
+      static readonly SUBTYPE_DEFAULT: 0;
+      static readonly SUBTYPE_FUNCTION: 1;
+      static readonly SUBTYPE_BYTE_ARRAY: 2;
+      static readonly SUBTYPE_UUID_OLD: 3;
+      static readonly SUBTYPE_UUID: 4;
+      static readonly SUBTYPE_MD5: 5;
+      static readonly SUBTYPE_ENCRYPTED: 6;
+      static readonly SUBTYPE_COLUMN: 7;
+      static readonly SUBTYPE_SENSITIVE: 8;
+      static readonly SUBTYPE_VECTOR: 9;
+      static readonly SUBTYPE_USER_DEFINED: 128;
+      constructor(buffer?: Uint8Array, subType?: number);
+      buffer: Uint8Array;
+      subType: number;
+      /** A float32 vector (subtype 9). */
+      static fromFloat32Array(values: Float32Array | readonly number[]): Binary;
+      /** An int8 vector (subtype 9). Numbers outside -128..127 are a `RangeError`. */
+      static fromInt8Array(values: Int8Array | readonly number[]): Binary;
+      /** A packed-bit vector (subtype 9); the last `padding` bits must be 0. */
+      static fromPackedBits(bits: Uint8Array | readonly number[], padding?: number): Binary;
+      toFloat32Array(): Float32Array;
+      toInt8Array(): Int8Array;
+      /** The packed bytes; `buffer[1]` is the padding. */
+      toPackedBits(): Uint8Array;
+      toJSON(): { $binary: { base64: string; subType: string } };
+    }
+
+    /** JavaScript code, with an optional scope. */
+    export class Code {
+      constructor(code: string | ((...args: any[]) => any), scope?: Record<string, unknown> | null);
+      code: string;
+      scope: Record<string, unknown> | null;
+      toJSON(): { code: string; scope?: Record<string, unknown> };
+    }
+
+    /** A regular expression exactly as the server stores it. */
+    export class BSONRegExp {
+      /** `options` are any of `ilmsux`, stored sorted. */
+      constructor(pattern: string, options?: string);
+      pattern: string;
+      options: string;
+      /** The JavaScript `RegExp`; a `SyntaxError` for the `l` and `x` options, which have no JavaScript flag. */
+      toRegExp(): RegExp;
+      toJSON(): { $regularExpression: { pattern: string; options: string } };
+    }
+
+    /** Sorts below every other value. */
+    export class MinKey {
+      toJSON(): { $minKey: 1 };
+    }
+
+    /** Sorts above every other value. */
+    export class MaxKey {
+      toJSON(): { $maxKey: 1 };
+    }
+
+    /** A number that encodes as a double even when it is whole. Reads back as a plain `number`. */
+    export class Double {
+      constructor(value: number);
+      value: number;
+      valueOf(): number;
+      toJSON(): number;
+    }
+  }
+
   export interface JSONLParseError {
     line: number;
     raw: string;

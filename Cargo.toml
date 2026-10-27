@@ -2,7 +2,7 @@
 #
 # Crate layout and dependency direction are fixed by ARCHITECTURE.md §2 / DECISIONS.md D11:
 #
-#   common → engine → providers → runtime → default-providers → cli-common → {runtime-cli, dev-cli}
+#   common → bson → engine → providers → runtime → default-providers → cli-common → {runtime-cli, dev-cli}
 #
 # Each crate may depend only on crates to its left. The `v8` crate appears *only*
 # in `engine`; real I/O appears *only* in `default-providers`. Phase 1 introduces
@@ -12,6 +12,7 @@
 resolver = "3"
 members = [
     "crates/common",
+    "crates/bson",
     "crates/engine",
     "crates/providers",
     "crates/runtime",
@@ -270,6 +271,7 @@ self_update = { version = "1.3.1", default-features = false, features = [
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
 es-runtime-common = { path = "crates/common", version = "0.43.0" }
+es-runtime-bson = { path = "crates/bson", version = "0.43.0" }
 es-runtime-engine = { path = "crates/engine", version = "0.43.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.43.0" }
 es-runtime = { path = "crates/runtime", version = "0.43.0" }

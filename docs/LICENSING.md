@@ -29,6 +29,15 @@ Run the gate locally with:
 cargo deny check
 ```
 
+## Test suites fetched, not committed
+
+Two upstream test suites are run against esrun from a pinned checkout that is
+gitignored rather than committed: the Web Platform Tests (`wpt/fetch.sh`) and
+MongoDB's driver specification tests (`mongodb-specs/fetch.sh`). The latter are
+licensed **CC BY-NC-SA 3.0**, which an Apache-2.0 tree cannot redistribute, so
+neither they nor anything derived from them (fuzz seeds included) is committed
+here; only the runner that reads them is.
+
 ## RUSTSEC advisories
 
 A small number of advisories are deliberately accepted (e.g. the `rsa` crate's

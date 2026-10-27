@@ -23,6 +23,7 @@ committed seed crashes. A real campaign belongs on dedicated infrastructure.
 | `serialization` | XML parsed into the runtime's value tree (recursive descent) |
 | `yaml` | The YAML reader, and a write-and-reread of whatever it accepts |
 | `keys` | The hand-written RFC 8410 key DER parsers, and `atob` |
+| `bson` | BSON validation and the element walk the engine's decoder makes, and Decimal128 text, parsed and printed back |
 
 The JS↔Rust marshaler and the streams are deliberately absent: they need a live
 isolate, and standing V8 up per iteration would cut the iteration rate by orders

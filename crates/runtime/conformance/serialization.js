@@ -856,7 +856,7 @@ test("runtime:serialization has a default export like every other runtime: modul
   assert(mod.default !== undefined, "a default export must exist");
   assertEquals(
     Object.keys(mod.default).sort().join(","),
-    "CBOR,CSV,JSONL,MessagePack,Protobuf,TOML,XML,YAML",
+    "BSON,CBOR,CSV,JSONL,MessagePack,Protobuf,TOML,XML,YAML",
   );
   // The aggregate carries the real namespaces, not copies of their names.
   assertEquals(mod.default.YAML, mod.YAML);

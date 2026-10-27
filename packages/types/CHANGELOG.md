@@ -13,6 +13,12 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:serialization`: the `BSON` namespace — `encode`, `decode`,
+  `validate`, and the `ObjectId`, `Decimal128`, `UUID`, `Timestamp`, `Binary`,
+  `Code`, `BSONRegExp`, `MinKey`, `MaxKey` and `Double` classes.
+
 ## [0.18.0] - 2026-10-21
 
 ### Added

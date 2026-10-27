@@ -689,6 +689,7 @@ dependencies = [
  "ctr",
  "ed25519-dalek",
  "encoding_rs",
+ "es-runtime-bson",
  "es-runtime-common",
  "es-runtime-engine",
  "es-runtime-providers",
@@ -730,6 +731,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "es-runtime-bson"
+version = "0.43.0"
+
+[[package]]
 name = "es-runtime-common"
 version = "0.43.0"
 dependencies = [
@@ -742,6 +747,7 @@ dependencies = [
 name = "es-runtime-engine"
 version = "0.43.0"
 dependencies = [
+ "es-runtime-bson",
  "es-runtime-common",
  "thiserror",
  "tracing",

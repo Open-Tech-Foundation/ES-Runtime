@@ -100,3 +100,10 @@ path = "fuzz_targets/image.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bson"
+path = "fuzz_targets/bson.rs"
+test = false
+doc = false
+bench = false

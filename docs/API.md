@@ -2905,13 +2905,13 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:serialization`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, CBOR, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, CBOR, BSON, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, CSV, MessagePack, CBOR, Protobuf } from "runtime:serialization";
+import { XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, Protobuf } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
@@ -3150,6 +3150,50 @@ malformed or oversized length, an unassigned simple value, or nesting past 256
 levels is a `SyntaxError`. `CBOR.validate` reads the whole document exactly as
 `decode` does, so the two always agree.
 
+BSON, MongoDB's document format, is under the `BSON` namespace with the BSON
+types as classes on it:
+
+| Export | Description |
+| --- | --- |
+| `BSON.encode(document)` | Encodes an object, or a `Map` with string keys, as a BSON `Uint8Array`. |
+| `BSON.decode(bytes)` | Decodes a `Uint8Array` or `ArrayBuffer` holding one BSON document. |
+| `BSON.validate(bytes, opts?)` | Validates the bytes; agrees with `decode`. |
+| `new BSON.ObjectId(id?)` | A new id, or one from 24 hex digits, 12 bytes or another `ObjectId`. `toHexString()`, `getTimestamp()`, `equals()`, `id` (the bytes); `ObjectId.isValid()`, `createFromHexString()`, `createFromTime(seconds)`. |
+| `new BSON.Decimal128(text \| bytes)` | A 128-bit decimal. Text is parsed exactly: anything that would need rounding is a `SyntaxError`. `toString()` gives the canonical text; `bytes` the 16 stored bytes. |
+| `new BSON.UUID(value?)` | A new random UUID, or one from text (dashes optional) or 16 bytes. Stored as binary subtype 4. `toString()`, `toHexString(includeDashes?)`, `equals()`, `bytes`. |
+| `new BSON.Timestamp({ t, i } \| bigint)` | A server timestamp; `t` and `i` are each 0 to 2<sup>32</sup>−1. |
+| `new BSON.Binary(buffer?, subType?)` | Binary data of a subtype other than 0. `Binary.fromFloat32Array()`, `fromInt8Array()` and `fromPackedBits(bits, padding?)` make vectors (subtype 9); `toFloat32Array()`, `toInt8Array()` and `toPackedBits()` read them. |
+| `new BSON.Code(code, scope?)` | JavaScript code, with an optional scope document. |
+| `new BSON.BSONRegExp(pattern, options?)` | A regular expression as the server stores it; `options` are any of `ilmsux`. `toRegExp()` converts it, and is a `SyntaxError` for `l` or `x`. |
+| `new BSON.MinKey()`, `new BSON.MaxKey()` | The values that sort below and above all others. |
+| `new BSON.Double(value)` | A number that encodes as a double even when it is whole. |
+
+**BSON type mapping.**
+
+| JavaScript | BSON | Decodes back as |
+| --- | --- | --- |
+| whole `number` in the int32 range (not `-0`) | int32 | `number` |
+| any other `number` | double | `number` |
+| `bigint` in the int64 range | int64 | `bigint` (always, however small) |
+| `string`, `boolean`, `null` | string, boolean, null | the same |
+| `undefined` in an object / in an array | omitted / null | — / `null` |
+| `Date` | datetime | `Date` |
+| `RegExp` | regular expression (flags `i`, `m`, `s`, `u`) | `BSONRegExp` |
+| `Uint8Array`, `ArrayBuffer` | binary subtype 0 | `Uint8Array` |
+| `Array` | array | `Array` |
+| `Map`, any other object | document (own enumerable string keys) | plain object |
+| the `BSON.*` classes | their types | the same classes |
+| — | deprecated undefined / symbol / DBPointer | `null` / `string` / `{ $ref, $id }` |
+
+A whole number reads back as a `number`, so a document holding the double `1.0`
+re-encodes it as int32, as the official driver does; wrap it in `BSON.Double` to
+keep a double. A repeated key decodes with its last value. A key containing NUL,
+a cycle, a function, a symbol, a `Set`, a typed array other than `Uint8Array`,
+or a `Map` key that is not a string is a `TypeError`; a `bigint` outside int64,
+an Invalid `Date`, or nesting past 256 levels is a `RangeError`. Malformed bytes
+(a wrong length, a missing terminator, a boolean other than 0 or 1, a string
+that is not UTF-8, trailing bytes) are a `SyntaxError`.
+
 For JSONL, it provides transform streams under the `JSONL` namespace:
 
 | Export | Description |
@@ -3167,7 +3211,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 
 | Export | Description |
 | --- | --- |
-| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `CBOR`, `Protobuf`), as every other `runtime:` module provides. |
+| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `CBOR`, `BSON`, `Protobuf`), as every other `runtime:` module provides. |
 
 For Protobuf, schemas are compiled from `.proto` source at runtime:
 

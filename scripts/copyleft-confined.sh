@@ -22,7 +22,8 @@ set -euo pipefail
 # development toolchain, and the one place an exception would ever be argued
 # for.
 DEPLOYED=(es-runtime-cli es-runtime es-runtime-engine es-runtime-providers
-    es-runtime-default-providers es-runtime-common es-runtime-cli-common)
+    es-runtime-default-providers es-runtime-common es-runtime-cli-common
+    es-runtime-bson)
 
 # Every license family `deny.toml` refuses. Matched against the licenses actually
 # in the resolved graph rather than against a list of crate names, so a

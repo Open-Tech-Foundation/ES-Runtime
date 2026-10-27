@@ -125,3 +125,42 @@ pub fn archive(bytes: &[u8]) {
 pub fn image(bytes: &[u8]) {
     crate::image_ops::fuzz_decode(bytes);
 }
+
+/// Validates BSON and, when it validates, walks every element the way the
+/// engine's decoder does. Also parses the input as Decimal128 text and, when
+/// that succeeds, checks the canonical text parses back to the same bytes.
+/// Lengths, terminators and nesting in a document are untrusted, and so is the
+/// exponent arithmetic in Decimal128 text.
+pub fn decode_bson(bytes: &[u8]) {
+    if es_runtime_bson::validate(bytes).is_ok()
+        && let Ok(doc) = es_runtime_bson::Document::new(bytes)
+    {
+        walk_bson(doc);
+    }
+    if let Ok(text) = std::str::from_utf8(bytes)
+        && let Ok(parsed) = es_runtime_bson::decimal128_from_str(text)
+    {
+        let canonical = es_runtime_bson::decimal128_to_string(parsed);
+        let again = es_runtime_bson::decimal128_from_str(&canonical);
+        // NaN's sign is not kept, and that is the only text that changes bytes.
+        assert!(
+            again == Ok(parsed) || canonical == "NaN",
+            "{text:?} printed as {canonical:?}, which does not parse back"
+        );
+    }
+}
+
+fn walk_bson(doc: es_runtime_bson::Document<'_>) {
+    for element in doc.iter() {
+        match element.expect("a validated document reads").1 {
+            es_runtime_bson::Element::Document(inner) | es_runtime_bson::Element::Array(inner) => {
+                walk_bson(inner);
+            }
+            es_runtime_bson::Element::CodeWithScope { scope, .. } => walk_bson(scope),
+            es_runtime_bson::Element::Decimal128(bytes) => {
+                let _ = es_runtime_bson::decimal128_to_string(bytes);
+            }
+            _ => {}
+        }
+    }
+}

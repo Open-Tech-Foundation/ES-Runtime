@@ -353,6 +353,49 @@ Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both
 document is a sequence — the shape it is usually read in is a stream, and the
 whole-file case is `text.split("\n").map(JSON.parse)` without a helper.
 
+### BSON
+
+BSON is the one format that crosses no JSON and no value tree at all. Its
+encoder and decoder are engine builtins: the encoder reads the object where it
+lies and appends bytes, and the decoder builds objects straight from the bytes.
+A MongoDB driver encodes and decodes a document on every operation, so an
+intermediate tree there would be garbage made per query, which is what the
+database drivers were rewritten to avoid. The bytes themselves are read and
+written by a small crate that knows no engine type, and that crate is what the
+fuzzer drives.
+
+**The BSON types are classes, recognized by prototype.** `ObjectId`,
+`Decimal128` and the rest are plain JavaScript classes. The engine compares an
+object's prototype against theirs and reads one property for the value, so an
+instance costs no call back into JavaScript. The classes hold no private state
+for the same reason: a decoded instance is built by the engine and never runs
+its constructor.
+
+**Each BSON type reads back as one JavaScript type.** An int64 is always a
+`bigint`, even `5n`, because the alternative of a `number` when it fits gives one
+field two types depending on its value, and a `number` for every int64 loses
+digits past 2<sup>53</sup>. A regular expression reads as a `BSONRegExp` rather
+than a `RegExp`: the server's patterns are PCRE, which may not compile in
+JavaScript, its `l` and `x` options have no JavaScript flag, and `RegExp.source`
+rewrites `/` as `\/`, so a round trip would change the bytes. A JavaScript
+`RegExp` still writes. A `number` is the exception, because JavaScript has one
+number type for two BSON ones: a whole number writes as int32, so a stored
+double `1.0` comes back as int32, as it does with the official driver.
+`BSON.Double` writes a double on purpose.
+
+**Decimal128 text is exact or refused.** `new Decimal128("0.1")` stores exactly
+0.1. Text with more than 34 significant digits, or an exponent out of range, is
+a `SyntaxError` unless the excess is trailing zeros, which move into the
+exponent without changing the value. Nothing is rounded silently.
+
+The implementation is checked against MongoDB's BSON corpus and binary-vector
+tests, the suites every official driver runs (`tsr test:bson-corpus`). The cases
+that differ are the ones above by design: documents holding a whole-number
+double, and a NaN whose payload bits a JavaScript number does not keep. The
+runner lists each, and fails if one starts passing. The corpus is fetched by
+`mongodb-specs/fetch.sh` rather than committed, because its license is not
+Apache-2.0.
+
 ### Protobuf
 
 Pure JavaScript and reflective: `.proto` source is compiled at runtime rather

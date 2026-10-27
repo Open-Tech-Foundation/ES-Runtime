@@ -3897,6 +3897,8 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 
 **Consequences:** counts that the server stores as int64 arrive as `bigint` (`5n`); the API pages say so where it applies.
 
+*(Update 2026-10-27, as built: the corpus decided four details. **A regular expression decodes to `BSONRegExp`, not `RegExp`**: a server pattern is PCRE and may not compile in JavaScript, the `l` and `x` options have no JavaScript flag, and `RegExp.source` rewrites `/` as `\/`, so a round trip would change the bytes; this is the one-type-per-field rule above, and a `RegExp` still encodes. **`Double`** is added, because a whole-number double reads as a `number` and so re-encodes as int32, as in the official driver. **The deprecated types read as their replacements**: undefined as `null`, so the field survives a round trip, symbol as a string, and DBPointer as `{ $ref, $id }`. **The byte format is its own crate, `es-runtime-bson`** (`common → bson → engine`), with no engine type and no `unsafe`, so the MongoDB driver's Rust reads server replies with the same reader and the fuzzer drives it directly. The corpus is fetched by `mongodb-specs/fetch.sh` and not committed, because the specifications are CC BY-NC-SA 3.0; nothing derived from it is committed either.)*
+
 ### D188 — DNS SRV and TXT lookups in the `NetProvider` · *Accepted (2026-10-27)* · *for D186*
 
 **Context:** `mongodb+srv://`, the connection string Atlas hands out, names a DNS SRV record that lists the cluster's hosts and a TXT record that carries options. The `NetProvider` resolves a host only as part of connecting; it has no SRV or TXT lookup.

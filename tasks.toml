@@ -178,6 +178,13 @@ run = "esdev test"
 dir = "crates/runtime/js"
 env = { PATH = "../../../target/release:${PATH}" }
 
+# MongoDB's BSON corpus and binary-vector tests against runtime:serialization's
+# BSON. Fetches the pinned checkout first (gitignored: the specifications are
+# CC BY-NC-SA, so they are not committed), then fails on any case that is not a
+# listed difference.
+[tasks."test:bson-corpus"]
+run = "./mongodb-specs/fetch.sh && cargo build -p es-runtime-cli && ./target/debug/esrun --allow-read mongodb-specs/bson-corpus.js"
+
 # The upstream WPT slice for the test-only DOM: `dom`, `custom-elements` and
 # `shadow-dom`, run unmodified under `esdev test --dom`. Fails on any subtest
 # that regresses against `wpt/dom-expectations.json`. Needs `wpt/fetch.sh`

@@ -1,6 +1,6 @@
 ---
 title: runtime:serialization
-description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, and Protobuf — running directly in Rust.
+description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, and Protobuf — running directly in Rust.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -8,7 +8,9 @@ import { Callout } from "@opentf/web-docs";
 # runtime:serialization
 
 XML, YAML, TOML, CSV, MessagePack, CBOR and JSONL parse in Rust — the text or
-bytes cross the op boundary once and a JavaScript value comes back. Protobuf is
+bytes cross the op boundary once and a JavaScript value comes back. BSON is
+encoded and decoded by the engine itself, straight from and into JavaScript
+objects. Protobuf is
 the exception: it is a reflective pure-JavaScript implementation, because a
 `.proto` is compiled at run time rather than by a build step.
 
@@ -20,7 +22,7 @@ the exception: it is a reflective pure-JavaScript implementation, because a
 
 ```js
 import {
-  JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, Protobuf
+  JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, Protobuf
 } from "runtime:serialization";
 ```
 
@@ -222,6 +224,52 @@ the integer form. A reserved initial byte,
 a stray `break`, a trailing byte, a malformed or oversized length, an unassigned
 simple value (or one below 32 in the two-byte form), a tag, or nesting past 256 levels is a `SyntaxError`.
 
+## BSON
+
+MongoDB's document format. The BSON types are classes on the namespace.
+
+```js
+const bytes = BSON.encode({ _id: new BSON.ObjectId(), count: 5n, at: new Date() });
+const doc = BSON.decode(bytes); // { _id: ObjectId, count: 5n, at: Date }
+```
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `BSON.encode(document)` | `(object) => Uint8Array` | Encodes an object, or a `Map` with string keys. |
+| `BSON.decode(bytes)` | `(Uint8Array \| ArrayBuffer) => object` | Decodes one BSON document. |
+| `BSON.validate(bytes, options?)` | `(Uint8Array, object) => boolean \| object` | Validates the bytes, agreeing with `decode`. Option `detailed?`: return `{ valid, error? }`. |
+| `new BSON.ObjectId(id?)` | `ObjectId` | A new id, or one from 24 hex digits, 12 bytes or another `ObjectId`. `toHexString()`, `getTimestamp()`, `equals()`, `id`; `ObjectId.isValid()`, `createFromHexString()`, `createFromTime(seconds)`. |
+| `new BSON.Decimal128(text \| bytes)` | `Decimal128` | A 128-bit decimal, parsed exactly: text that would need rounding is a `SyntaxError`. `toString()`, `bytes`. |
+| `new BSON.UUID(value?)` | `UUID` | A new random UUID, or one from text (dashes optional) or 16 bytes. Binary subtype 4. `toString()`, `toHexString(includeDashes?)`, `equals()`, `bytes`. |
+| `new BSON.Timestamp({ t, i } \| bigint)` | `Timestamp` | A server timestamp; `t` and `i` are 0 to 2<sup>32</sup>−1. |
+| `new BSON.Binary(buffer?, subType?)` | `Binary` | Binary data of another subtype. `Binary.fromFloat32Array()`, `fromInt8Array()`, `fromPackedBits(bits, padding?)` make vectors (subtype 9); `toFloat32Array()`, `toInt8Array()`, `toPackedBits()` read them. |
+| `new BSON.Code(code, scope?)` | `Code` | JavaScript code, with an optional scope document. |
+| `new BSON.BSONRegExp(pattern, options?)` | `BSONRegExp` | A regular expression as the server stores it (`options` from `ilmsux`). `toRegExp()` is a `SyntaxError` for `l` or `x`. |
+| `new BSON.MinKey()`, `new BSON.MaxKey()` | | Sort below and above every other value. |
+| `new BSON.Double(value)` | `Double` | Encodes as a double even when whole. |
+
+### Type mapping
+
+| JavaScript | BSON | Decodes back as |
+| --- | --- | --- |
+| whole `number` in the int32 range (not `-0`) | int32 | `number` |
+| any other `number` | double | `number` |
+| `bigint` in the int64 range | int64 | `bigint`, however small |
+| `undefined` in an object / an array | omitted / null | — / `null` |
+| `Date` | datetime | `Date` |
+| `RegExp` | regular expression (flags `i`, `m`, `s`, `u`) | `BSONRegExp` |
+| `Uint8Array`, `ArrayBuffer` | binary subtype 0 | `Uint8Array` |
+| `Map`, any other object | document (own enumerable string keys) | plain object |
+| the `BSON.*` classes | their types | the same classes |
+| — | deprecated undefined, symbol, DBPointer | `null`, `string`, `{ $ref, $id }` |
+
+A decoded double that is a whole number re-encodes as int32, as in the official
+driver; `BSON.Double` keeps it a double. A repeated key decodes with its last
+value. A NUL in a key, a cycle, a function, a symbol, a `Set` or a typed array
+other than `Uint8Array` is a `TypeError`; a `bigint` outside int64, an Invalid
+`Date` or nesting past 256 levels is a `RangeError`; malformed bytes are a
+`SyntaxError`.
+
 ## Protobuf
 
 Schema-aware Protobuf decoding and encoding. Pure-JS and reflective: the `.proto`
@@ -245,6 +293,6 @@ value-names, and `Uint8Array` for bytes.
 
 | Error | When |
 | --- | --- |
-| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, CSV or CBOR input (an unterminated quote, a duplicate column name, a ragged row under `header`, a CBOR tag or trailing byte). |
+| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, CSV, CBOR or BSON input (an unterminated quote, a duplicate column name, a ragged row under `header`, a CBOR tag or trailing byte). |
 | `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
 | `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap, YAML alias expansion). |

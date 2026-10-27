@@ -2,9 +2,13 @@
 // crates/runtime/src/runtime_modules/serialization.js (via `pnpm run build`).
 //
 // XML/YAML/TOML/CSV/JSONL/MessagePack/CBOR are thin wrappers over the Rust host
-// ops; Protobuf is a pure-JS reflective implementation (./protobuf).
+// ops; BSON encodes and decodes in engine builtins over live values (./bson.ts);
+// Protobuf is a pure-JS reflective implementation (./protobuf).
+
+export { BSON } from "./bson.ts";
 export { Protobuf } from "./protobuf/schema.ts";
 
+import { BSON as BSONDefault } from "./bson.ts";
 import { Protobuf as ProtobufDefault } from "./protobuf/schema.ts";
 
 const ops = (globalThis as unknown as { __ops: Record<string, (...a: any[]) => any> }).__ops;
@@ -394,5 +398,6 @@ export default {
   JSONL,
   MessagePack,
   CBOR,
+  BSON: BSONDefault,
   Protobuf: ProtobufDefault,
 };

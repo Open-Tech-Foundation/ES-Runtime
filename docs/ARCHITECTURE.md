@@ -23,6 +23,7 @@ Strict dependency direction — each crate depends only on those below it.
 | Crate | Responsibility |
 |---|---|
 | `common` | Cross-cutting: error types, result aliases, tracing setup, byte/value helpers, capability tokens, config primitives. |
+| `bson` | BSON's byte format (D187): a validating reader, a writer, Decimal128 text. No engine type, no I/O, no `unsafe`. Used by `engine`'s BSON builtins and by `runtime`'s MongoDB driver (D186). |
 | `engine` | Engine abstraction trait **+ the V8 implementation**. The *only* crate that uses the `v8` crate. Owns isolate/context lifecycle, value marshaling, op-registration hooks, execution control (interrupt/terminate, heap-limit callback), module instantiation, snapshot build/load. |
 | `providers` | I/O provider **traits only** — no concrete implementations. Plus capability/permission traits. |
 | `runtime` | The WinterTC Minimum Common Web API, built on `engine` (abstraction) + `providers` (traits). Contains the JS prelude and host-call wiring. **No direct `v8` dependency.** |
@@ -34,7 +35,8 @@ Strict dependency direction — each crate depends only on those below it.
 ```
 runtime-cli ─┐
              ├──▶ cli-common ──▶ runtime ──▶ engine ──▶ [v8 crate]
-dev-cli     ─┘        │                └──▶ providers
+dev-cli     ─┘        │                │        └──▶ bson
+                      │                └──▶ providers
                       └──▶ default-providers ──▶ providers
                                                     ▲
                                               common (used by all)

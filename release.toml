@@ -4,6 +4,7 @@ adapters = [
 ]
 skip_publish = [
     "es-runtime",
+    "es-runtime-bson",
     "es-runtime-cli-common",
     "es-runtime-common",
     "es-runtime-default-providers",
@@ -80,6 +81,7 @@ es-runtime-engine = []
     "**/tests/**",
 ]
 es-runtime-common = []
+es-runtime-bson = []
 "@opentf/esrun-mqtt" = [
     "**/*.md",
     "**/__tests__/**",

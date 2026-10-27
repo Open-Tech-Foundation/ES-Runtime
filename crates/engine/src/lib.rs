@@ -32,6 +32,7 @@
 //! for; the impl is what lets us say so to Rust.
 
 mod async_context;
+mod bson;
 mod convert;
 pub mod diagnostics;
 mod engine;

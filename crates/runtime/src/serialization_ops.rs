@@ -459,6 +459,37 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         }
     }))?;
 
+    // BSON's encode and decode are engine builtins over live values (D187);
+    // these are the parts that need no value: a validity check, and Decimal128's
+    // text, which the class converts on construction and on `toString`.
+    engine.register_op(OpDecl::sync("bson_validate", |args| {
+        let Some(bytes) = args.first().and_then(Value::as_bytes) else {
+            return Ok(Value::String("Expected a Uint8Array".into()));
+        };
+        match es_runtime_bson::validate(bytes) {
+            Ok(()) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("bson_decimal128_parse", |args| {
+        let Some(text) = args.first().and_then(Value::as_str) else {
+            return Err(OpError::type_error("a Decimal128 is made from a string"));
+        };
+        es_runtime_bson::decimal128_from_str(text)
+            .map(|bytes| Value::String(es_runtime_bson::to_hex(&bytes)))
+            .map_err(|e| OpError::new(ExceptionClass::SyntaxError, e.to_string()))
+    }))?;
+
+    engine.register_op(OpDecl::sync("bson_decimal128_string", |args| {
+        let bytes = args
+            .first()
+            .and_then(Value::as_str)
+            .and_then(es_runtime_bson::from_hex::<16>)
+            .ok_or_else(|| OpError::type_error("this Decimal128 has lost its value"))?;
+        Ok(Value::String(es_runtime_bson::decimal128_to_string(bytes)))
+    }))?;
+
     engine.register_op(OpDecl::sync("csv_parse", |args| {
         let csv = match args.first().and_then(Value::as_str) {
             Some(s) => s,

@@ -11,6 +11,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `BSON` in `runtime:serialization`: `encode`, `decode` and `validate` for
+  MongoDB's document format, with `ObjectId`, `Decimal128`, `UUID`,
+  `Timestamp`, `Binary` (including vector helpers for subtype 9), `Code`,
+  `BSONRegExp`, `MinKey`, `MaxKey` and `Double`. Encoding and decoding are engine
+  builtins that work on live values, with no intermediate value tree (D187). An
+  int64 reads as `bigint`; Decimal128 text is parsed exactly or refused. It
+  passes MongoDB's BSON corpus and binary-vector tests, run by
+  `tsr test:bson-corpus` from a pinned checkout that is fetched, not committed.
+  This is the first phase of the MongoDB driver (D186).
+- A `bson` fuzz target over BSON validation and Decimal128 text.
+
 ### Changed
 
 - The site's benchmark data is re-measured with esrun 0.43.0 (esdev 0.22.0,

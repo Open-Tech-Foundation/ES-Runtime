@@ -886,6 +886,9 @@ impl V8Engine {
             // `__utf8_decode`: `TextDecoder`'s hot path, which must read the
             // bytes where they lie rather than have the op boundary copy them.
             crate::text::install(scope, context)?;
+            // `__bson_encode`/`__bson_decode`: BSON from and to live values,
+            // which an op's marshaled arguments could not reach.
+            crate::bson::install(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
