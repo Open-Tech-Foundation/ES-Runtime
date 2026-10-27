@@ -15,5 +15,6 @@ for the runtime itself.
 
 - The package: `driver` (the runtime's `mongodb` driver), the BSON classes
   (`ObjectId`, `Decimal128`, `UUID`, `Timestamp`, `Binary`, `Code`,
-  `BSONRegExp`, `MinKey`, `MaxKey`, `Double`) and the collection API's types.
+  `BSONRegExp`, `MinKey`, `MaxKey`, `Double`) and the collection API's types,
+  `MongoSession` included.
   Needs esrun 0.44 or later.

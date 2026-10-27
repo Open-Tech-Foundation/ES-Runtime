@@ -631,8 +631,29 @@ declare module "runtime:db" {
   /** An update: operators (`$set`, `$inc`, …) or an aggregation pipeline. */
   export type UpdateFilter<_T> = MongoDocument | MongoDocument[];
 
+  /**
+   * A session from `client.startSession()`: operations passed it as
+   * `{ session }` are related on the server, and with `causalConsistency` (the
+   * default) a read in it sees the session's earlier writes.
+   */
+  export interface MongoSession extends AsyncDisposable {
+    readonly client: MongoConnection;
+    /** The session id, `{ id: UUID }`. */
+    readonly id: MongoDocument;
+    readonly causalConsistency: boolean;
+    readonly clusterTime: MongoDocument | null;
+    readonly operationTime: unknown;
+    readonly hasEnded: boolean;
+    advanceClusterTime(clusterTime: MongoDocument): void;
+    advanceOperationTime(operationTime: unknown): void;
+    /** Ends the session; ending twice does nothing. */
+    endSession(): Promise<void>;
+  }
+
   /** What every MongoDB call takes. */
   export interface MongoCallOptions {
+    /** Runs the operation in this session instead of an implicit one. */
+    session?: MongoSession;
     /** Stops the operation; the rejection carries the signal's `reason`. */
     signal?: AbortSignal;
     /** A deadline for this operation, in milliseconds. */
@@ -816,6 +837,8 @@ declare module "runtime:db" {
     /** Runs a command on `options.db` (default `admin`). */
     command(command: MongoDocument, options?: MongoCallOptions & { db?: string }): Promise<MongoDocument>;
     ping(options?: MongoCallOptions): Promise<void>;
+    /** Starts an explicit session. */
+    startSession(options?: { causalConsistency?: boolean }): MongoSession;
   }
 
   /**

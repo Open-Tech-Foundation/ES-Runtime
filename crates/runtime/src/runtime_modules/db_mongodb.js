@@ -366,6 +366,107 @@ async function openMongo(url, options = {}) {
   return new MongoConnection(result, settings);
 }
 
+// -- sessions -------------------------------------------------------------------
+//
+// The driver sessions specification. A server session is an `lsid` the driver
+// makes up (a random UUID) and the server learns of on first use; a client keeps
+// the ones it has finished with, newest first, and reuses them. Every command
+// runs in a session: the caller's, or an implicit one held for that command (or
+// for a cursor, until it is exhausted or closed).
+
+// A server session this close to the server's timeout is not handed out again.
+const MONGO_SESSION_MARGIN_MS = 60_000;
+
+class MongoServerSessionPool {
+  constructor() {
+    this._queue = [];
+  }
+
+  #expiring(session, timeoutMinutes) {
+    return Date.now() - session.lastUse > timeoutMinutes * 60_000 - MONGO_SESSION_MARGIN_MS;
+  }
+
+  acquire(timeoutMinutes) {
+    while (this._queue.length > 0) {
+      const session = this._queue.shift();
+      if (!this.#expiring(session, timeoutMinutes)) return session;
+    }
+    return { id: { id: new MongoBSON.UUID() }, lastUse: Date.now(), dirty: false, txnNumber: 0n };
+  }
+
+  release(session, timeoutMinutes) {
+    while (this._queue.length > 0 && this.#expiring(this._queue.at(-1), timeoutMinutes)) this._queue.pop();
+    // One that saw a network error may be in an unknown state on the server.
+    if (session.dirty || this.#expiring(session, timeoutMinutes)) return;
+    this._queue.unshift(session);
+  }
+
+  drain() {
+    return this._queue.splice(0).map((session) => session.id);
+  }
+}
+
+function mongoTimestampAfter(a, b) {
+  if (b == null) return a != null;
+  if (a == null) return false;
+  return a.t > b.t || (a.t === b.t && a.i > b.i);
+}
+
+/// A session: a sequence of operations the server can relate. From
+/// `client.startSession()`; pass it as `{ session }` to any operation.
+class MongoSession {
+  constructor(client, { causalConsistency = true } = {}, implicit = false) {
+    this.client = client;
+    this.explicit = !implicit;
+    this.causalConsistency = implicit ? false : causalConsistency !== false;
+    this.clusterTime = null;
+    this.operationTime = null;
+    this.hasEnded = false;
+    this._server = null;
+  }
+
+  /// The session id the server knows it by.
+  get id() {
+    return this._serverSession().id;
+  }
+
+  _serverSession() {
+    if (this.hasEnded) throw mongoBad("the session has ended");
+    this._server ??= this.client._sessions.acquire(this.client._sessionTimeout);
+    return this._server;
+  }
+
+  /// Takes a `$clusterTime` from elsewhere, when it is later than this one.
+  advanceClusterTime(clusterTime) {
+    if (mongoTimestampAfter(clusterTime?.clusterTime, this.clusterTime?.clusterTime)) {
+      this.clusterTime = clusterTime;
+    }
+  }
+
+  /// Takes an operation time from elsewhere, when it is later than this one.
+  advanceOperationTime(operationTime) {
+    if (mongoTimestampAfter(operationTime, this.operationTime)) this.operationTime = operationTime;
+  }
+
+  /// Ends the session and returns its server session for reuse. Ending twice
+  /// does nothing.
+  async endSession() {
+    if (this.hasEnded) return;
+    this.hasEnded = true;
+    if (this._server !== null) {
+      this.client._sessions.release(this._server, this.client._sessionTimeout);
+      this._server = null;
+    }
+  }
+
+  async [Symbol.asyncDispose]() {
+    await this.endSession();
+  }
+}
+
+// Reads that wait for an explicit causally consistent session's last write.
+const MONGO_CAUSAL_READS = new Set(["find", "aggregate", "count", "distinct"]);
+
 // -- the client -----------------------------------------------------------------
 
 /// A client: a pool of connections to one server, opened by connect().
@@ -378,6 +479,23 @@ class MongoConnection extends BaseConnection {
     this._maxMessageSize = result.maxMessageSize;
     this._maxBsonObjectSize = Number(hello.maxBsonObjectSize ?? 16 * 1024 * 1024);
     this._maxWriteBatchSize = Number(hello.maxWriteBatchSize ?? 100_000);
+    // Present when the server has sessions; every server this driver speaks
+    // to does, but a standalone can be configured without.
+    this._sessionTimeout =
+      hello.logicalSessionTimeoutMinutes == null ? null : Number(hello.logicalSessionTimeoutMinutes);
+    this._sessions = new MongoServerSessionPool();
+    this._clusterTime = null;
+  }
+
+  /// Starts an explicit session. Pass it as `{ session }` to the operations it
+  /// groups, and end it with `endSession()` or `await using`. A session not
+  /// used within a minute or so of starting may already be stale on the server.
+  startSession(options = {}) {
+    this._open();
+    if (this._sessionTimeout === null) {
+      throw mongoBad("this server does not support sessions");
+    }
+    return new MongoSession(this, options);
   }
 
   /// The database `name`, or the connection string's (`test` when it names
@@ -404,13 +522,50 @@ class MongoConnection extends BaseConnection {
   }
 
   async _close() {
+    // Tell the server the pooled sessions are finished with, as the sessions
+    // specification asks; a failure here changes nothing for the caller.
+    const ids = this._sessions.drain();
+    for (let i = 0; i < ids.length; i += 10_000) {
+      await this._run("admin", { endSessions: ids.slice(i, i + 10_000) }, { _noSession: true }, null, true).catch(() => {});
+    }
     await ops.mongo_close(this._id);
+  }
+
+  /// The session a command runs in: the caller's, a cursor's, or a new implicit
+  /// one (`owned`, ended after the command). `null` for an unacknowledged write,
+  /// which must not carry a session, or a server without sessions.
+  _sessionFor(options, unacknowledged) {
+    const given = options.session;
+    if (given !== undefined) {
+      if (!(given instanceof MongoSession) || given.client !== this) {
+        throw mongoBad("the session belongs to another client");
+      }
+      if (given.hasEnded) throw mongoBad("the session has ended");
+      if (unacknowledged) throw mongoBad("an unacknowledged write (w: 0) cannot use a session");
+      return { session: given, owned: false };
+    }
+    if (options._cursorSession !== undefined) return { session: options._cursorSession, owned: false };
+    if (options._noSession || unacknowledged || this._sessionTimeout === null) return { session: null, owned: false };
+    return { session: new MongoSession(this, {}, true), owned: true };
+  }
+
+  _gossip(reply, session) {
+    const clusterTime = reply.$clusterTime;
+    if (clusterTime !== undefined && mongoTimestampAfter(clusterTime.clusterTime, this._clusterTime?.clusterTime)) {
+      this._clusterTime = clusterTime;
+    }
+    if (session !== null) {
+      if (clusterTime !== undefined) session.advanceClusterTime(clusterTime);
+      if (session.causalConsistency && reply.operationTime !== undefined) {
+        session.advanceOperationTime(reply.operationTime);
+      }
+    }
   }
 
   /// One command on database `dbName`. `sequence` carries an insert's,
   /// update's or delete's statements as their own encoded documents.
-  async _run(dbName, command, options = {}, sequence = null) {
-    this._open();
+  async _run(dbName, command, options = {}, sequence = null, closing = false) {
+    if (!closing) this._open();
     const signal = options.signal;
     if (signal?.aborted) throw signal.reason;
     const timeoutMS = options.timeoutMS ?? this._settings.timeoutMS;
@@ -420,6 +575,34 @@ class MongoConnection extends BaseConnection {
     if (timeoutMS > 0 && body.maxTimeMS === undefined && name !== "getMore" && name !== "killCursors") {
       body.maxTimeMS = timeoutMS;
     }
+    const unacknowledged = command.writeConcern?.w === 0;
+    const { session, owned } = this._sessionFor(options, unacknowledged);
+    try {
+      return await this.#send(dbName, name, body, session, options, timeoutMS, signal, sequence);
+    } finally {
+      if (owned) await session.endSession();
+    }
+  }
+
+  async #send(dbName, name, body, session, options, timeoutMS, signal, sequence) {
+    let server = null;
+    if (session !== null && name !== "killCursors") {
+      server = session._serverSession();
+      body.lsid = server.id;
+      server.lastUse = Date.now();
+      if (
+        session.explicit &&
+        session.causalConsistency &&
+        session.operationTime !== null &&
+        MONGO_CAUSAL_READS.has(name)
+      ) {
+        body.readConcern = { ...body.readConcern, afterClusterTime: session.operationTime };
+      }
+    }
+    const clusterTime = mongoTimestampAfter(session?.clusterTime?.clusterTime, this._clusterTime?.clusterTime)
+      ? session.clusterTime
+      : this._clusterTime;
+    if (clusterTime !== null) body.$clusterTime = clusterTime;
     body.$db = dbName;
     const bytes = MongoBSON.encode(body);
 
@@ -452,10 +635,16 @@ class MongoConnection extends BaseConnection {
       if (timer !== null) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
+    // A command stopped mid-flight or lost with its connection may have left
+    // the server session in an unknown state, so it is not reused.
+    if (server !== null && (stopped !== null || (!(reply instanceof Uint8Array) && reply.error.kind === "lost"))) {
+      server.dirty = true;
+    }
     // Stopped while it ran is stopped, however the command ended.
     if (stopped !== null) throw stopped;
     if (!(reply instanceof Uint8Array)) throw mongoFailure(reply.error);
     const doc = MongoBSON.decode(reply);
+    this._gossip(doc, session);
     if (doc.ok !== 1) throw mongoServerError(doc);
     return doc;
   }
@@ -994,6 +1183,21 @@ class MongoCursor {
     this._at = 0;
     this._getMoreCollection = null;
     this._closed = false;
+    // Without a caller's session, a cursor holds an implicit one from its first
+    // command until it is exhausted or closed, so every getMore runs in it.
+    this._implicit = null;
+  }
+
+  get #commandOptions() {
+    return this._implicit === null ? this._options : { ...this._options, _cursorSession: this._implicit };
+  }
+
+  async #endImplicit() {
+    if (this._implicit !== null) {
+      const session = this._implicit;
+      this._implicit = null;
+      await session.endSession();
+    }
   }
 
   #chain(key, value) {
@@ -1028,8 +1232,19 @@ class MongoCursor {
       if (this._closed) return null;
       if (!this._started) {
         this._started = true;
-        const reply = await this._db.command(this._command(this._options), this._options);
+        const client = this._db.client;
+        if (this._options.session === undefined && client._sessionTimeout !== null) {
+          this._implicit = new MongoSession(client, {}, true);
+        }
+        let reply;
+        try {
+          reply = await this._db.command(this._command(this._options), this.#commandOptions);
+        } catch (e) {
+          await this.#endImplicit();
+          throw e;
+        }
         this.#take(reply.cursor, reply.cursor.firstBatch);
+        if (this._id === 0n) await this.#endImplicit();
         continue;
       }
       if (this._id === 0n) {
@@ -1042,9 +1257,10 @@ class MongoCursor {
           collection: this._getMoreCollection,
           ...(this._options.batchSize === undefined ? {} : { batchSize: this._options.batchSize }),
         },
-        this._options,
+        this.#commandOptions,
       );
       this.#take(reply.cursor, reply.cursor.nextBatch);
+      if (this._id === 0n) await this.#endImplicit();
     }
     return this._buffer[this._at++];
   }
@@ -1070,16 +1286,17 @@ class MongoCursor {
 
   /// Releases the cursor on the server if it is still open there.
   async close() {
-    if (this._closed && this._id === 0n) return;
+    if (this._closed && this._id === 0n && this._implicit === null) return;
     this._closed = true;
     const id = this._id;
     this._id = 0n;
     this._buffer = [];
     if (id !== 0n) {
       await this._db
-        .command({ killCursors: this._getMoreCollection, cursors: [id] })
+        .command({ killCursors: this._getMoreCollection, cursors: [id] }, this.#commandOptions)
         .catch(() => {});
     }
+    await this.#endImplicit();
   }
 
   async *[Symbol.asyncIterator]() {

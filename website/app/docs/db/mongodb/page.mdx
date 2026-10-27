@@ -138,6 +138,17 @@ try {
 `insertMany` or `bulkWrite` also carries every `writeErrors` entry and the
 `result` of what was written before it.
 
+## Sessions
+
+Operations run in sessions without your asking. Start one yourself when several
+operations belong together: a read in it sees the session's earlier writes.
+
+```js
+await using session = client.startSession();
+await orders.insertOne(order, { session });
+const placed = await orders.findOne({ _id: order._id }, { session });
+```
+
 ## Pool size
 
 A client keeps a pool of connections, 100 at most by default. Set

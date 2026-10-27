@@ -33,6 +33,7 @@ export type {
   MongoDb,
   MongoDocument,
   MongoOptions,
+  MongoSession,
   MongoUpdateOptions,
   MongoWriteOptions,
   UpdateFilter,

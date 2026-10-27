@@ -63,6 +63,7 @@ the server.
 | `db(name?)` | `Db` | The database `name`; the URL's, or `test`, by default. |
 | `command(command, options?)` | `Promise<object>` | Runs a command on `options.db` (default `admin`). |
 | `ping(options?)` | `Promise<void>` | `{ ping: 1 }`. |
+| `startSession({ causalConsistency? })` | `Session` | An explicit session. |
 | `close()` | `Promise<void>` | Closes every connection. `await using` calls it. |
 | `backend` | `"mongodb"` | |
 
@@ -70,11 +71,31 @@ the server.
 `ERR_DB_UNSUPPORTED`: MongoDB is reached through `db()`, and transactions need a
 replica set.
 
-Every operation below takes `signal` (an `AbortSignal`) and `timeoutMS` in its
-options. Either one stops the operation wherever it is: still waiting for a
+Every operation below takes `session`, `signal` (an `AbortSignal`) and
+`timeoutMS` in its options. Either one stops the operation wherever it is: still waiting for a
 connection, or on the server, whose connection is then closed rather than
 reused. The rejection carries the signal's reason, or a `DbError` with
 `ERR_DB_TIMEOUT`. `timeoutMS` is also sent to the server as `maxTimeMS`.
+
+## Sessions
+
+Every command runs in a session, as the MongoDB sessions specification
+requires: the one passed as `{ session }`, or an implicit one held for that
+command, or for a cursor until it is exhausted or closed. The client reuses
+server sessions, and ends the ones it holds with `endSessions` when it closes.
+An unacknowledged write (`w: 0`) runs in no session, and refuses an explicit one.
+
+| `Session` member | Meaning |
+| --- | --- |
+| `id` | The session id, `{ id: UUID }`. |
+| `causalConsistency` | `true` by default: a `find`, `aggregate`, `count` or `distinct` in the session waits for the session's earlier operations (`afterClusterTime`). |
+| `clusterTime`, `operationTime` | The latest the session has seen. `advanceClusterTime(t)` and `advanceOperationTime(t)` take later ones from elsewhere. |
+| `hasEnded` | |
+| `endSession()` | Returns the server session for reuse. `await using` calls it; ending twice does nothing. |
+
+A session from another client, or one that has ended, is refused. A server
+session left unused for about the server's session timeout (30 minutes by
+default) is discarded by the server, so use a session soon after starting it.
 
 ## `Db`
 

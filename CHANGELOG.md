@@ -30,8 +30,11 @@ namespace) is unstable and may change between minor releases until the API freez
   deletes, `bulkWrite`, `find` and `aggregate` cursors, counts, `distinct`,
   `findOneAnd*` and indexes. Every operation takes `signal` and `timeoutMS`.
   Writes larger than one message are split into batches. Server errors are
-  `DbError`s carrying the server's code, name and labels. Replica sets,
-  transactions, `mongodb+srv://` and change streams are not supported yet.
+  `DbError`s carrying the server's code, name and labels. Every command runs
+  in a session (`client.startSession()` for an explicit one, causally
+  consistent by default), with server sessions reused and `$clusterTime`
+  gossiped. Replica sets, transactions, `mongodb+srv://` and change streams
+  are not supported yet.
   `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 
 ### Changed

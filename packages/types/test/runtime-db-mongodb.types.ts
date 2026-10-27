@@ -25,6 +25,8 @@ const all: User[] = await users
 for await (const user of users.find()) void user.name;
 const n: number = await users.countDocuments({}, { signal: AbortSignal.timeout(1000) });
 const reply = await client.command({ ping: 1 }, { db: "admin", timeoutMS: 500 });
+await using session = client.startSession({ causalConsistency: true });
+await users.insertOne({ name: "Bo" }, { session });
 // @ts-expect-error — a MongoDB option the driver does not take.
 await connect("mongodb://localhost/app", { driver: mongodb, maxPoolSize: "ten" });
 // @ts-expect-error — insertMany takes an array.
