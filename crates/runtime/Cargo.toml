@@ -69,6 +69,8 @@ brotli = "8"
 # runtime:images (DECISIONS.md D159). The 0.x minor is pinned, as its
 # embedding guide asks: a 0.x minor may change the API.
 otf-pixels = "0.5.0"
+# runtime:pdf (D190): pure Rust, `unsafe` forbidden, no I/O of its own.
+otf-pdf = "0.1.0"
 
 [features]
 # Exposes `crate::fuzz` for the targets under `fuzz/` (SPEC §5). Not public API

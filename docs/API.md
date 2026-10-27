@@ -28,6 +28,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:serialization`](#runtimeserialization)
 - [`runtime:hashing`](#runtimehashing)
 - [`runtime:images`](#runtimeimages)
+- [`runtime:pdf`](#runtimepdf)
 - [`runtime:archive`](#runtimearchive)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
@@ -892,6 +893,7 @@ the required capability has been granted.
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
 | `runtime:images`  | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimeimages) |
+| `runtime:pdf`     | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimepdf) |
 | `runtime:archive` | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimearchive) |
 | `runtime:workers` | Available   | `FileRead` / `FileWrite` — the same grants its state files need | [↓](#runtimeworkers) |
 | `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
@@ -3619,6 +3621,135 @@ itself, under sharp's names, and a field the file does not state is absent.
 
 Moving from `Bun.Image`: see the site's *Migrating from Bun* page.
 
+## `runtime:pdf`
+
+Read, edit, encrypt and extract text from PDFs (DECISIONS D190), on
+[otf-pdf](https://crates.io/crates/otf-pdf). `PDF.open` parses a document
+once and its reads reuse what was parsed. Edits are an immutable chain from
+`doc.edit()`, applied when it is saved, so the document itself never changes.
+All work runs off the event loop.
+
+- **Capability:** None for bytes in and bytes out. A `runtime:fs` `file()`
+  source needs `FileRead` and a `file()` destination `FileWrite`, checked and
+  jailed exactly as reading or writing that file would be.
+- **Status:** Available
+
+```js
+import { PDF } from "runtime:pdf";
+import { file } from "runtime:fs";
+
+const doc = await PDF.open(await request.bytes());
+doc.pageCount;                                   // 12
+const text = await doc.text();                   // pages separated by "\f"
+const cover = await doc.edit().select([0]).bytes();
+await doc.edit().delete([0]).setInfo({ title: "Report" }).write(file("out/report.pdf"));
+```
+
+### `PDF.open(input, options?)`
+
+`input` is a `Uint8Array`, an `ArrayBuffer`, any view, a `Blob`, or a
+`runtime:fs` `file()`. A path string is a `TypeError`: pass `file(path)`. A
+`SharedArrayBuffer` is a `TypeError`. A damaged file is repaired the way
+viewers repair it, and each repair is listed in `diagnostics`.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `password` | — | Tried as the user password, then the owner password. A file encrypted only to set permissions opens without one. |
+| `strict` | `false` | Refuse a file that needs any repair, with `ERR_PDF_MALFORMED`. |
+| `maxDecodedSize` | `67108864` (64 MiB) | Bytes one stream may decode to. Over it is `ERR_PDF_LIMIT` with `limit: "decodedSize"`. |
+| `signal` | — | An `AbortSignal`. Aborting it stops work on this document: the open and every later read reject with the signal's reason. |
+
+The returned `PDF` has these properties, read when it was opened:
+
+| Property | Value |
+| --- | --- |
+| `pageCount` | The number of pages. |
+| `version` | The version the file declares, such as `"1.7"`, or `null`. |
+| `encrypted` | Whether the file is encrypted. |
+| `permissions` | For an encrypted file, what it allows a reader without the owner password: `{ print, modify, copy, annotate, fillForms, accessibility, assemble, printHighQuality }`, each a boolean. `null` when not encrypted. |
+| `info` | `{ title, author, subject, keywords, creator, producer, creationDate, modDate }`; dates are `Date`s. A field the file does not state, or a date it states in a form that cannot be read, is absent. |
+| `diagnostics` | Each repair opening needed: `{ kind, message, offset? }`. Empty for a sound file. |
+
+### Reads
+
+| Method | Resolves to |
+| --- | --- |
+| `pages()` | Per page: `width` and `height` as displayed (points, crop box, rotation applied), `rotate`, `mediaBox` and `cropBox` as `[left, bottom, right, top]`. |
+| `text()` | Every page's text in content-stream order, as `pdftotext -raw` gives it, each page followed by a form feed (`\f`). |
+| `pageText(index)` | `{ text, lines }`; each line is `{ text, bbox, words }` and each word `{ text, bbox }`, in displayed page coordinates with y up. An index outside the document is a `RangeError`. |
+| `outlines()` | The bookmarks: `{ title, page?, open, children }`. `page` is the index of the page the bookmark opens, when it names a page in this document. |
+| `attachments()` | Embedded files: `{ name, filename?, description?, type?, size? }`. |
+| `attachment(name)` | That file's bytes, or `undefined`. |
+
+Text extraction reads Type 1, TrueType, Type 3 and CID fonts, ToUnicode maps
+and the Adobe CJK collections. It does not detect columns or reorder
+right-to-left text; clipped and invisible text is left out.
+
+`close()` releases the document; a later read, or an edit of it not yet
+saved, is a `TypeError`. `PDF` implements `Symbol.dispose`, so `using doc =
+await PDF.open(…)` closes it at the end of the block. A document never closed
+is released when it is garbage-collected.
+
+### `doc.edit()`
+
+Returns a `PDFEdit`. Each method returns a new `PDFEdit` and leaves the one it
+was called on unchanged, so one document can be saved several ways. Page
+indices are checked at the call against the pages the edit has at that point
+(`pageCount`); outside it is a `RangeError`.
+
+| Method | Effect |
+| --- | --- |
+| `select(pages)` | Keep these pages, in this order. A page listed twice is duplicated. |
+| `delete(pages)` | Remove these pages, with the bookmarks and named destinations that point to them. |
+| `rotate(pages, degrees)` | Turn clockwise by a multiple of 90, added to the page's rotation. |
+| `crop(pages, [left, bottom, right, top])` | Set the visible region, in points. |
+| `append(other, pages?)` | Append the pages of another `PDF` or `PDFEdit` — all, or the indices given. Shared fonts and images are copied once. |
+| `setInfo(info)` | Set document information: strings for the text fields, `Date`s for `creationDate` and `modDate`, `null` to remove one. Fields not named are kept. The XMP metadata is rewritten to match. |
+| `addAttachment(name, data, { type?, description? })` | Embed a file, replacing one of the same name. `data` is copied at the call. |
+| `removeAttachment(name)` | Remove an embedded file. |
+| `sanitize(options?)` | Remove active and hidden content: `javascript`, `externalActions` (launch, submit-form, import), `attachments`, `xfa` and `multimedia` by default, and `links` and `metadata` when set to `true`. Each option is a boolean. |
+
+`pages` is an index or an array of indices. An unknown `setInfo` field or
+`sanitize` option is a `TypeError`.
+
+### Saving
+
+`bytes(options?)` resolves to the PDF; `blob(options?)` to a `Blob` of type
+`application/pdf`; `write(file(path), options?)` writes it and resolves to the
+number of bytes written.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `incremental` | `false` | Append the edits to the original bytes, which stay an exact prefix. Without it the file is rewritten, keeping only what is reachable. |
+| `version` | `"1.7"` | `"1.7"` or `"2.0"`. |
+| `objectStreams` | `true` | Pack objects into compressed object streams. `false` writes a classic cross-reference table. |
+| `compress` | `true` | Flate-compress uncompressed streams. |
+| `encrypt` | — | `{ ownerPassword, userPassword?, permissions?, encryptMetadata? }` encrypts with AES-256. `ownerPassword` must be non-empty; `userPassword` defaults to `""`, which opens without a password with `permissions` applied. A permission not given is allowed. `false` writes an encrypted source decrypted. |
+| `signal` | — | An `AbortSignal` that stops this save. |
+
+A full save of a document that is encrypted, or that appends pages from one,
+must pass `encrypt`: an object to keep it encrypted or `false` to write it
+decrypted. Without either it is a `TypeError`. An incremental save keeps the
+file's encryption and cannot change it.
+
+The encryption's random bytes come from the same source as `crypto`.
+The output is otherwise deterministic: the same document, edits and options
+give the same bytes.
+
+### Errors
+
+| `code` | When |
+| --- | --- |
+| `ERR_PDF_INVALID_PASSWORD` | No password was given, or it matched neither the user nor the owner password. |
+| `ERR_PDF_ENCRYPTION_UNSUPPORTED` | The file is encrypted to a certificate (public-key security) or with an unknown scheme. |
+| `ERR_PDF_LIMIT` | A resource limit was reached. `limit` names it: `decodedSize`, `compressionRatio`, `depth`, `objects`, `objectSize`, `xrefSections` or `pages`. |
+| `ERR_PDF_MALFORMED` | The file is not a readable PDF, or `strict` is set and it needs repair. |
+| `ERR_PDF_INCREMENTAL_REFUSED` | An incremental save would be unsafe — the file needed repair, or uses RC4 or AES-128, which are read but never written. Save in full instead. |
+
+A bad argument is a `TypeError` or `RangeError` at the call. An aborted
+`signal` rejects with its reason. Reading or writing a `file()` fails with the
+`runtime:fs` codes.
+
 ## `runtime:archive`
 
 Read and write tar, tar.gz and zip (DECISIONS D174). `Bun.Archive`'s shape:
@@ -5540,6 +5671,11 @@ try {
 | `ERR_IMAGE_DECODE_FAILED` | `runtime:images`: the bytes are not a valid image of their format. |
 | `ERR_IMAGE_FORMAT_UNSUPPORTED` | `runtime:images`: an unknown format, or a valid file using something not implemented. |
 | `ERR_IMAGE_TOO_MANY_PIXELS` | `runtime:images`: the image is over `maxPixels`. |
+| `ERR_PDF_INVALID_PASSWORD` | `runtime:pdf`: no password was given, or it matched neither password. |
+| `ERR_PDF_ENCRYPTION_UNSUPPORTED` | `runtime:pdf`: certificate (public-key) encryption or an unknown scheme. |
+| `ERR_PDF_LIMIT` | `runtime:pdf`: a resource limit was reached; `limit` names it. |
+| `ERR_PDF_MALFORMED` | `runtime:pdf`: not a readable PDF, or `strict` and it needs repair. |
+| `ERR_PDF_INCREMENTAL_REFUSED` | `runtime:pdf`: an incremental save would be unsafe; save in full. |
 | `ERR_ARCHIVE_DECODE_FAILED` | `runtime:archive`: the bytes are not a well-formed archive of their detected format. |
 | `ERR_ARCHIVE_FORMAT_UNSUPPORTED` | `runtime:archive`: a format, entry type or compression method the runtime does not read. |
 | `ERR_ARCHIVE_ENCRYPTED` | `runtime:archive`: a zip is encrypted; passwords are not supported. |

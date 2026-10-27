@@ -1,0 +1,110 @@
+---
+title: PDFs
+description: Merge, split, extract text, sanitize uploads and encrypt with runtime:pdf.
+---
+
+# PDFs
+
+[`runtime:pdf`](/api/pdf) opens, reads, edits and writes PDFs. Work on bytes
+needs no capability.
+
+## Extract text
+
+```js
+import { PDF } from "runtime:pdf";
+
+const doc = await PDF.open(bytes);
+const text = await doc.text();          // every page, separated by "\f"
+const pages = text.split("\f");
+```
+
+For positions, read one page at a time: `pageText(i)` gives lines and words
+with their boxes in points, y up from the bottom of the page.
+
+```js
+const { lines } = await doc.pageText(0);
+for (const line of lines) console.log(line.bbox, line.text);
+```
+
+## Merge and split
+
+Edits start from `doc.edit()` and every method returns a new edit, so one
+document can be cut several ways:
+
+```js
+import { PDF } from "runtime:pdf";
+import { file } from "runtime:fs";
+
+const a = await PDF.open(file("a.pdf"));
+const b = await PDF.open(file("b.pdf"));
+
+await a.edit().append(b).write(file("merged.pdf"));
+await a.edit().select([0]).write(file("cover.pdf"));
+await a.edit().delete([0]).write(file("body.pdf"));
+```
+
+`append(b, [0, 2])` takes only some of `b`'s pages; `select([2, 0])`
+reorders. To read the result, open it: `await PDF.open(await edit.bytes())`.
+
+## Untrusted uploads
+
+Every file is treated as hostile: a damaged one is repaired and the repair
+reported in `doc.diagnostics`, and one stream may decode to at most 64 MiB
+unless `maxDecodedSize` says otherwise. Bound the time with a signal, strip
+active content before storing, and map the errors to responses:
+
+```js
+import { serve } from "runtime:http";
+import { PDF } from "runtime:pdf";
+
+serve({ port: 8080 }, async (request) => {
+  try {
+    const doc = await PDF.open(await request.bytes(), { signal: AbortSignal.timeout(5_000) });
+    const clean = await doc.edit().sanitize().bytes({ encrypt: false });
+    return new Response(clean, { headers: { "content-type": "application/pdf" } });
+  } catch (error) {
+    if (error.code === "ERR_PDF_INVALID_PASSWORD") return new Response(null, { status: 422 });
+    if (error.code === "ERR_PDF_LIMIT") return new Response(null, { status: 413 });
+    if (error.code === "ERR_PDF_MALFORMED") return new Response(null, { status: 400 });
+    if (error.name === "TimeoutError") return new Response(null, { status: 408 });
+    throw error;
+  }
+});
+```
+
+`sanitize()` removes JavaScript, launch and submit actions, attachments, XFA
+forms and multimedia. `sanitize({ links: true, metadata: true })` removes
+links and document metadata as well.
+
+`encrypt: false` is there because an upload may be encrypted: a full save of
+an encrypted file has to say whether to keep the encryption, so a password is
+never removed without the code saying so.
+
+## Encrypt
+
+```js
+const locked = await doc.edit().bytes({
+  encrypt: {
+    ownerPassword: ownerSecret,
+    userPassword: "",                     // opens without a password…
+    permissions: { copy: false, modify: false }, // …but these are refused
+  },
+});
+```
+
+Encryption is AES-256. Opening an encrypted file takes `{ password }`; the
+user or the owner password works.
+
+## Metadata and attachments
+
+```js
+const out = await doc
+  .edit()
+  .setInfo({ title: "Q3 report", author: "Finance", modDate: new Date() })
+  .addAttachment("data.csv", csvBytes, { type: "text/csv" })
+  .bytes();
+```
+
+`doc.info` reads the same fields back, with dates as `Date`s;
+`doc.attachments()` lists embedded files and `doc.attachment(name)` returns
+one's bytes.

@@ -152,6 +152,15 @@ pub(crate) fn install(
     // is FileRead and a file() destination FileWrite, through the provider. The
     // work runs on the TaskSpawner, inline without one.
     crate::image_ops::install(engine, providers.file_system(), providers.task_spawner())?;
+    // runtime:pdf ops (D190): bytes in and out need nothing; a file() source is
+    // FileRead and a file() destination FileWrite. Encryption draws from the
+    // Entropy provider; the work runs on the TaskSpawner, inline without one.
+    crate::pdf_ops::install(
+        engine,
+        providers.file_system(),
+        providers.entropy(),
+        providers.task_spawner(),
+    )?;
     // Worker ops: spawn (Worker capability); post/recv/terminate by worker id.
     // The scope half is installed unconditionally but only *works* on a runtime
     // a WorkerHost built — that asymmetry is what tells the prelude which agent

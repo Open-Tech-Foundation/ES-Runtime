@@ -13,6 +13,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `runtime:pdf`: read, edit, encrypt and extract text from PDFs with
+  otf-pdf, pure Rust with `unsafe` forbidden (D190). `PDF.open(input,
+  { password, strict, maxDecodedSize, signal })` takes bytes, a `Blob` or a
+  `file()` — never a path string — and reports `pageCount`, `version`,
+  `encrypted`, `permissions`, `info` and the repairs a damaged file needed.
+  `pages()`, `text()`, `pageText(i)` (lines and words with boxes),
+  `outlines()`, `attachments()` and `attachment(name)` reuse what opening
+  parsed. `doc.edit()` starts an immutable chain — `select`, `delete`,
+  `rotate`, `crop`, `append`, `setInfo`, `addAttachment`, `removeAttachment`,
+  `sanitize` — saved by `bytes`, `blob` or `write(file())`, in full or
+  incrementally, optionally AES-256 encrypted. A full save of an encrypted
+  file must pass `encrypt` or `encrypt: false`, so a password is never
+  dropped by accident. `maxDecodedSize` defaults to 64 MiB; errors carry
+  `ERR_PDF_*` codes. Adds `skrifa`, `read-fonts`, `font-types` and `rc4`.
 - `console.log` uses a class's `Symbol.for("nodejs.util.inspect.custom")`
   method, the convention Node, Bun and Deno share, so BSON values print as
   `ObjectId("…")` and `Decimal128("9.99")` rather than `ObjectId {}`. A secret's

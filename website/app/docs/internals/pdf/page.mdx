@@ -1,0 +1,98 @@
+---
+title: "Internals: PDF"
+description: Where runtime:pdf runs, what it holds in memory, what it bounds, and how it compares with pdf-lib, pdf.js and qpdf.
+---
+
+import StatusIcon from "../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Internals: PDF
+
+What `runtime:pdf` does below the API: where the work runs, what it keeps,
+what bounds it, and where it differs from the tools a Node program would use.
+
+## The engine
+
+The module is a thin layer over [otf-pdf](https://crates.io/crates/otf-pdf),
+a PDF library in Rust with `unsafe` forbidden and no C dependency. It reads
+lazily (objects are parsed on first use), repairs damaged files as viewers do
+and records each repair, and is fuzzed against malformed input. It has no I/O,
+clock or randomness of its own: bytes come from the runtime, and encryption's
+random bytes from the runtime's entropy source.
+
+## Where the work runs
+
+`PDF.open` sends the bytes to the host, which parses the document on the
+embedder's blocking pool (tokio's, in `esrun` and `esdev`) and keeps it in a
+table that belongs to the opening agent. The JavaScript `PDF` holds a number
+naming that entry. Every read runs on the pool against the same parsed
+document, so a second read does not parse the file again. A worker opens its
+own documents; a handle means nothing to another agent.
+
+Edits are recorded in JavaScript as a list of steps. Saving sends the handle
+and the steps in one call; the host opens the same bytes again — shared, not
+copied — applies the steps to that fresh document and writes it. The document
+that was read is never modified, which is why an edit cannot change what an
+earlier read returned, and why one document can be saved several ways.
+
+A document is released by `close()`, by `using`, or when the `PDF` object is
+garbage-collected.
+
+## Memory
+
+The whole file is held in memory for as long as the document is open, once,
+shared between the open document and every save of it. Streams are decoded
+when something reads them: text extraction decodes a page's content and the
+fonts it uses, `attachment()` decodes one file.
+
+Each decode is bounded. `maxDecodedSize` (64 MiB by default) caps one
+stream's decoded size, and a compression ratio above 1100:1 is refused once
+a stream passes 16 MiB, which is what stops a few kilobytes from inflating to
+gigabytes. Nesting depth, object count, object size, the length of the
+revision chain and the page count are bounded too; the limit that stopped a
+call is named in the error's `limit`.
+
+A content stream that cannot be decoded — damaged, or over a limit — is
+dropped from its page rather than failing it, as viewers do. Such a page reads
+as empty.
+
+## Text
+
+Text comes out in the order the page's content stream draws it, glyphs that
+continue a baseline joined into lines and a space inserted where the gap is
+wider than a fifth of an em — what `pdftotext -raw` does. There is no column
+or reading-order analysis, and right-to-left text comes out in visual order.
+
+Fonts are loaded once per call and shared across the pages of that call:
+`text()` loads each font once for the whole document, while each
+`pageText(i)` call loads the fonts of its page again.
+
+## Encryption
+
+Reading supports every standard security handler, RC4 and AES, revisions 2
+to 6. Writing is AES-256 (revision 6) only; RC4 and AES-128 are read and never
+written, which is also why an incremental save of such a file is refused.
+
+A full save writes an encrypted source decrypted unless told otherwise; the
+module asks the code to say which (`encrypt` or `encrypt: false`), so editing
+a protected upload cannot silently remove its password.
+
+## Compared with other tools
+
+No JavaScript runtime has PDF support built in. A Node program combines
+libraries:
+
+| | runtime:pdf | pdf-lib | pdf.js | qpdf |
+| --- | --- | --- | --- | --- |
+| Open encrypted files | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Merge, split, reorder, rotate | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Text with positions | <Yes /> | <No /> | <Yes /> | <No /> |
+| Write encrypted | <Yes /> AES-256 | <No /> | <No /> | <Yes /> |
+| Remove scripts and risky actions | <Yes /> | <No /> | <No /> | <No /> |
+| Incremental save | <Yes /> | <No /> | <No /> | <No /> |
+| Create pages and draw | <No /> | <Yes /> | <No /> | <No /> |
+| Render to an image | <No /> | <No /> | <Yes /> | <No /> |
+
+Creating documents, rendering, forms and signatures wait for otf-pdf.

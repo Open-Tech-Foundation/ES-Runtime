@@ -49,6 +49,7 @@ mod my_ops;
 mod mysql;
 mod net_ops;
 pub mod otlp;
+mod pdf_ops;
 mod pg_ops;
 mod postgres;
 mod prelude;
