@@ -2004,6 +2004,27 @@ parameter is refused rather than quietly honoured.
 gets its own. The named form (`:memory:name`), which in SQLite means *sharing*
 one, is refused rather than quietly not sharing.
 
+### `mongodb`
+
+The built-in MongoDB driver (DECISIONS D186), for `mongodb:` URLs to one
+MongoDB 7.0 or later server. Connecting needs `Net`; `tlsCAFile` is read through
+`runtime:fs` and needs `FileRead`. The client it returns pools connections in
+the host and is used through `db(name?)`, `command(command, { db? })` and
+`ping()`; `query`, `execute` and `transaction` refuse. A `Db` has `collection`,
+`command`, `aggregate`, `listCollections`, `createCollection`,
+`dropCollection` and `dropDatabase`. A `Collection` has the official driver's
+methods: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,
+`deleteOne`, `deleteMany`, `bulkWrite`, `find`, `findOne`, `aggregate`,
+`countDocuments`, `estimatedDocumentCount`, `distinct`, `findOneAndUpdate`,
+`findOneAndReplace`, `findOneAndDelete`, `createIndex`, `createIndexes`,
+`dropIndex`, `dropIndexes`, `listIndexes` and `drop`. `find` and `aggregate`
+return a cursor (`next`, `toArray`, `close`, `for await`; `sort`, `limit`,
+`skip`, `project` and `batchSize` chain before the first read). Every operation
+takes `signal` and `timeoutMS`. Documents are BSON (see `runtime:serialization`).
+A server error is a `DbError` with the server's number on `backendCode` and
+`{ code, codeName, errorLabels }` on `server`. Options, results and the error
+mapping are listed on the site's MongoDB reference page.
+
 ### `Connection`
 
 - `query(q, params?)` → `Rows`

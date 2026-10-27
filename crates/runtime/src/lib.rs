@@ -42,6 +42,8 @@ mod http_ops;
 mod image_ops;
 mod js_number;
 mod module_ops;
+mod mongo_ops;
+mod mongodb;
 mod msgpack;
 mod my_ops;
 mod mysql;

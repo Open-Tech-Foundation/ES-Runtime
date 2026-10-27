@@ -976,7 +976,3 @@ const mysql = defineDriver({
 });
 
 export { mysql };
-
-// The module's default export, here because it names every built-in driver
-// and this file is appended last.
-export default { connect, sql, queryAst, sqlite, postgres, mysql, defineDriver, DbError, DbErrorCode };

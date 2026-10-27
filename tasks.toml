@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/mysql", "packages/redis", "packages/valkey", "packages/smtp", "packages/rabbitmq", "packages/mqtt", "packages/nats", "packages/types", "packages/esdev-plugin-react", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
+members = ["packages/postgres", "packages/mysql", "packages/mongodb", "packages/redis", "packages/valkey", "packages/smtp", "packages/rabbitmq", "packages/mqtt", "packages/nats", "packages/types", "packages/esdev-plugin-react", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -115,7 +115,7 @@ run = "pnpm install --frozen-lockfile"
 # script, so the alternative is a no-op script that exists to be skipped, which
 # is a worse thing to leave in a published manifest.
 [tasks.build]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter esrun-serialization --filter esdev-dom-color --parallel run build"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter esrun-serialization --filter esdev-dom-color --parallel run build"
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).
@@ -139,7 +139,7 @@ run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filte
 # declarations `@opentf/esrun-redis` builds, as a consumer of the published
 # package would be.
 [tasks.typecheck]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-types --parallel exec esdev typecheck"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-types --parallel exec esdev typecheck"
 
 [tasks.lint]
 run = "biome check"
@@ -264,6 +264,10 @@ dir = "packages/postgres"
 run = "./test/run.sh"
 dir = "packages/mysql"
 
+[tasks."test:mongodb"]
+run = "./test/run.sh"
+dir = "packages/mongodb"
+
 [tasks."test:redis"]
 run = "./test/run.sh"
 dir = "packages/redis"
@@ -304,7 +308,7 @@ run = "./test/run.sh"
 dir = "packages/valkey"
 
 [tasks."test:drivers"]
-deps = ["test:postgres", "test:mysql", "test:redis", "test:valkey"]
+deps = ["test:postgres", "test:mysql", "test:mongodb", "test:redis", "test:valkey"]
 
 # Regenerates the site's benchmark data from a checkout on a fast disk and
 # copies it back (bench/publish.sh). Needs `cargo build --release` and

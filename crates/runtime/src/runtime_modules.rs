@@ -40,12 +40,14 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:process" => Some(include_str!("runtime_modules/process.js")),
         "runtime:path" => Some(include_str!("runtime_modules/path.js")),
         "runtime:fs" => Some(include_str!("runtime_modules/fs.js")),
-        // The built-in PostgreSQL and MySQL drivers (D147) live in files of
-        // their own and share the module's scope, appended in that order.
+        // The built-in PostgreSQL, MySQL (D147) and MongoDB (D186) drivers
+        // live in files of their own and share the module's scope, appended in
+        // that order.
         "runtime:db" => Some(concat!(
             include_str!("runtime_modules/db.js"),
             include_str!("runtime_modules/db_postgres.js"),
-            include_str!("runtime_modules/db_mysql.js")
+            include_str!("runtime_modules/db_mysql.js"),
+            include_str!("runtime_modules/db_mongodb.js")
         )),
         "runtime:net" => Some(include_str!("runtime_modules/net.js")),
         "runtime:http" => Some(include_str!("runtime_modules/http.js")),

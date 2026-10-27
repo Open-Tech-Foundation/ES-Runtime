@@ -1,0 +1,165 @@
+---
+title: runtime:db MongoDB
+description: The built-in MongoDB driver — connection options, the client, databases, collections, cursors, results and errors.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# MongoDB
+
+```js
+import { connect, mongodb } from "runtime:db";
+import { BSON } from "runtime:serialization";
+```
+
+`mongodb` takes `mongodb:` URLs for one MongoDB 7.0 or later server. Its
+protocol and connection pool run in the runtime. Documents are BSON: the types
+and how JavaScript values map to them are in
+[`runtime:serialization`](/api/serialization#bson). The
+[`@opentf/esrun-mongodb`](https://www.npmjs.com/package/@opentf/esrun-mongodb)
+package re-exports the driver as `driver`, with the BSON classes and the types.
+
+<Callout type="info" title="Capability: net">
+  Connecting needs `net` for the server's host and port. `tlsCAFile` is read
+  through `runtime:fs`, so it needs `read` as well.
+</Callout>
+
+## Connection options
+
+`mongodb://[user[:password]@]host[:port][/database][?options]`. Options passed
+to `connect()` win over the URL's. An option not listed here is refused with
+`ERR_DB_UNSUPPORTED` rather than ignored.
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `auth` | `{ username, password }` | from the URL | Credentials. A name or password in the URL must percent-encode `:`, `/` and `@`. |
+| `authSource` | `string` | the URL's database, else `admin` | Where the user is defined. |
+| `authMechanism` | `"SCRAM-SHA-256" \| "SCRAM-SHA-1"` | negotiated | Taken from what the server offers when absent. |
+| `tls` / `ssl` | `boolean` | `false` | Connect with TLS. The certificate is always verified. |
+| `tlsCAFile` | `string` | — | A PEM CA bundle to trust besides the public roots. Implies `tls`. |
+| `ca` | `string \| Uint8Array` | — | The same, as PEM. |
+| `appName` | `string` | — | Reported to the server in the handshake. |
+| `maxPoolSize` | `number` | `100` | Connections the client may open; `0` for no limit. `pool: { max }` sets the same. |
+| `connectTimeoutMS` | `number` | `30000` | Milliseconds to connect and authenticate; `0` waits forever. |
+| `timeoutMS` | `number` | — | A deadline for every operation, unless the call gives its own. |
+| `w`, `journal`, `wtimeoutMS` | | — | The write concern sent with every write. |
+| `readConcernLevel` | `string` | — | The read concern sent with every read. |
+| `readPreference` | `"primary"` | `primary` | Other preferences need replica-set support. |
+| `retryWrites`, `retryReads` | `boolean` | | Accepted; nothing is retried yet. |
+| `directConnection`, `serverSelectionTimeoutMS`, `compressors` | | | Accepted; one server is always a direct connection, and compression is not negotiated yet. |
+
+Refused with `ERR_DB_UNSUPPORTED`: more than one host, `mongodb+srv://`,
+`replicaSet`, a Unix socket, an authentication mechanism other than SCRAM, and
+`tlsInsecure`, `tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` set
+to `true`.
+
+## The client
+
+`connect(url, { driver: mongodb })` returns a client: a pool of connections to
+the server.
+
+| Member | Returns | Meaning |
+| --- | --- | --- |
+| `db(name?)` | `Db` | The database `name`; the URL's, or `test`, by default. |
+| `command(command, options?)` | `Promise<object>` | Runs a command on `options.db` (default `admin`). |
+| `ping(options?)` | `Promise<void>` | `{ ping: 1 }`. |
+| `close()` | `Promise<void>` | Closes every connection. `await using` calls it. |
+| `backend` | `"mongodb"` | |
+
+`query`, `execute` and `transaction` refuse with `ERR_DB_QUERY_FORM` or
+`ERR_DB_UNSUPPORTED`: MongoDB is reached through `db()`, and transactions need a
+replica set.
+
+Every operation below takes `signal` (an `AbortSignal`) and `timeoutMS` in its
+options. Either one stops the operation wherever it is: still waiting for a
+connection, or on the server, whose connection is then closed rather than
+reused. The rejection carries the signal's reason, or a `DbError` with
+`ERR_DB_TIMEOUT`. `timeoutMS` is also sent to the server as `maxTimeMS`.
+
+## `Db`
+
+| Member | Returns | Meaning |
+| --- | --- | --- |
+| `databaseName` | `string` | |
+| `collection(name)` | `Collection` | |
+| `command(command, options?)` | `Promise<object>` | A reply with `ok: 0` is thrown as a `DbError`. |
+| `aggregate(pipeline?, options?)` | `Cursor` | A database-level aggregation (`$currentOp`, `$documents`). |
+| `listCollections(filter?, { nameOnly?, batchSize? })` | `Cursor` | |
+| `createCollection(name, options?)` | `Promise<Collection>` | Options are the `create` command's (`validator`, `capped`, `timeseries`, …). |
+| `dropCollection(name, options?)` | `Promise<boolean>` | |
+| `dropDatabase(options?)` | `Promise<boolean>` | |
+
+## `Collection`
+
+| Method | Returns |
+| --- | --- |
+| `insertOne(document, options?)` | `{ acknowledged, insertedId }` |
+| `insertMany(documents, { ordered? })` | `{ acknowledged, insertedCount, insertedIds }` |
+| `updateOne(filter, update, options?)`, `updateMany(…)` | `{ acknowledged, matchedCount, modifiedCount, upsertedCount, upsertedId }` |
+| `replaceOne(filter, replacement, options?)` | the same |
+| `deleteOne(filter, options?)`, `deleteMany(…)` | `{ acknowledged, deletedCount }` |
+| `bulkWrite(operations, { ordered? })` | `{ acknowledged, insertedCount, matchedCount, modifiedCount, deletedCount, upsertedCount, insertedIds, upsertedIds }` |
+| `find(filter?, options?)` | `Cursor` |
+| `findOne(filter?, options?)` | the document, or `null` |
+| `aggregate(pipeline?, options?)` | `Cursor` |
+| `countDocuments(filter?, { skip?, limit? })` | `number` |
+| `estimatedDocumentCount(options?)` | `number`, from the collection's metadata |
+| `distinct(key, filter?, options?)` | an array of values |
+| `findOneAndUpdate(filter, update, options?)`, `findOneAndReplace(…)`, `findOneAndDelete(filter, options?)` | the document before (default) or after (`returnDocument: "after"`), or `null` |
+| `createIndex(keys, options?)` | the index name |
+| `createIndexes(specs, options?)` | the names |
+| `dropIndex(name, options?)`, `dropIndexes(options?)` | `void` |
+| `listIndexes(options?)` | `Cursor` |
+| `drop(options?)` | `true`, whether or not the collection existed |
+
+`insertOne` and `insertMany` insert a copy given an `ObjectId` `_id` when a
+document has none; the document passed in is not changed. An update must use
+update operators or be a pipeline, and a replacement must not use them; either
+mistake is a `TypeError`. Writes take `writeConcern`, `comment`, `let` and
+`bypassDocumentValidation`; updates also `upsert`, `arrayFilters`, `hint` and
+`collation`. `find` takes `sort`, `projection`, `skip`, `limit`, `batchSize`,
+`hint`, `comment`, `maxTimeMS`, `collation`, `allowDiskUse`, `let` and
+`readConcern`.
+
+`bulkWrite` operations are `{ insertOne: { document } }`, `{ updateOne | updateMany:
+{ filter, update, … } }`, `{ replaceOne: { filter, replacement, … } }` and
+`{ deleteOne | deleteMany: { filter } }`. Ordered (the default), they run in
+order and stop at the first error; unordered, they may be grouped by kind and
+all run.
+
+A write larger than one message, or with more statements than the server takes
+in one batch, is sent as several commands. A document larger than the server's
+16 MiB limit is refused before it is sent, with `backendCode` 10334.
+
+## `Cursor`
+
+Nothing is sent until a cursor is read.
+
+| Member | Meaning |
+| --- | --- |
+| `sort(sort)`, `limit(n)`, `skip(n)`, `project(projection)`, `batchSize(n)` | Chain before the first read; after it they throw `ERR_DB_UNSUPPORTED`. |
+| `next()` | The next document, or `null`. |
+| `toArray()` | Every document, then closes. |
+| `for await (const doc of cursor)` | Leaving the loop early closes the cursor. |
+| `close()` | Releases the cursor on the server. `await using` calls it. |
+
+## Errors
+
+A failure is a [`DbError`](/api/db/queries#errors). Its `code` is the portable
+code, its `backendCode` the server's number, and `server` carries
+`{ code, codeName, errorLabels }`, with `keyValue` for a duplicate key and
+`errInfo` when the server sent it. A write error also carries every
+`writeErrors` entry and the partial `result`.
+
+| Server code | `code` |
+| --- | --- |
+| 11000, 11001, 12582 (duplicate key) | `ERR_DB_UNIQUE_VIOLATION` |
+| 18 (authentication failed) | `ERR_DB_AUTH_FAILED` |
+| 50, 262 (time limit exceeded) | `ERR_DB_TIMEOUT` |
+| 26 (namespace not found) | `ERR_DB_NOT_FOUND` |
+| 112 (write conflict) | `ERR_DB_SERIALIZATION_FAILURE` |
+| 121 (document failed validation) | `ERR_DB_CHECK_VIOLATION` |
+| any other | `ERR_DB_BACKEND` |
+
+A lost connection is `ERR_DB_CONNECTION_LOST`, and a server older than MongoDB
+7.0 is refused at connect with `ERR_DB_UNSUPPORTED`.

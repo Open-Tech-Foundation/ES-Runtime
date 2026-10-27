@@ -8,15 +8,16 @@ import { Callout } from "@opentf/web-docs";
 # Databases
 
 [`runtime:db`](/api/db) connects to a database, runs queries, and streams the
-results. SQLite, PostgreSQL and MySQL/MariaDB drivers are built in; Redis and
-Valkey are packages; and the pieces those drivers are built from are exported
-alongside.
+results. SQLite, PostgreSQL, MySQL/MariaDB and MongoDB drivers are built in;
+Redis and Valkey are packages; and the pieces those drivers are built from are
+exported alongside.
 
 | Database | Driver | Guide |
 | --- | --- | --- |
 | SQLite | built in: `sqlite` | [SQLite](/docs/db/sqlite) |
 | PostgreSQL | built in: `postgres` | [PostgreSQL](/docs/db/postgres) |
 | MySQL, MariaDB | built in: `mysql` | [MySQL and MariaDB](/docs/db/mysql) |
+| MongoDB | built in: `mongodb` | [MongoDB](/docs/db/mongodb) |
 | Redis | [`@opentf/esrun-redis`](https://www.npmjs.com/package/@opentf/esrun-redis) | [Redis](/docs/db/redis) |
 | Valkey | [`@opentf/esrun-valkey`](https://www.npmjs.com/package/@opentf/esrun-valkey) | [Valkey](/docs/db/valkey) |
 

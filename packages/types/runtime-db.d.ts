@@ -586,6 +586,247 @@ declare module "runtime:db" {
   export const mysql: Driver<MySqlConnection, MySqlOptions, MySqlPooled>;
 
   /**
+   * Options for the built-in {@link mongodb} driver. They override the same
+   * options in the connection string. An option the driver does not know is
+   * refused rather than ignored.
+   */
+  export interface MongoOptions {
+    auth?: { username?: string; password?: string };
+    /** Where the user is defined; the URL's database, else `admin`. */
+    authSource?: string;
+    /** Negotiated with the server when absent. */
+    authMechanism?: "SCRAM-SHA-1" | "SCRAM-SHA-256";
+    tls?: boolean;
+    ssl?: boolean;
+    /** A CA bundle to trust, read through `runtime:fs` (needs `read`). */
+    tlsCAFile?: string;
+    /** A CA bundle to trust, as PEM. */
+    ca?: string | Uint8Array;
+    appName?: string;
+    /** Connections the client may open; 0 for no limit. Default 100. */
+    maxPoolSize?: number;
+    /** Default 30000; 0 for none. */
+    connectTimeoutMS?: number;
+    /** A deadline for every operation, unless the call gives its own. */
+    timeoutMS?: number;
+    serverSelectionTimeoutMS?: number;
+    directConnection?: boolean;
+    retryWrites?: boolean;
+    retryReads?: boolean;
+    compressors?: string;
+    w?: number | "majority" | (string & {});
+    journal?: boolean;
+    wtimeoutMS?: number;
+    readConcernLevel?: string;
+    readPreference?: "primary";
+  }
+
+  /** A MongoDB document. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export type MongoDocument = Record<string, any>;
+
+  /** A query filter: field values or query operators. */
+  export type Filter<T> = { [K in keyof T]?: T[K] | MongoDocument } & MongoDocument;
+
+  /** An update: operators (`$set`, `$inc`, …) or an aggregation pipeline. */
+  export type UpdateFilter<_T> = MongoDocument | MongoDocument[];
+
+  /** What every MongoDB call takes. */
+  export interface MongoCallOptions {
+    /** Stops the operation; the rejection carries the signal's `reason`. */
+    signal?: AbortSignal;
+    /** A deadline for this operation, in milliseconds. */
+    timeoutMS?: number;
+  }
+
+  export interface WriteConcern {
+    w?: number | "majority" | (string & {});
+    j?: boolean;
+    wtimeout?: number;
+  }
+
+  export interface MongoWriteOptions extends MongoCallOptions {
+    writeConcern?: WriteConcern;
+    comment?: unknown;
+    bypassDocumentValidation?: boolean;
+    let?: MongoDocument;
+  }
+
+  export interface MongoUpdateOptions extends MongoWriteOptions {
+    upsert?: boolean;
+    arrayFilters?: MongoDocument[];
+    hint?: string | MongoDocument;
+    collation?: MongoDocument;
+  }
+
+  export interface FindOptions<T> extends MongoCallOptions {
+    sort?: MongoDocument;
+    projection?: MongoDocument;
+    skip?: number;
+    limit?: number;
+    batchSize?: number;
+    hint?: string | MongoDocument;
+    comment?: unknown;
+    maxTimeMS?: number;
+    collation?: MongoDocument;
+    allowDiskUse?: boolean;
+    let?: MongoDocument;
+    readConcern?: { level: string };
+    /** @internal */
+    _type?: T;
+  }
+
+  export interface AggregateOptions extends MongoCallOptions {
+    batchSize?: number;
+    allowDiskUse?: boolean;
+    hint?: string | MongoDocument;
+    comment?: unknown;
+    maxTimeMS?: number;
+    collation?: MongoDocument;
+    let?: MongoDocument;
+    writeConcern?: WriteConcern;
+    readConcern?: { level: string };
+  }
+
+  export interface InsertOneResult {
+    acknowledged: boolean;
+    insertedId: unknown;
+  }
+
+  export interface InsertManyResult {
+    acknowledged: boolean;
+    insertedCount: number;
+    insertedIds: Record<number, unknown>;
+  }
+
+  export interface UpdateResult {
+    acknowledged: boolean;
+    matchedCount: number;
+    modifiedCount: number;
+    upsertedCount: number;
+    upsertedId: unknown;
+  }
+
+  export interface DeleteResult {
+    acknowledged: boolean;
+    deletedCount: number;
+  }
+
+  export interface BulkWriteResult {
+    acknowledged: boolean;
+    insertedCount: number;
+    matchedCount: number;
+    modifiedCount: number;
+    deletedCount: number;
+    upsertedCount: number;
+    insertedIds: Record<number, unknown>;
+    upsertedIds: Record<number, unknown>;
+  }
+
+  export type AnyBulkWriteOperation<T> =
+    | { insertOne: { document: T } }
+    | { updateOne: { filter: Filter<T>; update: UpdateFilter<T> } & MongoUpdateOptions }
+    | { updateMany: { filter: Filter<T>; update: UpdateFilter<T> } & MongoUpdateOptions }
+    | { replaceOne: { filter: Filter<T>; replacement: T } & MongoUpdateOptions }
+    | { deleteOne: { filter: Filter<T>; hint?: string | MongoDocument; collation?: MongoDocument } }
+    | { deleteMany: { filter: Filter<T>; hint?: string | MongoDocument; collation?: MongoDocument } };
+
+  /**
+   * The results of a find, an aggregation or a listing, fetched a batch at a
+   * time. Read with `for await`, `toArray()` or `next()`; nothing is sent until
+   * then, and the chaining methods only work before it.
+   */
+  export interface MongoCursor<T> extends AsyncIterable<T>, AsyncDisposable {
+    sort(sort: MongoDocument): this;
+    limit(n: number): this;
+    skip(n: number): this;
+    project(projection: MongoDocument): this;
+    batchSize(n: number): this;
+    /** The next document, or `null` when there are no more. */
+    next(): Promise<T | null>;
+    toArray(): Promise<T[]>;
+    /** Releases the cursor on the server. */
+    close(): Promise<void>;
+  }
+
+  /** A collection of documents of type `T`. */
+  export interface MongoCollection<T extends MongoDocument = MongoDocument> {
+    readonly db: MongoDb;
+    readonly collectionName: string;
+    /** `database.collection`. */
+    readonly namespace: string;
+    /** Inserts a copy of `document`, given an `_id` when it has none. */
+    insertOne(document: T, options?: MongoWriteOptions): Promise<InsertOneResult>;
+    insertMany(documents: readonly T[], options?: MongoWriteOptions & { ordered?: boolean }): Promise<InsertManyResult>;
+    updateOne(filter: Filter<T>, update: UpdateFilter<T>, options?: MongoUpdateOptions): Promise<UpdateResult>;
+    updateMany(filter: Filter<T>, update: UpdateFilter<T>, options?: MongoUpdateOptions): Promise<UpdateResult>;
+    replaceOne(filter: Filter<T>, replacement: T, options?: MongoUpdateOptions): Promise<UpdateResult>;
+    deleteOne(filter: Filter<T>, options?: MongoWriteOptions & { hint?: string | MongoDocument; collation?: MongoDocument }): Promise<DeleteResult>;
+    deleteMany(filter: Filter<T>, options?: MongoWriteOptions & { hint?: string | MongoDocument; collation?: MongoDocument }): Promise<DeleteResult>;
+    bulkWrite(operations: readonly AnyBulkWriteOperation<T>[], options?: MongoWriteOptions & { ordered?: boolean }): Promise<BulkWriteResult>;
+    find(filter?: Filter<T>, options?: FindOptions<T>): MongoCursor<T>;
+    findOne(filter?: Filter<T>, options?: FindOptions<T>): Promise<T | null>;
+    aggregate<R extends MongoDocument = MongoDocument>(pipeline?: MongoDocument[], options?: AggregateOptions): MongoCursor<R>;
+    countDocuments(filter?: Filter<T>, options?: MongoCallOptions & { skip?: number; limit?: number }): Promise<number>;
+    estimatedDocumentCount(options?: MongoCallOptions & { comment?: unknown; maxTimeMS?: number }): Promise<number>;
+    distinct(key: string, filter?: Filter<T>, options?: MongoCallOptions): Promise<unknown[]>;
+    findOneAndUpdate(
+      filter: Filter<T>,
+      update: UpdateFilter<T>,
+      options?: MongoUpdateOptions & { returnDocument?: "before" | "after"; projection?: MongoDocument; sort?: MongoDocument },
+    ): Promise<T | null>;
+    findOneAndReplace(
+      filter: Filter<T>,
+      replacement: T,
+      options?: MongoUpdateOptions & { returnDocument?: "before" | "after"; projection?: MongoDocument; sort?: MongoDocument },
+    ): Promise<T | null>;
+    findOneAndDelete(filter: Filter<T>, options?: MongoWriteOptions & { projection?: MongoDocument; sort?: MongoDocument }): Promise<T | null>;
+    /** Creates an index and returns its name. */
+    createIndex(keys: MongoDocument, options?: MongoWriteOptions & { name?: string; unique?: boolean; sparse?: boolean; expireAfterSeconds?: number; partialFilterExpression?: MongoDocument }): Promise<string>;
+    createIndexes(specs: readonly ({ key: MongoDocument; name?: string } & MongoDocument)[], options?: MongoWriteOptions): Promise<string[]>;
+    dropIndex(name: string, options?: MongoWriteOptions): Promise<void>;
+    dropIndexes(options?: MongoWriteOptions): Promise<void>;
+    listIndexes(options?: MongoCallOptions & { batchSize?: number }): MongoCursor<MongoDocument>;
+    /** Drops the collection; dropping one that is not there also succeeds. */
+    drop(options?: MongoWriteOptions): Promise<boolean>;
+  }
+
+  /** A database. */
+  export interface MongoDb {
+    readonly client: MongoConnection;
+    readonly databaseName: string;
+    collection<T extends MongoDocument = MongoDocument>(name: string): MongoCollection<T>;
+    /** Runs a command; a reply with `ok: 0` is thrown as a {@link DbError}. */
+    command(command: MongoDocument, options?: MongoCallOptions): Promise<MongoDocument>;
+    aggregate<R extends MongoDocument = MongoDocument>(pipeline?: MongoDocument[], options?: AggregateOptions): MongoCursor<R>;
+    listCollections(filter?: MongoDocument, options?: MongoCallOptions & { nameOnly?: boolean; batchSize?: number }): MongoCursor<MongoDocument>;
+    createCollection<T extends MongoDocument = MongoDocument>(name: string, options?: MongoCallOptions & MongoDocument): Promise<MongoCollection<T>>;
+    dropCollection(name: string, options?: MongoWriteOptions): Promise<boolean>;
+    dropDatabase(options?: MongoWriteOptions): Promise<boolean>;
+  }
+
+  /**
+   * A client opened with the built-in {@link mongodb} driver: a pool of
+   * connections to one server, kept by the runtime. `query`, `execute` and
+   * `transaction` refuse; MongoDB is reached through `db()`.
+   */
+  export interface MongoConnection extends Connection {
+    /** The database `name`, or the connection string's (`test` if none). */
+    db(name?: string): MongoDb;
+    /** Runs a command on `options.db` (default `admin`). */
+    command(command: MongoDocument, options?: MongoCallOptions & { db?: string }): Promise<MongoDocument>;
+    ping(options?: MongoCallOptions): Promise<void>;
+  }
+
+  /**
+   * The built-in MongoDB driver, for `mongodb:` URLs (MongoDB 7.0 and later,
+   * one server). Its protocol and connection pool run in the runtime; connecting
+   * needs `net` for the server's host and port. Documents are BSON, with the
+   * types in `runtime:serialization`'s `BSON`.
+   */
+  export const mongodb: Driver<MongoConnection, MongoOptions, MongoConnection>;
+
+  /**
    * The `sql` tagged template: every interpolation becomes a parameter, never
    * text. A nested `Query` splices with its own values, so fragments compose.
    *
@@ -1105,6 +1346,7 @@ declare module "runtime:db" {
     sqlite: typeof sqlite;
     postgres: typeof postgres;
     mysql: typeof mysql;
+    mongodb: typeof mongodb;
     defineDriver: typeof defineDriver;
     DbError: typeof DbError;
     DbErrorCode: typeof DbErrorCode;

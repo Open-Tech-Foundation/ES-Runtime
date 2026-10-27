@@ -97,6 +97,13 @@ pub(crate) fn install(
         providers.entropy(),
         &inventory,
     )?;
+    // The built-in MongoDB driver (D186): its protocol and its pool in Rust.
+    crate::mongo_ops::install(
+        engine,
+        providers.net_provider(),
+        providers.entropy(),
+        &inventory,
+    )?;
     // The in-flight requests this agent has been handed (D50). Built here
     // rather than inside `http_ops` because `ws_ops` needs the same registry:
     // upgrading a request to a WebSocket is a use of that request, so it is

@@ -107,6 +107,7 @@ const NAV = [
       { title: "SQLite", path: "/docs/db/sqlite" },
       { title: "PostgreSQL", path: "/docs/db/postgres" },
       { title: "MySQL & MariaDB", path: "/docs/db/mysql" },
+      { title: "MongoDB", path: "/docs/db/mongodb" },
       {
         title: "Redis",
         items: [

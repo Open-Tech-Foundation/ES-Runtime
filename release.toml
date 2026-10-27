@@ -80,6 +80,14 @@ es-runtime-engine = []
     "**/test/**",
     "**/tests/**",
 ]
+"@opentf/esrun-mongodb" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 es-runtime-common = []
 es-runtime-bson = []
 "@opentf/esrun-mqtt" = [
@@ -115,6 +123,15 @@ matrix = false
 command = "npm run build"
 artifacts = ""
 manifest = "packages/mysql/package.json"
+
+[[package]]
+name = "@opentf/esrun-mongodb"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/mongodb/package.json"
 
 [[package]]
 name = "@opentf/esrun-mqtt"

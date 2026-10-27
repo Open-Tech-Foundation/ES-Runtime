@@ -1427,6 +1427,87 @@ fn the_mysql_driver_connects_only_with_what_net_grants() {
 /// descriptor for the file — so the jail's anchoring descriptor must be closed
 /// before the lock is taken, not after, or the lock is gone the moment the
 /// open returns and a second process gets in.
+/// Connecting to MongoDB reaches nowhere `runtime:net` could not: no `net`, no
+/// connection; a host outside the allowlist, refused; with `net`, an unreachable
+/// server is a lost connection, not a capability error. A TLS CA file is read
+/// through `runtime:fs`, so it needs `read` too.
+#[test]
+fn the_mongodb_driver_connects_only_with_what_net_and_read_grant() {
+    let source = r#"
+        import { connect, mongodb } from "runtime:db";
+        try {
+          await connect(globalThis.URL_TO_TRY ?? "mongodb://127.0.0.1:1/", { driver: mongodb });
+          console.log("connected");
+        } catch (e) {
+          console.log(e.code);
+        }
+    "#;
+    let cases: [(&str, &[&str], &str); 3] = [
+        ("mongo-no-net", &["--allow-write"], "ERR_CAPABILITY_DENIED"),
+        (
+            "mongo-allowlist",
+            &["--allow-net=127.0.0.1:2"],
+            "ERR_PERMISSION_DENIED",
+        ),
+        (
+            "mongo-unreachable",
+            &["--allow-net"],
+            "ERR_DB_CONNECTION_LOST",
+        ),
+    ];
+    for (name, flags, expected) in cases {
+        let out = run(name, source, flags);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        assert_eq!(stdout(&out).trim(), expected, "{name}");
+    }
+    let ca = source.replace(
+        "globalThis.URL_TO_TRY",
+        "\"mongodb://127.0.0.1:1/?tlsCAFile=ca.pem\"",
+    );
+    let out = run("mongo-ca-no-read", &ca, &["--allow-net"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ERR_CAPABILITY_DENIED");
+}
+
+/// What the connection string can say is checked before anything connects, and
+/// a setting the driver cannot honour is refused by name rather than ignored.
+#[test]
+fn a_mongodb_connection_string_is_checked_before_connecting() {
+    let out = run(
+        "mongo-uri",
+        r#"
+        import { connect, mongodb } from "runtime:db";
+        for (const url of [
+          "mongodb://a:1,b:2/",
+          "mongodb+srv://cluster.example.com/",
+          "mongodb://h/?tlsAllowInvalidCertificates=true",
+          "mongodb://h/?replicaSet=rs0",
+          "mongodb://h/?readPreference=secondary",
+          "mongodb://h/?authMechanism=MONGODB-X509",
+          "mongodb://h/?maxPoolSize=many",
+          "mongodb://h/?tls=true&ssl=false",
+          "mongodb://h:99999/",
+          "mongodb://us:er:pass@h/",
+          "mongodb://h/?bogus=1",
+        ]) {
+          try { await connect(url, { driver: mongodb }); console.log("connected"); }
+          catch (e) { console.log(e.code, "|", e.message); }
+        }
+        "#,
+        &["--allow-net"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let lines: Vec<String> = stdout(&out).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 11, "{lines:?}");
+    for line in &lines {
+        assert!(line.starts_with("ERR_DB_UNSUPPORTED |"), "{line}");
+    }
+    assert!(lines[0].contains("one server"), "{}", lines[0]);
+    assert!(lines[1].contains("mongodb+srv"), "{}", lines[1]);
+    assert!(lines[2].contains("certificate checks"), "{}", lines[2]);
+    assert!(lines[10].contains("bogus"), "{}", lines[10]);
+}
+
 #[test]
 fn a_second_process_cannot_open_a_database_another_holds() {
     use std::io::{BufRead, BufReader};

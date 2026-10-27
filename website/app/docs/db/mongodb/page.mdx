@@ -1,0 +1,147 @@
+---
+title: MongoDB
+description: Connect to MongoDB with the driver built into esrun — documents, cursors, cancellation and errors.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# MongoDB
+
+`mongodb` is built into [`runtime:db`](/api/db): there is nothing to install.
+
+```js
+import { connect, mongodb } from "runtime:db";
+
+await using client = await connect("mongodb://localhost:27017/app", { driver: mongodb });
+const users = client.db().collection("users");
+
+await users.insertOne({ name: "Ada", joined: new Date() });
+const ada = await users.findOne({ name: "Ada" });
+```
+
+The methods are the ones the official MongoDB driver has, so its documentation
+and examples carry over: `insertOne`, `find`, `updateMany`, `aggregate`,
+`bulkWrite`, `createIndex`. Every option and result is on the
+[MongoDB reference](/api/db/mongodb).
+
+It connects to one MongoDB 7.0 or later server. Replica sets, sharded clusters,
+transactions, `mongodb+srv://` and change streams are not supported yet.
+
+## Permissions
+
+Connecting needs `--allow-net` for the server's host and port:
+
+```sh
+esrun --allow-net=db.internal:27017 app.js
+```
+
+## Credentials and TLS
+
+Credentials go in the URL, percent-encoded, or in the options:
+
+```js
+const client = await connect("mongodb://db.internal:27017/app", {
+  driver: mongodb,
+  auth: { username: "app", password: env.MONGO_PASSWORD },
+  tls: true,
+});
+```
+
+The authentication mechanism is negotiated: SCRAM-SHA-256 when the server offers
+it, SCRAM-SHA-1 otherwise. The user is looked up in the URL's database, or
+`admin`; set `authSource` when it is defined elsewhere.
+
+TLS is verified. A server with a certificate from a private authority needs that
+authority trusted, with `tlsCAFile` (which also needs `--allow-read` for the
+file) or `ca`:
+
+```js
+const client = await connect("mongodb://db.internal:27017/app?tlsCAFile=certs/ca.pem", {
+  driver: mongodb,
+});
+```
+
+<Callout type="info" title="Certificate checks cannot be turned off">
+  `tlsInsecure` and `tlsAllowInvalidCertificates` are refused. Trust the
+  authority that signed the certificate instead.
+</Callout>
+
+## Documents and types
+
+A document is a plain object, and its values are BSON: `_id` is a
+`BSON.ObjectId`, a 64-bit integer reads as a `bigint`, and a date as a `Date`.
+
+```js
+import { BSON } from "runtime:serialization";
+
+const user = await users.findOne({ _id: new BSON.ObjectId(id) });
+await users.updateOne({ _id: user._id }, { $inc: { visits: 1 } });
+```
+
+How each JavaScript value is stored is in the
+[BSON type mapping](/api/serialization#bson). Two cases are worth knowing. A
+count the server keeps as a 64-bit integer arrives as a `bigint` (`5n`). A
+whole number written from JavaScript is stored as a 32-bit integer; wrap it in
+`BSON.Double` when it must be a double.
+
+`insertOne` gives a document without an `_id` a new `ObjectId`, and returns it
+as `insertedId`. It inserts a copy: the object you passed is not changed.
+
+## Reading many documents
+
+`find` and `aggregate` return a cursor. Nothing is sent until you read it, so
+`sort`, `limit`, `skip` and `project` chain first:
+
+```js
+for await (const user of users.find({ active: true }).sort({ joined: -1 }).limit(50)) {
+  console.log(user.name);
+}
+
+const totals = await orders
+  .aggregate([{ $group: { _id: "$customer", total: { $sum: "$amount" } } }])
+  .toArray();
+```
+
+Results arrive a batch at a time. Leaving a `for await` early releases the
+cursor on the server; a cursor read with `next()` should be closed with
+`close()` or `await using`.
+
+## Stopping an operation
+
+Every operation takes `signal` and `timeoutMS`:
+
+```js
+const recent = await users
+  .find({ active: true }, { signal: request.signal, timeoutMS: 2_000 })
+  .toArray();
+```
+
+A stopped operation rejects with the signal's reason, or `ERR_DB_TIMEOUT`, and
+the client stays usable. `timeoutMS` in the connection string applies to every
+operation that does not give its own.
+
+## Errors
+
+A failure is a `DbError` with a portable `code` and the server's own number on
+`backendCode`:
+
+```js
+try {
+  await users.insertOne({ email });
+} catch (e) {
+  if (e.code === "ERR_DB_UNIQUE_VIOLATION") return conflict(e.server.keyValue);
+  throw e;
+}
+```
+
+`e.server` carries the server's `codeName` and `errorLabels`. A failed write in
+`insertMany` or `bulkWrite` also carries every `writeErrors` entry and the
+`result` of what was written before it.
+
+## Pool size
+
+A client keeps a pool of connections, 100 at most by default. Set
+`maxPoolSize` in the URL or the options, or `pool: { max }` in `connect()`.
+Operations past that wait for a connection; `signal` and `timeoutMS` stop the
+wait too. An idle client keeps nothing running, so a program that has finished
+exits without `close()`.

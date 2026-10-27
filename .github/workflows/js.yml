@@ -1,5 +1,5 @@
 # CI for the JavaScript in this repo: the database drivers
-# (packages/postgres, packages/mysql, packages/redis, packages/valkey) and the pure-JS half of
+# (packages/postgres, packages/mysql, packages/mongodb, packages/redis, packages/valkey) and the pure-JS half of
 # `runtime:serialization` (crates/runtime/js).
 #
 # Split out of ci.yml so it can be skipped when nothing here changed. These jobs
@@ -213,6 +213,63 @@ jobs:
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           MYSQL_URL: mysql://root:esrun@127.0.0.1:3306/esrun_test?ssl-mode=DISABLED&allowPublicKeyRetrieval=true
+
+  # The MongoDB driver (packages/mongodb, the runtime's built-in driver), against
+  # both server versions it supports. The servers are started by hand rather than
+  # as services: the cancellation tests need `--setParameter
+  # enableTestCommands=1` for `sleep`, and a service cannot take arguments. A
+  # second server has access control on, for the authentication tests.
+  mongodb:
+    name: mongodb driver (${{ matrix.mongo }})
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo: ["7", "8"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker run -d -p 27017:27017 mongo:${{ matrix.mongo }} --setParameter enableTestCommands=1
+          docker run -d -p 27018:27017 -e MONGO_INITDB_ROOT_USERNAME=root \
+            -e MONGO_INITDB_ROOT_PASSWORD=esrun mongo:${{ matrix.mongo }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr build
+      - run: tsr typecheck
+      # The image restarts mongod after creating the root user; wait until both
+      # servers answer the way the tests will reach them.
+      - run: |
+          wait_for() {
+            for _ in $(seq 60); do
+              docker run --rm --network host mongo:${{ matrix.mongo }} \
+                mongosh --quiet "$1" --eval "db.runCommand({ ping: 1 }).ok" >/dev/null 2>&1 && return 0
+              sleep 2
+            done
+            return 1
+          }
+          wait_for mongodb://127.0.0.1:27017/
+          wait_for mongodb://root:esrun@127.0.0.1:27018/
+      - run: tsr test:mongodb
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          MONGODB_URL: mongodb://127.0.0.1:27017/esrun_test
+          MONGODB_AUTH_URL: mongodb://root:esrun@127.0.0.1:27018/
 
   # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
   # above, for the same reason — but it needs three servers rather than one,

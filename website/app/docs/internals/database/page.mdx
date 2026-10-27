@@ -127,6 +127,27 @@ free" but **which connection already prepared this statement** — protocol stat
 which lives in JavaScript regardless. A native pool would be a second
 bookkeeping of a set the driver already keeps.
 
+## MongoDB pools in the host
+
+The MongoDB driver keeps its pool in Rust, and the argument above does not
+contradict it: its premises do not hold there. Choosing a connection, sending a
+command, reading the reply and putting the connection back all happen inside
+the one op a command already is, so a pool in the host adds no crossing. And
+MongoDB has no prepared statements, so there is no protocol state that wants the
+same connection twice.
+
+What the host pool buys is cancellation that reaches everywhere. Each command
+carries a ticket, so an `AbortSignal` or a timeout finds it still queued for a
+connection (it leaves the queue), connecting, or waiting on the server (its
+socket is closed, and that connection is discarded rather than reused, even if
+the reply won the race). An idle pool holds sockets but no pending work, so it
+never keeps a program from exiting: there is no monitor and no reaper.
+
+Documents cross as BSON bytes that the engine encodes and decodes in place
+(see [serialization](/docs/internals/serialization)). A batch insert sends each
+document as its own encoded bytes in an `OP_MSG` document sequence, so a large
+batch is split across messages without being encoded twice.
+
 ## The embedded engine, and the jail
 
 `sqlite:` is the one backend that cannot be JavaScript, because it has no wire
@@ -194,10 +215,9 @@ not a gate.
 
 ## What is not here yet
 
-- **Networked backends.** Postgres is next, and will add no Rust.
-- **A connection pool**, which arrives with the first backend that needs one —
-  its `release(clean)` contract is what decides whether a connection is reused
-  or discarded, and getting that wrong leaks state between requests.
+- **MongoDB beyond one server.** Replica sets and transactions, `mongodb+srv://`,
+  sharded clusters, compression, change streams, and authentication other than
+  SCRAM (DECISIONS D186).
 - **Zero-copy at the op boundary.** Batches are copied across today; that is the
   largest remaining native lever on throughput, and it is a runtime-wide change
   rather than a database one.

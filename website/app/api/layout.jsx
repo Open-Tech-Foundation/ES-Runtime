@@ -19,6 +19,7 @@ const NAV = [
           { title: "Overview", path: "/api/db" },
           { title: "Connections & pooling", path: "/api/db/connection" },
           { title: "Queries, rows & errors", path: "/api/db/queries" },
+          { title: "MongoDB", path: "/api/db/mongodb" },
           { title: "Drivers", path: "/api/db/drivers" },
         ],
       },

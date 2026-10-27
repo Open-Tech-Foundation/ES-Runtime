@@ -18,6 +18,9 @@ itself.
 - `runtime:serialization`: the `BSON` namespace — `encode`, `decode`,
   `validate`, and the `ObjectId`, `Decimal128`, `UUID`, `Timestamp`, `Binary`,
   `Code`, `BSONRegExp`, `MinKey`, `MaxKey` and `Double` classes.
+- `runtime:db`: the `mongodb` driver, `MongoConnection`, `MongoDb`,
+  `MongoCollection<T>`, `MongoCursor<T>`, `MongoOptions`, `Filter<T>`,
+  `UpdateFilter<T>`, the call and write options, and the write results.
 
 ## [0.18.0] - 2026-10-21
 

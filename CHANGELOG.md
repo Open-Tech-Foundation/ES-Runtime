@@ -23,6 +23,16 @@ namespace) is unstable and may change between minor releases until the API freez
   `tsr test:bson-corpus` from a pinned checkout that is fetched, not committed.
   This is the first phase of the MongoDB driver (D186).
 - A `bson` fuzz target over BSON validation and Decimal128 text.
+- `mongodb` in `runtime:db`: a built-in MongoDB driver for one MongoDB 7.0 or
+  later server (D186). Its protocol, SCRAM-SHA-256/SHA-1 authentication, TLS and
+  connection pool run in Rust; the client has `db()`, `command()` and `ping()`,
+  and collections have the official driver's methods — inserts, updates,
+  deletes, `bulkWrite`, `find` and `aggregate` cursors, counts, `distinct`,
+  `findOneAnd*` and indexes. Every operation takes `signal` and `timeoutMS`.
+  Writes larger than one message are split into batches. Server errors are
+  `DbError`s carrying the server's code, name and labels. Replica sets,
+  transactions, `mongodb+srv://` and change streams are not supported yet.
+  `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 
 ### Changed
 
