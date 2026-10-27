@@ -4,8 +4,48 @@ description: Connect to MongoDB with the driver built into esrun — documents, 
 ---
 
 import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
 
 # MongoDB
+
+<Callout type="warning" title="Beta: not ready for production use">
+  The driver works and is tested, but it has not yet met the bar we set for
+  production: MongoDB's full conformance suites, and the connection pool under
+  sustained load. Try it and report what breaks; keep production workloads on
+  a setup you can fall back to until it is marked stable.
+</Callout>
+
+## Status
+
+### Working today
+
+| Area | |
+| --- | --- |
+| <Yes /> Servers | MongoDB 7.0 and 8.x: one server or a replica set, with discovery, monitoring, failover and read preferences |
+| <Yes /> Connection strings | `mongodb://` and `mongodb+srv://` (SRV and TXT lookups, TLS on by default) |
+| <Yes /> Security | TLS with verified certificates, SCRAM-SHA-256 and SCRAM-SHA-1, `--allow-net` scoping |
+| <Yes /> Operations | CRUD, cursors, aggregation, bulk writes, indexes, cancellation with `AbortSignal` |
+| <Yes /> Consistency | Sessions, causal consistency, transactions, retried reads and writes |
+| <Yes /> BSON | Every type, int64 as `bigint`, passing MongoDB's BSON corpus |
+| <Yes /> Conformance | MongoDB's discovery and monitoring, server selection, max-staleness and seedlist suites |
+
+### In the pipeline
+
+| Area | |
+| --- | --- |
+| <Partial /> Conformance | MongoDB's CRUD, transactions, retryable and sessions suites (covered by our own live tests today), and the connection-pool suite |
+| <Partial /> Load | A soak test and failover under load for the connection pool, and a published benchmark |
+| <Partial /> Pool options | `maxIdleTimeMS`, `minPoolSize`, `waitQueueTimeoutMS`, `socketTimeoutMS`: a connection string with one is refused today |
+| <Partial /> Features | Change streams, sharded clusters (mongos), load-balanced mode, wire compression, client-level `bulkWrite`, GridFS |
+| <Partial /> Authentication | X.509 client certificates, then AWS IAM and OIDC |
+
+Client-side field-level and Queryable Encryption are not planned: they depend
+on MongoDB's C library, and esrun links no native database code.
+
+## Getting started
 
 `mongodb` is built into [`runtime:db`](/api/db): there is nothing to install.
 

@@ -2,7 +2,7 @@
 // with a label under each, no paragraphs.
 //
 // Sources, all vendored under public/img/brands/ so the site makes no
-// external requests: SQLite, PostgreSQL, MySQL, MariaDB, Redis, Rust,
+// external requests: SQLite, PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Rust,
 // TypeScript, YAML, JSON, V8, CSS and XML from devicons/devicon (MIT); TOML,
 // WebAssembly, JavaScript, RabbitMQ, MQTT and NATS from Simple Icons (CC0); Valkey's
 // mark from valkey.io (img/Valkey-logo.svg; a trademark of LF Projects, LLC). The JSX tile is that
@@ -38,6 +38,9 @@ export default function StackIcon({ name }) {
       )}
       {name === "mariadb" && (
         <img src="/img/brands/mariadb.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
+      )}
+      {name === "mongodb" && (
+        <img src="/img/brands/mongodb.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
       )}
       {name === "redis" && (
         <img src="/img/brands/redis.svg" alt="" aria-hidden="true" draggable="false" className={CHIP} />
