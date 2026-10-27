@@ -911,8 +911,9 @@ impl Connection {
 
 /// Stops the statement connection `connection_id` is running: MySQL has no
 /// cancel message on the connection itself, so a second connection, as the
-/// same user, runs `KILL QUERY`. The statement fails with
-/// `ER_QUERY_INTERRUPTED` and the connection stays usable.
+/// same user, runs `KILL QUERY`. The statement usually fails with
+/// `ER_QUERY_INTERRUPTED` (a killed `SLEEP()` instead ends with the row `1`),
+/// and the connection stays usable.
 pub(crate) async fn cancel(
     net: Arc<dyn NetProvider>,
     entropy: Arc<dyn Entropy>,

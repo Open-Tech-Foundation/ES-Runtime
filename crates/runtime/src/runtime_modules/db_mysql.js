@@ -918,7 +918,8 @@ class MySqlConnection extends BaseConnection {
 
   /// Stops the statement this connection is running, if there is one: a second
   /// connection, as the same user, runs `KILL QUERY` naming this one. The
-  /// statement fails with ER_QUERY_INTERRUPTED; this connection stays usable.
+  /// statement usually fails with ER_QUERY_INTERRUPTED, though a killed
+  /// `SLEEP()` ends with the row `1`; this connection stays usable.
   async cancel() {
     if (this._fatal !== null || this._id === null) return;
     const result = await ops.my_cancel(this._id);

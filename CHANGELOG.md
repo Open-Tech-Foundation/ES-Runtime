@@ -27,6 +27,11 @@ namespace) is unstable and may change between minor releases until the API freez
   `u128` comparisons that were not constant-time). It reaches the runtime
   through `digest`, under `crypto.subtle`'s Ed25519, X25519 and HMAC. `cargo
   audit` passes again.
+- Aborting a `runtime:db` statement now rejects with the signal's reason even
+  when the cancelled statement ends in a result rather than an error. MySQL 8.4
+  ends a killed `SELECT SLEEP(5)` with the row `1`, which used to resolve as
+  `{ s: 1 }`. The call also waits for the cancel to be answered before it
+  rejects, so a cancel still in flight cannot reach the next statement.
 
 ## [0.43.0] - 2026-10-23
 

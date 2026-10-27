@@ -1,8 +1,4 @@
 // Stopping a statement: a signal kills it on the server, and the connection lives on.
-//
-// The slow statement is a cross join rather than SLEEP(): MySQL answers a killed
-// SLEEP() with 1, as if it had finished, where a killed query fails with
-// ER_QUERY_INTERRUPTED — and only a failure is something a caller can see.
 import { connect } from "runtime:db";
 import { env } from "runtime:process";
 import { driver } from "../dist/index.js";
@@ -26,6 +22,23 @@ const took = Date.now() - started;
 ok(reason !== null, `the call rejected (${reason})`);
 ok(took < 2000, `promptly (${took}ms)`);
 is((await (await db.query("SELECT 1 AS one")).first()).one, 1, "the connection is still usable");
+
+// MySQL answers a killed SLEEP() with 1, as if it had finished, where a killed
+// query fails with ER_QUERY_INTERRUPTED. Either way the caller aborted, so the
+// call rejects with the signal's reason.
+let slept = null;
+try {
+  await db.query("SELECT SLEEP(5) AS s", [], { signal: AbortSignal.timeout(200) });
+  slept = "resolved";
+} catch (e) {
+  slept = e?.name ?? String(e);
+}
+is(slept, "TimeoutError", "a killed SLEEP() rejects with the signal's reason");
+is(
+  (await (await db.query("SELECT 4 AS four")).first()).four,
+  4,
+  "and the connection is still usable",
+);
 
 // cancel() with nothing running is harmless.
 await db.cancel();

@@ -984,19 +984,24 @@ class BaseConnection {
     if (signal === undefined) return this._query(normalized);
     if (signal.aborted) throw signal.reason;
 
-    const onAbort = () => {
-      Promise.resolve(this._cancel()).catch(() => {});
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+    const listener = this._cancelOnAbort(signal);
     let rows;
     try {
       rows = await this._query(normalized);
     } catch (e) {
-      signal.removeEventListener("abort", onAbort);
-      if (signal.aborted) throw signal.reason;
+      signal.removeEventListener("abort", listener.onAbort);
+      if (signal.aborted) throw await listener.reason();
       throw e;
     }
-    return this._bindSignalToRows(signal, rows, onAbort);
+    if (signal.aborted) {
+      // As in `_withSignal`: a cancelled statement that still answered with
+      // rows was aborted all the same.
+      signal.removeEventListener("abort", listener.onAbort);
+      const reason = await listener.reason();
+      await rows.close().catch(() => {});
+      throw reason;
+    }
+    return this._bindSignalToRows(signal, rows, listener.onAbort);
   }
 
   async execute(q, params, options = {}) {
@@ -1078,18 +1083,44 @@ class BaseConnection {
   async _withSignal(signal, work) {
     if (signal === undefined) return work();
     if (signal.aborted) throw signal.reason;
+    const listener = this._cancelOnAbort(signal);
+    try {
+      let result;
+      try {
+        result = await work();
+      } catch (e) {
+        if (signal.aborted) throw await listener.reason();
+        throw e;
+      }
+      // Aborted while the statement ran is aborted, however it ended. A
+      // cancelled statement may end in a result rather than an error — MySQL
+      // ends an interrupted `SELECT SLEEP(n)` with the row `1` — and that row
+      // is not the answer the caller is still waiting for.
+      if (signal.aborted) throw await listener.reason();
+      return result;
+    } finally {
+      signal.removeEventListener("abort", listener.onAbort);
+    }
+  }
+
+  /**
+   * Asks the backend to cancel when `signal` fires. `reason()` waits for that
+   * request to be answered, then returns the caller's reason to throw: a cancel
+   * still in flight when the call returns could land on the next statement.
+   */
+  _cancelOnAbort(signal) {
+    let cancelling = null;
     const onAbort = () => {
-      Promise.resolve(this._cancel()).catch(() => {});
+      cancelling = Promise.resolve(this._cancel()).catch(() => {});
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await work();
-    } catch (e) {
-      if (signal.aborted) throw signal.reason;
-      throw e;
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
+    return {
+      onAbort,
+      reason: async () => {
+        await cancelling;
+        return signal.reason;
+      },
+    };
   }
 
   /**

@@ -488,6 +488,73 @@ usable: 40000"
     );
 }
 
+/// A cancelled statement does not always fail: MySQL ends an interrupted
+/// `SELECT SLEEP(n)` with the row `1`. Aborted while it ran is aborted all the
+/// same, so the call rejects with the caller's reason — and only once the cancel
+/// has been answered, so it cannot land on the next statement.
+#[test]
+fn a_signal_rejects_even_when_the_cancelled_statement_answers() {
+    let out = run(
+        "signal-answers",
+        r#"
+        import { connect, defineDriver, BaseConnection, Dialect } from "runtime:db";
+
+        const log = [];
+        const dialect = new Dialect({ name: "sleepy", placeholder: () => "?" });
+        class SleepyConnection extends BaseConnection {
+          #wake = null;
+          constructor() { super({ dialect, backend: "sleepy" }); }
+          // Runs until cancelled, then answers as if it had finished.
+          #sleep(answer) {
+            return new Promise((resolve) => {
+              const timer = setTimeout(() => resolve(answer), 5000);
+              this.#wake = () => { clearTimeout(timer); resolve(answer); };
+            });
+          }
+          _query() {
+            return this.#sleep({ exhausted: false, close: async () => log.push("closed") });
+          }
+          _execute() { return this.#sleep({ changes: 1, lastInsertRowid: null }); }
+          async _cancel() {
+            this.#wake?.();
+            await new Promise((r) => setTimeout(r, 50));
+            log.push("cancel answered");
+          }
+          async _close() {}
+        }
+        const sleepy = defineDriver({
+          name: "sleepy",
+          schemes: ["sleepy"],
+          dialect,
+          open: async () => new SleepyConnection(),
+        });
+        const db = await connect("sleepy://x", { driver: sleepy });
+
+        for (const call of ["execute", "query"]) {
+          log.length = 0;
+          const started = performance.now();
+          let outcome;
+          try {
+            await db[call]("SELECT SLEEP(5)", [], { signal: AbortSignal.timeout(100) });
+            outcome = "resolved";
+          } catch (e) {
+            log.push("rejected");
+            outcome = e.name;
+          }
+          console.log(call, outcome, performance.now() - started < 2000, log.join(" > "));
+        }
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "execute TimeoutError true cancel answered > rejected
+query TimeoutError true cancel answered > closed > rejected"
+    );
+}
+
 /// The pool is protocol-blind: it knows how to make a thing and how to destroy
 /// one, and it cannot know whether a returned one is fit to reuse. So the driver
 /// says, and anything not explicitly clean is thrown away — which is the rule
