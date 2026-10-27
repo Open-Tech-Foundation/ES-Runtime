@@ -3843,3 +3843,72 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **A re-export under new names only.** Errors and `backend` would still say `redis`, which is the thing a Valkey user notices first.
 
 **Consequences:** `esrun-redis` exports the family and the three factories, for a driver built on it. CI runs the Valkey package's suite against Valkey 8 and 9, and the Redis suite against Valkey 9 too, since that is the code doing the work. A divergence that matters shows up as a failing test there. Documented on the Valkey page under the database docs.
+
+### D186 — A native MongoDB driver in `runtime:db`, with `@opentf/esrun-mongodb` as its thin package · *Accepted (2026-10-27)* · *follows D147; departs from D56 on the pool*
+
+**Context:** MongoDB users have no path to esrun. Node, Bun and Deno ship no MongoDB client: Bun's guide installs `mongoose`, and Deno's example imports `npm:mongodb`, so all three rely on the official npm driver running under Node compatibility. esrun has no Node compatibility (D56), so neither the official driver nor anything built on it loads. MongoDB's driver specifications (connection string, server discovery and monitoring, server selection, connection pools, retryable reads and writes, sessions, transactions, client-side operation timeout, initial DNS seedlist discovery) are public, and each comes with a JSON test suite that drivers share.
+
+**Decision (maintainer, 2026-10-27):**
+
+- **A built-in driver, `mongodb`, in `runtime:db`**, defined with `defineDriver` like `postgres` and `mysql`. `connect(url, { driver: mongodb })` is the only way to open a client; there is no `MongoClient` class. `@opentf/esrun-mongodb` re-exports the driver as `driver` and carries the TypeScript types (`Collection<T>`, `Filter<T>`, `UpdateFilter<T>`), and adds no runtime code of its own. Every feature ships in the single `esrun` binary, with no cargo feature.
+- **Rust speaks the protocol; JavaScript owns the API.** Rust owns `OP_MSG` framing, `OP_COMPRESSED` (zlib, zstd), TLS through the `NetProvider`, the handshake, SCRAM-SHA-256 and SCRAM-SHA-1 (shared with the Postgres driver), server monitoring, server selection, the pools, retries, sessions and cursors. JavaScript owns the connection-string API surface, the collection and cursor methods, `AbortSignal` and error shaping. An operation is one async op.
+- **Topology and pools live in Rust.** This departs from D56, which keeps the pool in JavaScript. D56's reasons do not hold here: selecting a server, checking out a connection, the exchange and the check-in all happen inside the one op the operation already costs, so a Rust pool adds no crossing; and MongoDB has no prepared-statement affinity to keep in JavaScript. Monitoring is background work, which only the host can run. `runtime:db`'s `Pool` is not used by this driver.
+- **The operations carry the official driver's names**, because that is what users, documentation and tools know: `insertOne`, `insertMany`, `find`, `findOne`, `findOneAndUpdate`, `updateOne`, `updateMany`, `replaceOne`, `deleteOne`, `deleteMany`, `aggregate`, `countDocuments`, `estimatedDocumentCount`, `distinct`, `bulkWrite`, `watch`, the index and collection management calls, and `command` for any server command.
+- **What is left out:** an ODM (no schemas, models, middleware or `populate`); callbacks; the removed legacy methods (`insert`, `update`, `remove`, `count`); the `ObjectID` alias; options that no longer do anything (`useNewUrlParser`, `useUnifiedTopology`).
+- **What is modern:** every operation takes `signal`, and the client-side operation timeout (`timeoutMS`) is supported. Cursors and change streams are async iterables. The client, sessions and cursors support `await using`. `transaction(fn)` retries on `TransientTransactionError` and `UnknownTransactionCommitResult`, as the official `withTransaction` does. A failure is a `DbError` that carries the server's `code`, `codeName` and `errorLabels`.
+- **The minimum server is MongoDB 7.0** (wire version 21). MongoDB's lifecycle page lists 6.0 as end-of-life since 2025-07-31, 7.0 as supported until 2027-08-31, and 8.0 until 2029-10-31. The handshake is `hello` over `OP_MSG`, and an older server is refused by name rather than spoken to through the legacy opcodes. CI runs the live suite against 7.0 and 8.0.
+- **Background monitoring does not keep the program alive.** A script that has finished its operations exits without calling `close()`. Work in flight holds the program open; a heartbeat does not, as with `AbortSignal.timeout` since 2026-10-27.
+- **One client per agent** (D50). A worker opens its own; sockets and topology are not shared.
+- **No new authority.** Connecting needs `Net` for each host, scoped by `--allow-net`; the hosts an SRV record names are checked against the allowlist like any other (D188).
+
+**Rejected:**
+- **The official `mongodb` Rust crate.** It opens its own sockets and resolves DNS itself, so the allowlist, TLS roots and socket ownership would be enforced a second time or not at all, and it decodes into its own BSON values, which would then be converted again into JavaScript.
+- **A JavaScript protocol over `runtime:net`.** D147 measured what that costs in JavaScript garbage and memory.
+- **A `MongoClient` export.** Every esrun driver opens with `connect()`; one that does not would be the exception a reader has to learn.
+- **A Mongoose-style object mapper.** It belongs above the driver, in a library.
+
+**Not here:** client-side field-level encryption and Queryable Encryption, which need libmongocrypt (C) and esrun has no FFI; GridFS in the runtime (it can be JavaScript in the package, on collections); MONGODB-AWS and MONGODB-OIDC authentication until phase 5.
+
+**Phases**, each shipped, tested and committed on its own:
+1. BSON (D187).
+2. One server: TLS, SCRAM, `OP_MSG`, CRUD, `aggregate`, cursors, `command`, `signal` and `timeoutMS`, errors; the package. Live tests against `mongo:7` and `mongo:8`.
+3. Replica sets: monitoring, server selection and read preference, retryable reads and writes, sessions, causal consistency, `transaction(fn)`, read and write concerns. MongoDB's spec JSON tests and a live three-member replica set.
+4. `mongodb+srv` (D188), mongos and load-balanced mode, compression, change streams, the 8.0 client-level `bulkWrite`.
+5. X.509, MONGODB-AWS and MONGODB-OIDC authentication.
+6. A committed `bench/` script against Node, Bun and Deno on the official driver; the API, guide and internals pages.
+
+**Consequences:** `runtime:db` gains a driver whose client is a topology rather than a connection, so `connect()` documents that a driver may manage its own pool. The Postgres SCRAM code moves to a module both drivers share.
+
+### D187 — BSON in the engine, exposed as `BSON` in `runtime:serialization` · *Accepted (2026-10-27)* · *for D186*
+
+**Context:** every MongoDB operation is a BSON document out and BSON documents back. D146 and D147 traced esrun's memory gap to per-operation JavaScript garbage; a BSON codec in JavaScript, or one that builds an intermediate value tree on the way across the op boundary, brings it back. `structuredClone` already reads and builds live JavaScript values in Rust for the same reason (`engine/src/serialize.rs`).
+
+**Decision (maintainer, 2026-10-27):**
+
+- **The codec is an engine builtin that works on live values.** Encoding walks a JavaScript object straight into BSON bytes; decoding builds JavaScript objects straight from the bytes. No `Value` tree is built in between.
+- **It is public as `BSON` in `runtime:serialization`** (`BSON.encode`, `BSON.decode`), beside `CBOR` and `MessagePack`, with the types `ObjectId`, `Decimal128`, `Timestamp`, `MinKey`, `MaxKey`, `Code` and `UUID`. It needs no capability: bytes in, bytes out.
+- **The type mapping:** int32 and double become `number`; **int64 becomes `bigint`, always**, as the official driver does with `useBigInt64: true`. A `number` that is an integer in the int32 range encodes as int32, and any other `number` as a double; a `bigint` encodes as int64, and one outside the int64 range is a `RangeError`. `Binary` becomes `Uint8Array` (subtype 4 becomes `UUID`), datetime becomes `Date`, regular expression becomes `RegExp`, and `undefined` is omitted from a document, as JSON does.
+- **Tested against MongoDB's `bson-corpus`**, the suite every official driver runs, and fuzzed in `fuzz/`.
+
+**Rejected:**
+- **int64 as `number` (the official driver's default, `promoteLongs`).** It silently loses precision above 2^53.
+- **`number` when it fits, `bigint` otherwise.** One field could come back as two types depending on its value.
+- **The `bson` crate.** It decodes into its own document type, which is the intermediate tree this decision exists to avoid.
+
+**Consequences:** counts that the server stores as int64 arrive as `bigint` (`5n`); the API pages say so where it applies.
+
+### D188 — DNS SRV and TXT lookups in the `NetProvider` · *Accepted (2026-10-27)* · *for D186*
+
+**Context:** `mongodb+srv://`, the connection string Atlas hands out, names a DNS SRV record that lists the cluster's hosts and a TXT record that carries options. The `NetProvider` resolves a host only as part of connecting; it has no SRV or TXT lookup.
+
+**Decision (maintainer, 2026-10-27):**
+
+- **`NetProvider` gains `resolve_srv` and `resolve_txt`.** The default provider implements them; a test provider answers from a table, so the spec's seedlist tests run without a network.
+- **A lookup needs `Net`.** Every host it returns is checked against the allowlist when connected to, as any host is, so a lookup never grants a connection.
+- **The driver applies the specification's rules:** each SRV target must share the SRV name's parent domain, and TXT may set only `authSource`, `replicaSet` and `loadBalanced`. Anything else is refused.
+- **No public API yet.** A `runtime:net` `resolveDns()` (Deno has one) is a separate decision, taken when something outside the driver needs it.
+
+**Rejected:**
+- **Resolving through the system's `res_query`.** It does not exist on Windows, and it bypasses the provider seam that tests and embedders replace.
+
+**Consequences:** the default provider gains a DNS resolver dependency, whose size is recorded when phase 4 lands.
