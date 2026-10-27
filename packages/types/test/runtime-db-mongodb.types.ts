@@ -8,7 +8,13 @@ interface User {
   age?: number;
 }
 
-const client = await connect("mongodb://localhost/app", { driver: mongodb, maxPoolSize: 10 });
+const client = await connect("mongodb://a,b,c/app", {
+  driver: mongodb,
+  maxPoolSize: 10,
+  replicaSet: "rs0",
+  readPreference: "secondaryPreferred",
+  readPreferenceTags: [{ dc: "ny" }, {}],
+});
 const users: MongoCollection<User> = client.db().collection<User>("users");
 const one: unknown = (await users.insertOne({ name: "Ada" })).insertedId;
 const found: User | null = await users.findOne({ name: "Ada" });
@@ -23,6 +29,9 @@ const all: User[] = await users
   .limit(10)
   .toArray();
 for await (const user of users.find()) void user.name;
+await users.find({}, { readPreference: { mode: "secondary", maxStalenessSeconds: 120 } }).toArray();
+// @ts-expect-error — not a read preference mode.
+await users.find({}, { readPreference: "anywhere" }).toArray();
 const n: number = await users.countDocuments({}, { signal: AbortSignal.timeout(1000) });
 const reply = await client.command({ ping: 1 }, { db: "admin", timeoutMS: 500 });
 await using session = client.startSession({ causalConsistency: true });

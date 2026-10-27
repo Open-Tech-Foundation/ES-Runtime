@@ -7,12 +7,17 @@
 //! **Each command carries a ticket**, chosen by the driver, so an
 //! `AbortSignal` can reach it wherever it is: still waiting for a connection
 //! (it leaves the queue), connecting, or mid-exchange (its socket is closed,
-//! the read fails, and the connection is discarded rather than reused). A
-//! cancel that arrives before the command does is remembered, and the command
-//! does not start.
+//! and the connection is discarded rather than reused, even if the reply won
+//! the race). A cancel that arrives before the command does is remembered, and
+//! the command does not start.
 //!
-//! **Nothing here runs on its own.** There is no monitor and no reaper: an idle
-//! pool holds sockets but no pending work, so it never keeps a program alive.
+//! **A clear starts a new generation.** Idle connections close at once, and a
+//! checked-out one from an earlier generation closes when it comes back, so a
+//! server marked Unknown after a network error hands out no connection opened
+//! before it.
+//!
+//! **Nothing here runs on its own.** There is no reaper: an idle pool holds
+//! sockets but no pending work, so it never keeps a program alive.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -33,6 +38,16 @@ struct Running {
     cancelled: bool,
 }
 
+/// A failure, with what SDAM needs to judge it.
+pub(crate) struct Failed {
+    pub failure: Failure,
+    /// The pool generation the command ran in.
+    pub generation: u64,
+    /// Whether the connection had finished its handshake: a failure while
+    /// opening one is judged differently from one on an established connection.
+    pub completed_handshake: bool,
+}
+
 pub(crate) struct Pool {
     net: Arc<dyn NetProvider>,
     entropy: Arc<dyn Entropy>,
@@ -42,34 +57,33 @@ pub(crate) struct Pool {
 
 #[derive(Default)]
 struct State {
-    idle: Vec<Connection>,
+    idle: Vec<(u64, Connection)>,
     /// Open connections, idle or checked out.
     total: usize,
     waiters: VecDeque<(u64, oneshot::Sender<()>)>,
     running: HashMap<u64, Running>,
     cancelled: HashSet<u64>,
+    generation: u64,
     closed: bool,
 }
 
 impl Pool {
-    /// A pool holding `first`, the connection that proved the server reachable
-    /// and the credentials good.
+    /// An empty pool for the server `options` names.
     pub(crate) fn new(
         net: Arc<dyn NetProvider>,
         entropy: Arc<dyn Entropy>,
         options: Options,
-        first: Connection,
     ) -> Pool {
         Pool {
             net,
             entropy,
             options,
-            state: Mutex::new(State {
-                idle: vec![first],
-                total: 1,
-                ..State::default()
-            }),
+            state: Mutex::new(State::default()),
         }
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.state.lock().unwrap().generation
     }
 
     /// Runs one command on a pooled connection and returns the reply document.
@@ -78,25 +92,39 @@ impl Pool {
         ticket: u64,
         body: &[u8],
         sequence: Option<&Sequence>,
-    ) -> Result<Vec<u8>, Failure> {
-        let mut connection = self.checkout(ticket).await?;
+    ) -> Result<Vec<u8>, Failed> {
+        let (mut connection, generation) = self.checkout(ticket).await?;
         let result = connection.command(body, sequence).await;
-        self.checkin(ticket, connection).await;
-        result
+        let cancelled = self.checkin(ticket, connection, generation).await;
+        result.map_err(|failure| Failed {
+            failure: if cancelled {
+                Failure::Cancelled
+            } else {
+                failure
+            },
+            generation,
+            completed_handshake: true,
+        })
     }
 
-    async fn checkout(&self, ticket: u64) -> Result<Connection, Failure> {
+    async fn checkout(&self, ticket: u64) -> Result<(Connection, u64), Failed> {
         loop {
             let opened: Socket = Arc::new(Mutex::new(None));
-            let waiting = {
+            let (waiting, generation) = {
                 let mut state = self.state.lock().unwrap();
+                let generation = state.generation;
+                let fail = |failure| Failed {
+                    failure,
+                    generation,
+                    completed_handshake: true,
+                };
                 if state.closed {
-                    return Err(Failure::Closed);
+                    return Err(fail(Failure::Closed));
                 }
                 if state.cancelled.remove(&ticket) {
-                    return Err(Failure::Lost("the operation was cancelled".into()));
+                    return Err(fail(Failure::Cancelled));
                 }
-                if let Some(connection) = state.idle.pop() {
+                if let Some((generation, connection)) = state.idle.pop() {
                     *opened.lock().unwrap() = Some(connection.socket());
                     state.running.insert(
                         ticket,
@@ -105,7 +133,7 @@ impl Pool {
                             cancelled: false,
                         },
                     );
-                    return Ok(connection);
+                    return Ok((connection, generation));
                 }
                 if state.total < self.options.max_pool {
                     state.total += 1;
@@ -116,80 +144,97 @@ impl Pool {
                             cancelled: false,
                         },
                     );
-                    None
+                    (None, generation)
                 } else {
                     let (tx, rx) = oneshot::channel();
                     state.waiters.push_back((ticket, tx));
-                    Some(rx)
+                    (Some(rx), generation)
                 }
             };
-            match waiting {
-                // Woken by a check-in, a cancel or a close: look again.
-                Some(rx) => {
-                    let _ = rx.await;
-                }
-                None => {
-                    return match Connection::open(
-                        self.net.clone(),
-                        self.entropy.as_ref(),
-                        &self.options,
-                        &opened,
-                    )
-                    .await
-                    {
-                        Ok((connection, _)) => {
-                            // Cancelled before the socket existed to close: the
-                            // new connection is good, so it joins the pool, and
-                            // the command does not run.
-                            // Cancelled while connecting: the command does not
-                            // run, and the connection goes, since a cancel may
-                            // have closed its socket.
-                            {
-                                let mut state = self.state.lock().unwrap();
-                                if !state.running.get(&ticket).is_some_and(|r| r.cancelled) {
-                                    return Ok(connection);
-                                }
-                                state.running.remove(&ticket);
-                                state.total -= 1;
-                                wake_one(&mut state);
-                            }
-                            let mut connection = connection;
-                            connection.close().await;
-                            Err(Failure::Lost("the operation was cancelled".into()))
-                        }
-                        Err(failure) => {
-                            let mut state = self.state.lock().unwrap();
-                            state.total -= 1;
-                            state.running.remove(&ticket);
-                            wake_one(&mut state);
-                            Err(failure)
-                        }
-                    };
-                }
-            }
+            let Some(rx) = waiting else {
+                return self.open(ticket, &opened, generation).await;
+            };
+            // Woken by a check-in, a cancel, a clear or a close: look again.
+            let _ = rx.await;
         }
     }
 
-    /// Returns a connection after a command. A lost one, or any once the pool
-    /// is closed, is closed instead, and its place goes to the next waiter.
-    async fn checkin(&self, ticket: u64, mut connection: Connection) {
-        let discard = {
+    /// Opens a connection for the command with `ticket`, which holds a place in
+    /// the pool's count.
+    async fn open(
+        &self,
+        ticket: u64,
+        opened: &Socket,
+        generation: u64,
+    ) -> Result<(Connection, u64), Failed> {
+        let opening = Connection::open(
+            self.net.clone(),
+            self.entropy.as_ref(),
+            &self.options,
+            opened,
+            true,
+        )
+        .await;
+        let leftover = {
+            let mut state = self.state.lock().unwrap();
+            let cancelled = state.running.get(&ticket).is_some_and(|r| r.cancelled);
+            match opening {
+                Ok((connection, _)) if !cancelled => return Ok((connection, generation)),
+                Ok((connection, _)) => {
+                    state.running.remove(&ticket);
+                    state.total -= 1;
+                    wake_one(&mut state);
+                    connection
+                }
+                Err(failure) => {
+                    state.running.remove(&ticket);
+                    state.total -= 1;
+                    wake_one(&mut state);
+                    return Err(Failed {
+                        failure: if cancelled {
+                            Failure::Cancelled
+                        } else {
+                            failure
+                        },
+                        generation,
+                        completed_handshake: false,
+                    });
+                }
+            }
+        };
+        // Cancelled while connecting: the command does not run, and the
+        // connection goes, since the cancel may have closed its socket.
+        let mut leftover = leftover;
+        leftover.close().await;
+        Err(Failed {
+            failure: Failure::Cancelled,
+            generation,
+            completed_handshake: false,
+        })
+    }
+
+    /// Returns a connection after a command: to the idle list if it is sound,
+    /// its generation current and its command not cancelled; closed otherwise,
+    /// its place going to the next waiter. Says whether it was cancelled.
+    async fn checkin(&self, ticket: u64, mut connection: Connection, generation: u64) -> bool {
+        let cancelled = {
             let mut state = self.state.lock().unwrap();
             let cancelled = state.running.remove(&ticket).is_some_and(|r| r.cancelled);
-            let keep = connection.healthy() && !state.closed && !cancelled;
-            if !keep {
-                state.total -= 1;
-            }
-            wake_one(&mut state);
+            let keep = connection.healthy()
+                && !state.closed
+                && !cancelled
+                && generation == state.generation;
             if keep {
-                state.idle.push(connection);
-                return;
+                state.idle.push((generation, connection));
+                wake_one(&mut state);
+                return false;
             }
-            true
+            state.total -= 1;
+            wake_one(&mut state);
+            cancelled
         };
-        if discard {
-            connection.close().await;
-        }
+        connection.close().await;
+        cancelled
     }
 
     /// Stops the command with `ticket`. Returns the socket to close when it is
@@ -210,17 +255,32 @@ impl Pool {
         None
     }
 
+    /// Starts a new generation: idle connections close now, checked-out ones
+    /// when they come back.
+    pub(crate) async fn clear(&self) {
+        let idle = {
+            let mut state = self.state.lock().unwrap();
+            state.generation += 1;
+            state.total -= state.idle.len();
+            wake_all(&mut state);
+            std::mem::take(&mut state.idle)
+        };
+        for (_, mut connection) in idle {
+            connection.close().await;
+        }
+    }
+
     /// Closes the pool: idle connections now, checked-out ones as they come
     /// back. Waiting commands fail.
     pub(crate) async fn close(&self) {
         let idle = {
             let mut state = self.state.lock().unwrap();
             state.closed = true;
-            state.waiters.clear();
+            wake_all(&mut state);
             state.total -= state.idle.len();
             std::mem::take(&mut state.idle)
         };
-        for mut connection in idle {
+        for (_, mut connection) in idle {
             connection.close().await;
         }
     }
@@ -231,5 +291,11 @@ fn wake_one(state: &mut State) {
         if waiter.send(()).is_ok() {
             return;
         }
+    }
+}
+
+fn wake_all(state: &mut State) {
+    for (_, waiter) in state.waiters.drain(..) {
+        let _ = waiter.send(());
     }
 }

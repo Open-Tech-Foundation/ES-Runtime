@@ -33,8 +33,11 @@ namespace) is unstable and may change between minor releases until the API freez
   `DbError`s carrying the server's code, name and labels. Every command runs
   in a session (`client.startSession()` for an explicit one, causally
   consistent by default), with server sessions reused and `$clusterTime`
-  gossiped. Replica sets, transactions, `mongodb+srv://` and change streams
-  are not supported yet.
+  gossiped. Replica sets are discovered from any member and followed through
+  elections, with reads routed by `readPreference` (modes, tag sets,
+  `maxStalenessSeconds`); discovery, monitoring and selection pass MongoDB's
+  specification test suites. Sharded clusters, transactions, `mongodb+srv://`
+  and change streams are not supported yet.
   `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 
 ### Changed

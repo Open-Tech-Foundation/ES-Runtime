@@ -2006,8 +2006,9 @@ one, is refused rather than quietly not sharing.
 
 ### `mongodb`
 
-The built-in MongoDB driver (DECISIONS D186), for `mongodb:` URLs to one
-MongoDB 7.0 or later server. Connecting needs `Net`; `tlsCAFile` is read through
+The built-in MongoDB driver (DECISIONS D186), for `mongodb:` URLs to MongoDB
+7.0 or later: one server, or a replica set discovered from any of the hosts
+named (`replicaSet`, `directConnection`). Connecting needs `Net`; `tlsCAFile` is read through
 `runtime:fs` and needs `FileRead`. The client it returns pools connections in
 the host and is used through `db(name?)`, `command(command, { db? })`,
 `ping()` and `startSession({ causalConsistency? })`; `query`, `execute` and `transaction` refuse. A `Db` has `collection`,
@@ -2020,8 +2021,11 @@ methods: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `replaceOne`,
 `dropIndex`, `dropIndexes`, `listIndexes` and `drop`. `find` and `aggregate`
 return a cursor (`next`, `toArray`, `close`, `for await`; `sort`, `limit`,
 `skip`, `project` and `batchSize` chain before the first read). Every operation
-takes `session`, `signal` and `timeoutMS`; without a `session` it runs in an
-implicit one, and server sessions are reused. Documents are BSON (see `runtime:serialization`).
+takes `session`, `signal`, `timeoutMS` and, for reads, `readPreference` (a mode
+or `{ mode, tags, maxStalenessSeconds }`); without a `session` it runs in an
+implicit one, and server sessions are reused. When no server suits an
+operation it waits up to `serverSelectionTimeoutMS`, then fails with
+`ERR_DB_TIMEOUT`. Documents are BSON (see `runtime:serialization`).
 A server error is a `DbError` with the server's number on `backendCode` and
 `{ code, codeName, errorLabels }` on `server`. Options, results and the error
 mapping are listed on the site's MongoDB reference page.

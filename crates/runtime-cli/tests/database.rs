@@ -1478,11 +1478,13 @@ fn a_mongodb_connection_string_is_checked_before_connecting() {
         r#"
         import { connect, mongodb } from "runtime:db";
         for (const url of [
-          "mongodb://a:1,b:2/",
+          "mongodb://a:1,b:2/?directConnection=true",
           "mongodb+srv://cluster.example.com/",
           "mongodb://h/?tlsAllowInvalidCertificates=true",
-          "mongodb://h/?replicaSet=rs0",
-          "mongodb://h/?readPreference=secondary",
+          "mongodb://h/?readPreferenceTags=dc:ny",
+          "mongodb://h/?readPreference=secondary&maxStalenessSeconds=0",
+          "mongodb://h/?heartbeatFrequencyMS=100",
+          "mongodb://h/?loadBalanced=true",
           "mongodb://h/?authMechanism=MONGODB-X509",
           "mongodb://h/?maxPoolSize=many",
           "mongodb://h/?tls=true&ssl=false",
@@ -1498,14 +1500,15 @@ fn a_mongodb_connection_string_is_checked_before_connecting() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let lines: Vec<String> = stdout(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 11, "{lines:?}");
+    assert_eq!(lines.len(), 13, "{lines:?}");
     for line in &lines {
         assert!(line.starts_with("ERR_DB_UNSUPPORTED |"), "{line}");
     }
-    assert!(lines[0].contains("one server"), "{}", lines[0]);
+    assert!(lines[0].contains("more than one host"), "{}", lines[0]);
     assert!(lines[1].contains("mongodb+srv"), "{}", lines[1]);
     assert!(lines[2].contains("certificate checks"), "{}", lines[2]);
-    assert!(lines[10].contains("bogus"), "{}", lines[10]);
+    assert!(lines[3].contains("primary"), "{}", lines[3]);
+    assert!(lines[12].contains("bogus"), "{}", lines[12]);
 }
 
 #[test]

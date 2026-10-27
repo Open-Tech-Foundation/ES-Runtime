@@ -182,6 +182,14 @@ env = { PATH = "../../../target/release:${PATH}" }
 # BSON. Fetches the pinned checkout first (gitignored: the specifications are
 # CC BY-NC-SA, so they are not committed), then fails on any case that is not a
 # listed difference.
+# MongoDB's server discovery and monitoring, server selection and max
+# staleness suites against the driver's pure state machines. Fetches the
+# pinned checkout; MONGODB_SPECS_REQUIRED turns a missing one into a failure
+# rather than a skip.
+[tasks."test:mongodb-specs"]
+run = "./mongodb-specs/fetch.sh && cargo test -p es-runtime --lib mongodb::spec_tests"
+env = { MONGODB_SPECS_REQUIRED = "1" }
+
 [tasks."test:bson-corpus"]
 run = "./mongodb-specs/fetch.sh && cargo build -p es-runtime-cli && ./target/debug/esrun --allow-read mongodb-specs/bson-corpus.js"
 

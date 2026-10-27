@@ -26,6 +26,14 @@ const MONGO_DIALECT = new Dialect({
 const MONGO_DEFAULT_PORT = 27017;
 const MONGO_DEFAULT_POOL = 100;
 const MONGO_DEFAULT_CONNECT_TIMEOUT = 30_000;
+const MONGO_DEFAULT_SELECTION_TIMEOUT = 30_000;
+const MONGO_DEFAULT_HEARTBEAT = 10_000;
+const MONGO_DEFAULT_LOCAL_THRESHOLD = 15;
+// How soon a server may be checked again while an operation waits for one.
+const MONGO_MIN_HEARTBEAT = 500;
+const MONGO_MODES = new Map(
+  ["primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest"].map((m) => [m.toLowerCase(), m]),
+);
 // The room an insert's command and framing take beside its documents.
 const MONGO_COMMAND_OVERHEAD = 16 * 1024;
 
@@ -91,10 +99,14 @@ const MONGO_OPTION_NAMES = new Map(
     "compressors",
     "connectTimeoutMS",
     "directConnection",
+    "heartbeatFrequencyMS",
     "journal",
+    "localThresholdMS",
     "maxPoolSize",
+    "maxStalenessSeconds",
     "readConcernLevel",
     "readPreference",
+    "readPreferenceTags",
     "replicaSet",
     "retryReads",
     "retryWrites",
@@ -151,14 +163,19 @@ function parseMongoConnectionString(url, options = {}) {
   const database = slash >= 0 && slash + 1 < rest.length ? decodeURIComponent(rest.slice(slash + 1)) : null;
 
   const settings = {
-    host: "",
-    port: MONGO_DEFAULT_PORT,
+    hosts: [],
     user: null,
     password: null,
     database,
     tls: false,
     maxPoolSize: MONGO_DEFAULT_POOL,
     connectTimeoutMS: MONGO_DEFAULT_CONNECT_TIMEOUT,
+    serverSelectionTimeoutMS: MONGO_DEFAULT_SELECTION_TIMEOUT,
+    heartbeatFrequencyMS: MONGO_DEFAULT_HEARTBEAT,
+    localThresholdMS: MONGO_DEFAULT_LOCAL_THRESHOLD,
+    replicaSet: null,
+    directConnection: false,
+    readPreference: { mode: "primary", tags: [], maxStalenessSeconds: null },
   };
 
   if (userinfo !== null) {
@@ -174,34 +191,33 @@ function parseMongoConnectionString(url, options = {}) {
     settings.password = password === null ? null : decodeURIComponent(password);
   }
 
-  const hosts = hostList.split(",");
-  if (hosts.length !== 1) {
-    throw mongoBad(
-      "this driver connects to one server; replica sets and sharded clusters are not supported yet",
-    );
-  }
-  const host = hosts[0];
-  if (host === "") throw mongoBad(`${url} names no host`);
-  if (/%2f|\.sock$/i.test(host)) throw mongoBad("Unix-socket connections are not supported yet");
-  const ipv6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(host);
-  const named = ipv6 ? null : /^([^:]+)(?::(\d+))?$/.exec(host);
-  const parts = ipv6 ?? named;
-  if (!parts) throw mongoBad(`${host} is not a host and port`);
-  settings.host = parts[1];
-  if (parts[2] !== undefined) {
-    const port = Number(parts[2]);
-    if (!(port >= 1 && port <= 65535)) throw mongoBad(`${parts[2]} is not a port`);
-    settings.port = port;
+  for (const host of hostList.split(",")) {
+    if (host === "") throw mongoBad(`${url} names an empty host`);
+    if (/%2f|\.sock$/i.test(host)) throw mongoBad("Unix-socket connections are not supported yet");
+    const ipv6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(host);
+    const parts = ipv6 ?? /^([^:]+)(?::(\d+))?$/.exec(host);
+    if (!parts) throw mongoBad(`${host} is not a host and port`);
+    let port = MONGO_DEFAULT_PORT;
+    if (parts[2] !== undefined) {
+      port = Number(parts[2]);
+      if (!(port >= 1 && port <= 65535)) throw mongoBad(`${parts[2]} is not a port`);
+    }
+    const name = parts[1].toLowerCase();
+    settings.hosts.push(ipv6 ? `[${name}]:${port}` : `${name}:${port}`);
   }
 
   const given = {};
+  const tagSets = [];
   for (const pair of query.split("&")) {
     if (pair === "") continue;
     const eq = pair.indexOf("=");
     const key = decodeURIComponent(eq >= 0 ? pair.slice(0, eq) : pair);
     const value = eq >= 0 ? decodeURIComponent(pair.slice(eq + 1)) : "";
-    given[key] = value;
+    // The one option that may repeat: each is a tag set, tried in order.
+    if (key.toLowerCase() === "readpreferencetags") tagSets.push(mongoTagSet(value));
+    else given[key] = value;
   }
+  if (tagSets.length > 0) given.readPreferenceTags = tagSets;
   // Options passed to connect() win over the URL's.
   const { auth, ca, ...rest2 } = options;
   Object.assign(given, rest2);
@@ -217,7 +233,55 @@ function parseMongoConnectionString(url, options = {}) {
     mongoOption(settings, name, value);
   }
   settings.authSource ??= settings.database ?? "admin";
+  if (settings.directConnection && settings.hosts.length > 1) {
+    throw mongoBad("directConnection=true cannot name more than one host");
+  }
+  mongoCheckPreference(settings.readPreference);
   return settings;
+}
+
+/// `dc:ny,rack:1` as `{ dc: "ny", rack: "1" }`; empty is `{}`, any server.
+function mongoTagSet(text) {
+  const set = {};
+  for (const pair of String(text).split(",")) {
+    if (pair === "") continue;
+    const colon = pair.indexOf(":");
+    if (colon <= 0) throw mongoBad(`${text} is not a tag set like dc:ny,rack:1`);
+    set[pair.slice(0, colon)] = pair.slice(colon + 1);
+  }
+  return set;
+}
+
+/// A read preference from what a caller passes: a mode name, or
+/// `{ mode, tags, maxStalenessSeconds }`.
+function mongoPreference(value) {
+  if (typeof value === "string") value = { mode: value };
+  if (value === null || typeof value !== "object") {
+    throw new TypeError("a read preference is a mode name or { mode, tags, maxStalenessSeconds }");
+  }
+  const mode = MONGO_MODES.get(String(value.mode ?? "primary").toLowerCase());
+  if (mode === undefined) throw mongoBad(`${value.mode} is not a read preference mode`);
+  const preference = {
+    mode,
+    tags: value.tags ?? [],
+    maxStalenessSeconds: value.maxStalenessSeconds ?? null,
+  };
+  mongoCheckPreference(preference);
+  return preference;
+}
+
+function mongoCheckPreference(preference) {
+  const { mode, tags, maxStalenessSeconds } = preference;
+  if (!Array.isArray(tags)) throw new TypeError("read preference tags are an array of tag sets");
+  if (mode === "primary" && tags.some((t) => Object.keys(t).length > 0)) {
+    throw mongoBad("tag sets cannot be used with read preference primary");
+  }
+  if (maxStalenessSeconds !== null && maxStalenessSeconds !== -1) {
+    if (!Number.isInteger(maxStalenessSeconds) || maxStalenessSeconds <= 0) {
+      throw mongoBad("maxStalenessSeconds must be a positive whole number, or -1 for none");
+    }
+    if (mode === "primary") throw mongoBad("maxStalenessSeconds cannot be used with read preference primary");
+  }
 }
 
 function mongoOption(settings, name, value) {
@@ -272,22 +336,40 @@ function mongoOption(settings, name, value) {
       settings.timeoutMS = mongoCount(name, value);
       return;
     case "serverSelectionTimeoutMS":
-      // One server: there is nothing to select between, so the connect timeout
-      // is what bounds reaching it.
-      mongoCount(name, value);
+      settings.serverSelectionTimeoutMS = mongoCount(name, value);
+      return;
+    case "heartbeatFrequencyMS": {
+      const n = mongoCount(name, value);
+      if (n < MONGO_MIN_HEARTBEAT) throw mongoBad(`heartbeatFrequencyMS must be at least ${MONGO_MIN_HEARTBEAT}`);
+      settings.heartbeatFrequencyMS = n;
+      return;
+    }
+    case "localThresholdMS":
+      settings.localThresholdMS = mongoCount(name, value);
       return;
     case "directConnection":
-      mongoBoolean(name, value);
+      settings.directConnection = mongoBoolean(name, value);
       return;
     case "replicaSet":
-      throw mongoBad(
-        "replica sets are not supported yet; connect to one member, with directConnection=true",
-      );
-    case "readPreference":
-      if (String(value) !== "primary") {
-        throw mongoBad(`readPreference ${value} needs replica-set support, which is not available yet`);
-      }
+      settings.replicaSet = String(value);
       return;
+    case "readPreference": {
+      const mode = MONGO_MODES.get(String(value).toLowerCase());
+      if (mode === undefined) throw mongoBad(`${value} is not a read preference mode`);
+      settings.readPreference = { ...settings.readPreference, mode };
+      return;
+    }
+    case "readPreferenceTags":
+      settings.readPreference = {
+        ...settings.readPreference,
+        tags: Array.isArray(value) ? value.map((t) => (typeof t === "string" ? mongoTagSet(t) : t)) : [mongoTagSet(value)],
+      };
+      return;
+    case "maxStalenessSeconds": {
+      const n = Number(value);
+      settings.readPreference = { ...settings.readPreference, maxStalenessSeconds: n === -1 ? null : n };
+      return;
+    }
     case "retryReads":
     case "retryWrites":
       // Accepted so that Atlas's connection strings work; nothing is retried
@@ -338,8 +420,9 @@ async function openMongo(url, options = {}) {
   try {
     const password = settings.password ?? "";
     result = await ops.mongo_connect(
-      settings.host,
-      settings.port,
+      settings.hosts,
+      settings.directConnection,
+      settings.replicaSet,
       settings.tls,
       ca,
       settings.user,
@@ -349,21 +432,47 @@ async function openMongo(url, options = {}) {
       settings.authMechanism ?? null,
       settings.appName ?? null,
       settings.maxPoolSize,
+      settings.heartbeatFrequencyMS,
+      settings.localThresholdMS,
       ticket,
     );
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
-  if (result.error !== undefined) {
+  if (result.error !== undefined) throw mongoFailure(result.error);
+  // No seed answered at all: say so now, rather than have the first operation
+  // wait out serverSelectionTimeoutMS for a deployment that is not there.
+  if (!result.topology.servers.some((server) => server.type !== "Unknown")) {
+    await ops.mongo_close(result.id).catch(() => {});
     if (timedOut) {
       throw dbError(
-        `connecting to ${settings.host}:${settings.port} took longer than connectTimeoutMS (${settings.connectTimeoutMS} ms)`,
+        `connecting to ${settings.hosts.join(", ")} took longer than connectTimeoutMS (${settings.connectTimeoutMS} ms)`,
         DbErrorCode.Timeout,
       );
     }
-    throw mongoFailure(result.error);
+    if (result.topology.servers.length === 0) {
+      // Every seed answered, and none belongs: a replica set by another name,
+      // or a mix of servers no one deployment has.
+      throw dbError(
+        settings.replicaSet === null
+          ? "the seeds do not form one deployment"
+          : `no seed is a member of replica set ${settings.replicaSet}`,
+        DbErrorCode.ConnectionLost,
+      );
+    }
+    const why = result.topology.servers.map((server) => `${server.address}: ${server.error ?? "no answer"}`);
+    throw dbError(`no server answered: ${why.join("; ")}`, DbErrorCode.ConnectionLost);
   }
-  return new MongoConnection(result, settings);
+  const client = new MongoConnection(result, settings);
+  // Opening a pooled connection authenticates, so wrong credentials fail at
+  // connect rather than at the first operation.
+  try {
+    await client._run("admin", { ping: 1 }, { readPreference: "nearest" });
+  } catch (e) {
+    await client.close().catch(() => {});
+    throw e;
+  }
+  return client;
 }
 
 // -- sessions -------------------------------------------------------------------
@@ -464,6 +573,12 @@ class MongoSession {
   }
 }
 
+// Commands that write, and so go to a primary (or a mongos).
+const MONGO_WRITES = new Set([
+  "insert", "update", "delete", "findAndModify", "create", "drop", "dropDatabase", "createIndexes",
+  "dropIndexes", "collMod", "renameCollection", "commitTransaction", "abortTransaction",
+]);
+
 // Reads that wait for an explicit causally consistent session's last write.
 const MONGO_CAUSAL_READS = new Set(["find", "aggregate", "count", "distinct"]);
 
@@ -475,16 +590,39 @@ class MongoConnection extends BaseConnection {
     super({ dialect: MONGO_DIALECT, backend: "mongodb" });
     this._id = result.id;
     this._settings = settings;
-    const hello = MongoBSON.decode(result.hello);
-    this._maxMessageSize = result.maxMessageSize;
-    this._maxBsonObjectSize = Number(hello.maxBsonObjectSize ?? 16 * 1024 * 1024);
-    this._maxWriteBatchSize = Number(hello.maxWriteBatchSize ?? 100_000);
-    // Present when the server has sessions; every server this driver speaks
-    // to does, but a standalone can be configured without.
-    this._sessionTimeout =
-      hello.logicalSessionTimeoutMinutes == null ? null : Number(hello.logicalSessionTimeoutMinutes);
     this._sessions = new MongoServerSessionPool();
     this._clusterTime = null;
+    this._checking = null;
+    this._applyTopology(result.topology);
+    // Servers are checked every heartbeat from an unreferenced timer: a program
+    // that has finished its work exits without closing the client.
+    this._heartbeat = setInterval(() => this._check(), settings.heartbeatFrequencyMS);
+    globalThis.__timer_ref?.(this._heartbeat, false);
+  }
+
+  _applyTopology(topology) {
+    this._topology = topology;
+    this._maxMessageSize = topology.maxMessageSizeBytes;
+    this._maxBsonObjectSize = topology.maxBsonObjectSize;
+    this._maxWriteBatchSize = topology.maxWriteBatchSize;
+    // The smallest any data-bearing server reports; null when one has no
+    // sessions, and then no session is sent.
+    this._sessionTimeout = topology.logicalSessionTimeoutMinutes;
+  }
+
+  /// Checks every server now. One check at a time: a caller arriving during
+  /// one waits for it.
+  _check() {
+    this._checking ??= ops
+      .mongo_check(this._id)
+      .then((topology) => {
+        if (topology.error === undefined) this._applyTopology(topology);
+      })
+      .catch(() => {})
+      .finally(() => {
+        this._checking = null;
+      });
+    return this._checking;
   }
 
   /// Starts an explicit session. Pass it as `{ session }` to the operations it
@@ -522,6 +660,7 @@ class MongoConnection extends BaseConnection {
   }
 
   async _close() {
+    clearInterval(this._heartbeat);
     // Tell the server the pooled sessions are finished with, as the sessions
     // specification asks; a failure here changes nothing for the caller.
     const ids = this._sessions.drain();
@@ -599,6 +738,13 @@ class MongoConnection extends BaseConnection {
         body.readConcern = { ...body.readConcern, afterClusterTime: session.operationTime };
       }
     }
+    const preference =
+      options.readPreference !== undefined
+        ? mongoPreference(options.readPreference)
+        : options._inheritPreference
+          ? this._settings.readPreference
+          : { mode: "primary", tags: [], maxStalenessSeconds: null };
+    const kind = options._kind ?? (MONGO_WRITES.has(name) ? "write" : "read");
     const clusterTime = mongoTimestampAfter(session?.clusterTime?.clusterTime, this._clusterTime?.clusterTime)
       ? session.clusterTime
       : this._clusterTime;
@@ -608,9 +754,11 @@ class MongoConnection extends BaseConnection {
 
     const ticket = mongoTicket++;
     let stopped = null;
+    let wake = null;
     const stop = (reason) => {
       if (stopped !== null) return;
       stopped = reason;
+      wake?.();
       ops.mongo_cancel(this._id, ticket).catch(() => {});
     };
     const onAbort = () => stop(signal.reason);
@@ -622,28 +770,57 @@ class MongoConnection extends BaseConnection {
             timeoutMS,
           )
         : null;
-    let reply;
+    // Server selection: when no server can take the command, check the
+    // deployment again and retry until serverSelectionTimeoutMS, as the server
+    // selection specification has a client wait.
+    const selectionTimeout = this._settings.serverSelectionTimeoutMS;
+    const deadline = Date.now() + selectionTimeout;
+    let ran;
     try {
-      reply = await ops.mongo_command(
-        this._id,
-        bytes,
-        ticket,
-        sequence?.name ?? null,
-        sequence?.documents ?? null,
-      );
+      for (;;) {
+        ran = await ops.mongo_command(
+          this._id,
+          bytes,
+          ticket,
+          sequence?.name ?? null,
+          sequence?.documents ?? null,
+          preference.mode,
+          preference.tags.length > 0 ? preference.tags : null,
+          preference.maxStalenessSeconds,
+          kind,
+          options._pin ?? null,
+        );
+        if (ran.error?.kind !== "selection" || stopped !== null || Date.now() >= deadline) break;
+        await this._check();
+        if (stopped !== null) break;
+        await new Promise((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, Math.max(0, Math.min(MONGO_MIN_HEARTBEAT, deadline - Date.now())));
+        });
+        wake = null;
+      }
     } finally {
       if (timer !== null) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
     // A command stopped mid-flight or lost with its connection may have left
     // the server session in an unknown state, so it is not reused.
-    if (server !== null && (stopped !== null || (!(reply instanceof Uint8Array) && reply.error.kind === "lost"))) {
+    if (server !== null && (stopped !== null || ran.error?.kind === "lost")) {
       server.dirty = true;
     }
     // Stopped while it ran is stopped, however the command ended.
     if (stopped !== null) throw stopped;
-    if (!(reply instanceof Uint8Array)) throw mongoFailure(reply.error);
-    const doc = MongoBSON.decode(reply);
+    if (ran.error?.kind === "selection") {
+      throw dbError(
+        `no server could take the operation within serverSelectionTimeoutMS (${selectionTimeout} ms): ${ran.error.message}`,
+        DbErrorCode.Timeout,
+      );
+    }
+    if (ran.error !== undefined) throw mongoFailure(ran.error);
+    // A state-change error asks for the deployment to be checked now.
+    if (ran.recheck) this._check();
+    if (options._served !== undefined) options._served.server = ran.server;
+    const doc = MongoBSON.decode(ran.reply);
     this._gossip(doc, session);
     if (doc.ok !== 1) throw mongoServerError(doc);
     return doc;
@@ -679,7 +856,12 @@ class MongoDb {
 
   /// A database-level aggregation (`$currentOp`, `$documents`, …).
   aggregate(pipeline = [], options = {}) {
-    return new MongoCursor(this, null, () => mongoAggregateCommand(1, pipeline, options, this.client), options);
+    return new MongoCursor(
+      this,
+      null,
+      () => mongoAggregateCommand(1, pipeline, options, this.client),
+      mongoReadOptions(pipeline, options),
+    );
   }
 
   listCollections(filter = {}, options = {}) {
@@ -692,7 +874,7 @@ class MongoDb {
         ...mongoPick(options, ["nameOnly", "authorizedCollections", "comment"]),
         cursor: options.batchSize === undefined ? {} : { batchSize: options.batchSize },
       }),
-      options,
+      { ...options, _inheritPreference: true },
     );
   }
 
@@ -729,6 +911,15 @@ function mongoWriteConcern(client, options) {
 function mongoReadConcern(client, options) {
   const readConcern = options.readConcern ?? client._settings.readConcern;
   return readConcern === undefined ? {} : { readConcern };
+}
+
+/// Options for a cursor's commands: a read follows the client's read
+/// preference unless the call gives its own, and an aggregation ending in
+/// `$out` or `$merge` is a write.
+function mongoReadOptions(pipeline, options) {
+  const last = pipeline?.at(-1);
+  const writes = last !== undefined && last !== null && ("$out" in last || "$merge" in last);
+  return writes ? { ...options, _kind: "write" } : { ...options, _inheritPreference: true };
 }
 
 function mongoAggregateCommand(target, pipeline, options, client) {
@@ -1038,7 +1229,7 @@ class MongoCollection {
         "maxTimeMS", "max", "min", "returnKey", "showRecordId", "allowDiskUse", "collation", "let",
       ]),
       ...mongoReadConcern(this.db.client, o),
-    }), options);
+    }), { ...options, _inheritPreference: true });
   }
 
   async findOne(filter = {}, options = {}) {
@@ -1055,7 +1246,7 @@ class MongoCollection {
       this.db,
       this,
       (o) => mongoAggregateCommand(this.collectionName, pipeline, o, this.db.client),
-      options,
+      mongoReadOptions(pipeline, options),
     );
   }
 
@@ -1071,7 +1262,7 @@ class MongoCollection {
   async estimatedDocumentCount(options = {}) {
     const reply = await this._run(
       { count: this.collectionName, ...mongoPick(options, ["comment", "maxTimeMS"]), ...mongoReadConcern(this.db.client, options) },
-      options,
+      { ...options, _inheritPreference: true },
     );
     return Number(reply.n);
   }
@@ -1085,7 +1276,7 @@ class MongoCollection {
         ...mongoPick(options, ["collation", "comment", "hint", "maxTimeMS"]),
         ...mongoReadConcern(this.db.client, options),
       },
-      options,
+      { ...options, _inheritPreference: true },
     );
     return reply.values;
   }
@@ -1155,7 +1346,7 @@ class MongoCollection {
     return new MongoCursor(this.db, this, () => ({
       listIndexes: this.collectionName,
       cursor: options.batchSize === undefined ? {} : { batchSize: options.batchSize },
-    }), options);
+    }), { ...options, _inheritPreference: true });
   }
 
   /// Drops the collection. Since MongoDB 7.0 dropping one that is not there
@@ -1186,10 +1377,16 @@ class MongoCursor {
     // Without a caller's session, a cursor holds an implicit one from its first
     // command until it is exhausted or closed, so every getMore runs in it.
     this._implicit = null;
+    this._server = null;
   }
 
+  /// Options for the cursor's commands: its session, and after the first,
+  /// the server it lives on, where every getMore and killCursors must go.
   get #commandOptions() {
-    return this._implicit === null ? this._options : { ...this._options, _cursorSession: this._implicit };
+    const options = { ...this._options };
+    if (this._implicit !== null) options._cursorSession = this._implicit;
+    if (this._server !== null) options._pin = this._server;
+    return options;
   }
 
   async #endImplicit() {
@@ -1238,7 +1435,9 @@ class MongoCursor {
         }
         let reply;
         try {
-          reply = await this._db.command(this._command(this._options), this.#commandOptions);
+          const served = {};
+          reply = await this._db.command(this._command(this._options), { ...this.#commandOptions, _served: served });
+          this._server = served.server ?? null;
         } catch (e) {
           await this.#endImplicit();
           throw e;

@@ -36,6 +36,8 @@ export type {
   MongoSession,
   MongoUpdateOptions,
   MongoWriteOptions,
+  ReadPreference,
+  ReadPreferenceMode,
   UpdateFilter,
   UpdateResult,
   WriteConcern,

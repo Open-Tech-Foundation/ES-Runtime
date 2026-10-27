@@ -12,8 +12,9 @@ import { connect, mongodb } from "runtime:db";
 import { BSON } from "runtime:serialization";
 ```
 
-`mongodb` takes `mongodb:` URLs for one MongoDB 7.0 or later server. Its
-protocol and connection pool run in the runtime. Documents are BSON: the types
+`mongodb` takes `mongodb:` URLs for MongoDB 7.0 or later: one server, or a
+replica set. Its protocol, server monitoring and connection pools run in the
+runtime. Documents are BSON: the types
 and how JavaScript values map to them are in
 [`runtime:serialization`](/api/serialization#bson). The
 [`@opentf/esrun-mongodb`](https://www.npmjs.com/package/@opentf/esrun-mongodb)
@@ -26,7 +27,9 @@ package re-exports the driver as `driver`, with the BSON classes and the types.
 
 ## Connection options
 
-`mongodb://[user[:password]@]host[:port][/database][?options]`. Options passed
+`mongodb://[user[:password]@]host[:port][,host[:port]…][/database][?options]`.
+The hosts are seeds: from any member the client discovers the rest of the
+replica set. Options passed
 to `connect()` win over the URL's. An option not listed here is refused with
 `ERR_DB_UNSUPPORTED` rather than ignored.
 
@@ -44,19 +47,33 @@ to `connect()` win over the URL's. An option not listed here is refused with
 | `timeoutMS` | `number` | — | A deadline for every operation, unless the call gives its own. |
 | `w`, `journal`, `wtimeoutMS` | | — | The write concern sent with every write. |
 | `readConcernLevel` | `string` | — | The read concern sent with every read. |
-| `readPreference` | `"primary"` | `primary` | Other preferences need replica-set support. |
+| `replicaSet` | `string` | — | The set's name. Members of another set are dropped; without it, the set is discovered. |
+| `directConnection` | `boolean` | `false` | Use the one host named, whatever it is, without discovering others. Not with several hosts. |
+| `readPreference` | mode | `primary` | Where collection reads go: `primary`, `primaryPreferred`, `secondary`, `secondaryPreferred` or `nearest`. |
+| `readPreferenceTags` | `{ [tag]: string }[]` | — | Tag sets, tried in order; in a URL, repeat `readPreferenceTags=dc:ny,rack:1`, an empty one matching any member. |
+| `maxStalenessSeconds` | `number` | none | Secondaries estimated further behind are not read from. At least 90; `-1` is none. |
+| `serverSelectionTimeoutMS` | `number` | `30000` | How long an operation waits for a suitable server. |
+| `heartbeatFrequencyMS` | `number` | `10000` | How often servers are checked; at least 500. |
+| `localThresholdMS` | `number` | `15` | How much slower than the fastest suitable server another may be and still be chosen. |
 | `retryWrites`, `retryReads` | `boolean` | | Accepted; nothing is retried yet. |
-| `directConnection`, `serverSelectionTimeoutMS`, `compressors` | | | Accepted; one server is always a direct connection, and compression is not negotiated yet. |
+| `compressors` | `string` | | Accepted; compression is not negotiated yet. |
 
-Refused with `ERR_DB_UNSUPPORTED`: more than one host, `mongodb+srv://`,
-`replicaSet`, a Unix socket, an authentication mechanism other than SCRAM, and
-`tlsInsecure`, `tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` set
-to `true`.
+Refused with `ERR_DB_UNSUPPORTED`: `mongodb+srv://`, `loadBalanced`, a Unix
+socket, an authentication mechanism other than SCRAM, a read preference that
+contradicts itself (tags or staleness with `primary`), and `tlsInsecure`,
+`tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` set to `true`.
+
+`connect()` checks the seeds and every member they name, then opens one
+authenticated connection, so a wrong password or an unreachable deployment
+fails there. When no seed answers at all it fails at once with
+`ERR_DB_CONNECTION_LOST`, rather than waiting out `serverSelectionTimeoutMS`.
 
 ## The client
 
-`connect(url, { driver: mongodb })` returns a client: a pool of connections to
-the server.
+`connect(url, { driver: mongodb })` returns a client: what it knows of the
+deployment, a pool of connections to each server, and a check of every server
+each `heartbeatFrequencyMS`. The checks run from an unreferenced timer, so a
+program that has finished exits without `close()`.
 
 | Member | Returns | Meaning |
 | --- | --- | --- |
@@ -76,6 +93,27 @@ Every operation below takes `session`, `signal` (an `AbortSignal`) and
 connection, or on the server, whose connection is then closed rather than
 reused. The rejection carries the signal's reason, or a `DbError` with
 `ERR_DB_TIMEOUT`. `timeoutMS` is also sent to the server as `maxTimeMS`.
+
+## Replica sets and read preference
+
+Writes go to the primary. A read goes where its read preference allows: the
+call's `readPreference` option, or for collection reads (`find`, `aggregate`,
+counts, `distinct`, listings) the client's. `command()` runs on the primary
+unless its options say otherwise, as `runCommand` does. A cursor's `getMore`s
+go to the member that opened it.
+
+Among the members a read may use, one is chosen from those whose average
+round trip is within `localThresholdMS` of the fastest, preferring the one
+running fewer operations. When none is suitable — no primary during an
+election, or no member matching the tags — the operation checks the deployment
+again and retries until `serverSelectionTimeoutMS`, then fails with
+`ERR_DB_TIMEOUT`. A network error marks that member unavailable and closes its
+pooled connections; a "not writable primary" or "node is recovering" error
+makes the client check the deployment at once.
+
+Discovery, monitoring and selection follow MongoDB's server discovery and
+monitoring and server selection specifications, and pass their test suites
+(`tsr test:mongodb-specs`).
 
 ## Sessions
 

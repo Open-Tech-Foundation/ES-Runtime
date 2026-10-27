@@ -218,7 +218,8 @@ jobs:
   # both server versions it supports. The servers are started by hand rather than
   # as services: the cancellation tests need `--setParameter
   # enableTestCommands=1` for `sleep`, and a service cannot take arguments. A
-  # second server has access control on, for the authentication tests.
+  # second server has access control on, for the authentication tests, and a
+  # three-member replica set (test/replica-set.sh) runs the replica-set tests.
   mongodb:
     name: mongodb driver (${{ matrix.mongo }})
     needs: changes
@@ -265,6 +266,10 @@ jobs:
           }
           wait_for mongodb://127.0.0.1:27017/
           wait_for mongodb://root:esrun@127.0.0.1:27018/
+      - run: echo "MONGODB_RS_URL=$(packages/mongodb/test/replica-set.sh ${{ matrix.mongo }})" >> "$GITHUB_ENV"
+      # The discovery, monitoring and selection specification suites, fetched
+      # at their pinned revision.
+      - run: tsr test:mongodb-specs
       - run: tsr test:mongodb
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun

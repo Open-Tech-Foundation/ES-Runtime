@@ -11,6 +11,11 @@
 //! `runtime:net`.
 
 mod pool;
+pub(crate) mod sdam;
+pub(crate) mod select;
+#[cfg(test)]
+mod spec_tests;
+mod topology;
 mod wire;
 
 use std::sync::Arc;
@@ -21,7 +26,7 @@ use es_runtime_providers::{ConnectOptions, Entropy, NetProvider, ProviderError};
 
 use crate::scram::{Hash, Scram};
 
-pub(crate) use pool::Pool;
+pub(crate) use topology::{Selector, Topology};
 pub(crate) use wire::Sequence;
 
 /// MongoDB 7.0's wire version: the oldest server this driver speaks to.
@@ -65,6 +70,10 @@ pub(crate) enum Failure {
     Unsupported(String),
     /// The pool was closed.
     Closed,
+    /// The command was stopped by a cancel.
+    Cancelled,
+    /// No server can take the operation now; the message says why.
+    Selection(String),
     /// The provider refused to connect — an address outside the allowlist.
     Refused(ProviderError),
 }
@@ -72,9 +81,8 @@ pub(crate) enum Failure {
 /// What `hello` said that the driver acts on.
 #[derive(Clone)]
 pub(crate) struct Server {
-    /// The whole `hello` reply, for JavaScript.
+    /// The whole `hello` reply.
     pub hello: Vec<u8>,
-    pub max_message: usize,
 }
 
 pub(crate) struct Connection {
@@ -87,7 +95,8 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    /// Opens a connection, completes the handshake and authenticates; a failure
+    /// Opens a connection and completes the handshake, authenticating when
+    /// `authenticate` is set (a monitoring connection does not); a failure
     /// closes the socket before it returns. `opened` learns the socket id as soon
     /// as there is one, so a timeout or a cancel can close it.
     pub(crate) async fn open(
@@ -95,6 +104,7 @@ impl Connection {
         entropy: &dyn Entropy,
         options: &Options,
         opened: &std::sync::Mutex<Option<u64>>,
+        authenticate: bool,
     ) -> Result<(Connection, Server), Failure> {
         let (socket, _) = net
             .connect(
@@ -118,7 +128,7 @@ impl Connection {
             max_message: wire::DEFAULT_MAX_MESSAGE,
             fatal: None,
         };
-        match connection.handshake(entropy, options).await {
+        match connection.handshake(entropy, options, authenticate).await {
             Ok(server) => Ok((connection, server)),
             Err(failure) => {
                 connection.close().await;
@@ -136,12 +146,20 @@ impl Connection {
         self.fatal.is_none()
     }
 
+    /// Checks the server again on an open connection: its `hello` reply.
+    pub(crate) async fn hello(&mut self) -> Result<Vec<u8>, Failure> {
+        self.command(&plain_hello()?, None).await
+    }
+
     async fn handshake(
         &mut self,
         entropy: &dyn Entropy,
         options: &Options,
+        authenticate: bool,
     ) -> Result<Server, Failure> {
-        let hello = self.command(&hello_command(options)?, None).await?;
+        let hello = self
+            .command(&hello_command(options, authenticate)?, None)
+            .await?;
         let doc = Document::new(&hello)
             .map_err(|e| Failure::Lost(format!("the server's hello is malformed: {e}")))?;
         check_ok(&doc)?;
@@ -154,7 +172,7 @@ impl Connection {
         if let Some(max) = int(&doc, "maxMessageSizeBytes").and_then(|n| usize::try_from(n).ok()) {
             self.max_message = max;
         }
-        if let Some(user) = &options.user {
+        if let (true, Some(user)) = (authenticate, &options.user) {
             let offered = strings(&doc, "saslSupportedMechs");
             let mechanism = match options.mechanism.as_deref() {
                 Some(m) => m.to_string(),
@@ -168,10 +186,7 @@ impl Connection {
             self.authenticate(entropy, options, user, &mechanism)
                 .await?;
         }
-        Ok(Server {
-            hello,
-            max_message: self.max_message,
-        })
+        Ok(Server { hello })
     }
 
     async fn authenticate(
@@ -326,7 +341,7 @@ struct Sasl {
 
 /// The first `hello`: the client's metadata, and, when it will authenticate,
 /// a request for the mechanisms this user may use.
-fn hello_command(options: &Options) -> Result<Vec<u8>, Failure> {
+fn hello_command(options: &Options, authenticate: bool) -> Result<Vec<u8>, Failure> {
     let bad = |e: es_runtime_bson::Error| Failure::Unsupported(e.to_string());
     let mut w = Writer::new();
     w.start_document().map_err(bad)?;
@@ -359,11 +374,24 @@ fn hello_command(options: &Options) -> Result<Vec<u8>, Failure> {
     w.string(concat!("esrun ", env!("CARGO_PKG_VERSION")))
         .map_err(bad)?;
     w.end_document().map_err(bad)?;
-    if let (Some(user), None) = (&options.user, &options.mechanism) {
+    if let (true, Some(user), None) = (authenticate, &options.user, &options.mechanism) {
         w.key(kind::STRING, "saslSupportedMechs").map_err(bad)?;
         w.string(&format!("{}.{user}", options.auth_source))
             .map_err(bad)?;
     }
+    w.key(kind::STRING, "$db").map_err(bad)?;
+    w.string("admin").map_err(bad)?;
+    w.end_document().map_err(bad)?;
+    w.finish().map_err(bad)
+}
+
+/// A later `hello`, without the handshake's client metadata.
+fn plain_hello() -> Result<Vec<u8>, Failure> {
+    let bad = |e: es_runtime_bson::Error| Failure::Unsupported(e.to_string());
+    let mut w = Writer::new();
+    w.start_document().map_err(bad)?;
+    w.key(kind::INT32, "hello").map_err(bad)?;
+    w.int32(1);
     w.key(kind::STRING, "$db").map_err(bad)?;
     w.string("admin").map_err(bad)?;
     w.end_document().map_err(bad)?;
@@ -500,7 +528,7 @@ mod tests {
 
     #[test]
     fn hello_names_the_driver_and_asks_for_mechanisms_only_when_it_will_negotiate() {
-        let bytes = hello_command(&options(Some("u"), None)).unwrap();
+        let bytes = hello_command(&options(Some("u"), None), true).unwrap();
         let doc = Document::new(&bytes).unwrap();
         assert_eq!(doc.iter().next().unwrap().unwrap().0, "hello");
         assert_eq!(
@@ -516,7 +544,16 @@ mod tests {
         };
         assert_eq!(driver.get("name").unwrap(), Some(Element::String("esrun")));
 
-        let bytes = hello_command(&options(Some("u"), Some("SCRAM-SHA-1"))).unwrap();
+        let bytes = hello_command(&options(Some("u"), Some("SCRAM-SHA-1")), true).unwrap();
+        assert_eq!(
+            Document::new(&bytes)
+                .unwrap()
+                .get("saslSupportedMechs")
+                .unwrap(),
+            None
+        );
+        // A monitoring connection does not authenticate, so does not ask.
+        let bytes = hello_command(&options(Some("u"), None), false).unwrap();
         assert_eq!(
             Document::new(&bytes)
                 .unwrap()

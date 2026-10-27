@@ -609,8 +609,22 @@ declare module "runtime:db" {
     connectTimeoutMS?: number;
     /** A deadline for every operation, unless the call gives its own. */
     timeoutMS?: number;
+    /** How long an operation waits for a suitable server. Default 30000. */
     serverSelectionTimeoutMS?: number;
+    /** Connect to the one host named, whatever it is. */
     directConnection?: boolean;
+    /** The replica set's name; members of another set are ignored. */
+    replicaSet?: string;
+    /** How often servers are checked. Default 10000; at least 500. */
+    heartbeatFrequencyMS?: number;
+    /** How much slower than the fastest a server may be and still be chosen. Default 15. */
+    localThresholdMS?: number;
+    /** The default read preference for reads. */
+    readPreference?: ReadPreferenceMode;
+    /** Tag sets for the read preference, tried in order. */
+    readPreferenceTags?: Record<string, string>[];
+    /** Secondaries further behind than this are not read from; at least 90. */
+    maxStalenessSeconds?: number;
     retryWrites?: boolean;
     retryReads?: boolean;
     compressors?: string;
@@ -618,8 +632,14 @@ declare module "runtime:db" {
     journal?: boolean;
     wtimeoutMS?: number;
     readConcernLevel?: string;
-    readPreference?: "primary";
   }
+
+  export type ReadPreferenceMode = "primary" | "primaryPreferred" | "secondary" | "secondaryPreferred" | "nearest";
+
+  /** Which members of a replica set a read may go to. */
+  export type ReadPreference =
+    | ReadPreferenceMode
+    | { mode: ReadPreferenceMode; tags?: Record<string, string>[]; maxStalenessSeconds?: number };
 
   /** A MongoDB document. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -658,6 +678,11 @@ declare module "runtime:db" {
     signal?: AbortSignal;
     /** A deadline for this operation, in milliseconds. */
     timeoutMS?: number;
+    /**
+     * Where a read may go. Collection reads default to the client's; a
+     * command runs on the primary unless this says otherwise.
+     */
+    readPreference?: ReadPreference;
   }
 
   export interface WriteConcern {

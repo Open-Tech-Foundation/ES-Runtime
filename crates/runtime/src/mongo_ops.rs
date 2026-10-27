@@ -6,7 +6,7 @@
 //! ownership check on the client id (D50); a command is one op; and failures
 //! resolve to `{ error }` for the driver to turn into a `DbError`, except a
 //! refusal by the provider, which throws as `runtime:net`'s does. The id names
-//! a pool, not a connection: the pool picks one inside each command.
+//! a topology: the servers it knows, a pool for each, and their monitors.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,11 +18,10 @@ use es_runtime_providers::{Entropy, NetProvider};
 
 use crate::Result;
 use crate::handles::Handles;
-use crate::mongodb::{Connection, Failure, Options, Pool, Sequence};
+use crate::mongodb::select::{Mode, Operation, ReadPreference};
+use crate::mongodb::{Failure, Options, Selector, Sequence, Topology};
 
-type Pools = Arc<Mutex<HashMap<u64, Arc<Pool>>>>;
-/// The socket a connect in flight has opened so far, by the driver's ticket.
-type Connecting = Arc<Mutex<HashMap<u64, Arc<Mutex<Option<u64>>>>>>;
+type Topologies = Arc<Mutex<HashMap<u64, Arc<Topology>>>>;
 
 pub(crate) fn install(
     engine: &mut dyn Engine,
@@ -31,103 +30,139 @@ pub(crate) fn install(
     inventory: &crate::handles::Inventory,
 ) -> Result<()> {
     let owned = inventory.track(Handles::new("MongoDB client"));
-    let pools: Pools = Arc::new(Mutex::new(HashMap::new()));
+    let topologies: Topologies = Arc::new(Mutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicU64::new(1));
-    let connecting: Connecting = Arc::new(Mutex::new(HashMap::new()));
+    // A topology still making its first checks, by the connect's ticket.
+    let connecting: Topologies = Arc::new(Mutex::new(HashMap::new()));
 
-    // Args: [host, port, tls, ca (bytes), user (or null), password,
-    // passwordPrepared, authSource, mechanism (or null), appName (or null),
-    // maxPoolSize, ticket]. Opens the first connection — which proves the
-    // server and the credentials — and the pool around it.
+    // Args: [seeds (array of host:port), directConnection, replicaSet (or
+    // null), tls, ca (bytes), user (or null), password, passwordPrepared,
+    // authSource, mechanism (or null), appName (or null), maxPoolSize,
+    // heartbeatFrequencyMS, localThresholdMS, ticket]. Checks every seed, and
+    // every server they name, before it answers with the topology.
     {
         let net = net.clone();
         let owned = owned.clone();
-        let pools = pools.clone();
+        let topologies = topologies.clone();
         let connecting = connecting.clone();
         engine.register_op(
             OpDecl::r#async("mongo_connect", move |args| {
                 let net = net.clone();
                 let entropy = entropy.clone();
                 let owned = owned.clone();
-                let pools = pools.clone();
+                let topologies = topologies.clone();
                 let next_id = next_id.clone();
                 let connecting = connecting.clone();
+                let seeds: Vec<String> = match args.first() {
+                    Some(Value::Array(list)) => list
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let direct = matches!(args.get(1), Some(Value::Bool(true)));
+                let set_name = args.get(2).and_then(Value::as_str).map(str::to_string);
                 let options = Options {
-                    host: arg_str(&args, 0),
-                    port: u16::try_from(arg_u64(&args, 1)).unwrap_or(27017),
-                    tls: matches!(args.get(2), Some(Value::Bool(true))),
+                    host: String::new(),
+                    port: 27017,
+                    tls: matches!(args.get(3), Some(Value::Bool(true))),
                     ca: args
-                        .get(3)
+                        .get(4)
                         .and_then(Value::as_bytes)
                         .unwrap_or(&[])
                         .to_vec(),
-                    user: args.get(4).and_then(Value::as_str).map(str::to_string),
-                    password: arg_str(&args, 5),
-                    password_prepared: arg_str(&args, 6),
-                    auth_source: arg_str(&args, 7),
-                    mechanism: args.get(8).and_then(Value::as_str).map(str::to_string),
-                    app_name: args.get(9).and_then(Value::as_str).map(str::to_string),
-                    max_pool: usize::try_from(arg_u64(&args, 10)).unwrap_or(1).max(1),
+                    user: args.get(5).and_then(Value::as_str).map(str::to_string),
+                    password: arg_str(&args, 6),
+                    password_prepared: arg_str(&args, 7),
+                    auth_source: arg_str(&args, 8),
+                    mechanism: args.get(9).and_then(Value::as_str).map(str::to_string),
+                    app_name: args.get(10).and_then(Value::as_str).map(str::to_string),
+                    max_pool: usize::try_from(arg_u64(&args, 11)).unwrap_or(1).max(1),
                 };
-                let ticket = arg_u64(&args, 11);
+                let heartbeat = i64::try_from(arg_u64(&args, 12)).unwrap_or(10_000);
+                #[expect(clippy::cast_precision_loss, reason = "milliseconds")]
+                let local_threshold = arg_u64(&args, 13) as f64;
+                let ticket = arg_u64(&args, 14);
                 Box::pin(async move {
                     let net = require(&net)?;
-                    let opened = Arc::new(Mutex::new(None));
-                    connecting.lock().unwrap().insert(ticket, opened.clone());
-                    let result =
-                        Connection::open(net.clone(), entropy.as_ref(), &options, &opened).await;
+                    let topology = Arc::new(Topology::new(
+                        net,
+                        entropy,
+                        options,
+                        &seeds,
+                        direct,
+                        set_name,
+                        heartbeat,
+                        local_threshold,
+                    ));
+                    connecting.lock().unwrap().insert(ticket, topology.clone());
+                    let checked = topology.check_all().await;
                     connecting.lock().unwrap().remove(&ticket);
-                    match result {
-                        Ok((connection, server)) => {
-                            let id = next_id.fetch_add(1, Ordering::Relaxed);
-                            let pool = Pool::new(net, entropy, options, connection);
-                            pools.lock().unwrap().insert(id, Arc::new(pool));
-                            Ok(Value::Object(vec![
-                                ("id".to_string(), Value::Number(owned.own(id) as f64)),
-                                ("hello".to_string(), Value::Bytes(server.hello)),
-                                (
-                                    "maxMessageSize".to_string(),
-                                    Value::Number(server.max_message as f64),
-                                ),
-                            ]))
-                        }
-                        Err(failure) => answer(failure),
+                    if let Err(failure) = checked {
+                        topology.close().await;
+                        return answer(failure);
                     }
+                    let id = next_id.fetch_add(1, Ordering::Relaxed);
+                    let summary = topology.summary();
+                    topologies.lock().unwrap().insert(id, topology);
+                    Ok(Value::Object(vec![
+                        ("id".to_string(), Value::Number(owned.own(id) as f64)),
+                        ("topology".to_string(), summary),
+                    ]))
                 })
             })
             .requires(Capability::Net),
         )?;
     }
 
-    // Args: [ticket]. Gives up on a connect in progress by closing its socket.
+    // Args: [ticket]. Gives up on a connect in progress by closing its checks'
+    // sockets.
     {
         let net = net.clone();
-        let connecting = connecting.clone();
         engine.register_op(OpDecl::r#async("mongo_abort_connect", move |args| {
             let net = net.clone();
-            let socket = connecting
-                .lock()
-                .unwrap()
-                .get(&arg_u64(&args, 0))
-                .and_then(|opened| *opened.lock().unwrap());
+            let topology = connecting.lock().unwrap().get(&arg_u64(&args, 0)).cloned();
             Box::pin(async move {
-                if let (Some(socket), Some(net)) = (socket, net) {
-                    let _ = net.close(socket).await;
+                if let (Some(topology), Some(net)) = (topology, net) {
+                    for socket in topology.checking_sockets() {
+                        let _ = net.close(socket).await;
+                    }
                 }
                 Ok(Value::Undefined)
             })
         }))?;
     }
 
-    // Args: [id, body (a BSON command), ticket, sequence name (or null),
-    // sequence documents (an array of BSON documents, or null)]. The reply
-    // document's bytes, whatever its `ok`.
+    // Args: [id]. Checks every server now, and answers with the topology.
     {
         let owned = owned.clone();
-        let pools = pools.clone();
+        let topologies = topologies.clone();
+        engine.register_op(OpDecl::r#async("mongo_check", move |args| {
+            let owned = owned.clone();
+            let topologies = topologies.clone();
+            let id = arg_u64(&args, 0);
+            Box::pin(async move {
+                let topology = lookup(&owned, &topologies, id)?;
+                match topology.check_all().await {
+                    // A server outside the allowlist stays Unknown with that error.
+                    Ok(()) | Err(Failure::Refused(_)) => Ok(topology.summary()),
+                    Err(failure) => answer(failure),
+                }
+            })
+        }))?;
+    }
+
+    // Args: [id, body (a BSON command), ticket, sequence name (or null),
+    // sequence documents (or null), read preference mode, tag sets (or null),
+    // maxStalenessSeconds (or null), "read" or "write", server (or null)].
+    // `{ reply, server, recheck }`, or `{ error }`.
+    {
+        let owned = owned.clone();
+        let topologies = topologies.clone();
         engine.register_op(OpDecl::r#async("mongo_command", move |args| {
             let owned = owned.clone();
-            let pools = pools.clone();
+            let topologies = topologies.clone();
             let id = arg_u64(&args, 0);
             let body = args
                 .get(1)
@@ -145,30 +180,58 @@ pub(crate) fn install(
                 }),
                 _ => None,
             };
+            let selector = Selector {
+                preference: ReadPreference {
+                    mode: args
+                        .get(5)
+                        .and_then(Value::as_str)
+                        .and_then(Mode::parse)
+                        .unwrap_or(Mode::Primary),
+                    tag_sets: tag_sets(args.get(6)),
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "seconds the driver checked"
+                    )]
+                    max_staleness_seconds: args.get(7).and_then(Value::as_number).map(|n| n as i64),
+                },
+                operation: if args.get(8).and_then(Value::as_str) == Some("write") {
+                    Operation::Write
+                } else {
+                    Operation::Read
+                },
+                server: args.get(9).and_then(Value::as_str).map(str::to_string),
+            };
             Box::pin(async move {
-                let pool = lookup(&owned, &pools, id)?;
-                match pool.command(ticket, &body, sequence.as_ref()).await {
-                    Ok(reply) => Ok(Value::Bytes(reply)),
+                let topology = lookup(&owned, &topologies, id)?;
+                match topology
+                    .run(ticket, body, sequence.as_ref(), &selector)
+                    .await
+                {
+                    Ok(ran) => Ok(Value::Object(vec![
+                        ("reply".to_string(), Value::Bytes(ran.reply)),
+                        ("server".to_string(), Value::String(ran.server)),
+                        ("recheck".to_string(), Value::Bool(ran.recheck)),
+                    ])),
                     Err(failure) => answer(failure),
                 }
             })
         }))?;
     }
 
-    // Args: [id, ticket]. Stops that command wherever it is (see `Pool::cancel`).
+    // Args: [id, ticket]. Stops that command wherever it is.
     {
         let owned = owned.clone();
-        let pools = pools.clone();
+        let topologies = topologies.clone();
         let net = net.clone();
         engine.register_op(OpDecl::r#async("mongo_cancel", move |args| {
             let owned = owned.clone();
-            let pools = pools.clone();
+            let topologies = topologies.clone();
             let net = net.clone();
             let id = arg_u64(&args, 0);
             let ticket = arg_u64(&args, 1);
             Box::pin(async move {
-                let pool = lookup(&owned, &pools, id)?;
-                if let (Some(socket), Some(net)) = (pool.cancel(ticket), net) {
+                let topology = lookup(&owned, &topologies, id)?;
+                if let (Some(socket), Some(net)) = (topology.cancel(ticket), net) {
                     let _ = net.close(socket).await;
                 }
                 Ok(Value::Undefined)
@@ -176,17 +239,17 @@ pub(crate) fn install(
         }))?;
     }
 
-    // Args: [id]. Closes the pool and gives the id up.
+    // Args: [id]. Closes every pool and monitor and gives the id up.
     {
         engine.register_op(OpDecl::r#async("mongo_close", move |args| {
             let owned = owned.clone();
-            let pools = pools.clone();
+            let topologies = topologies.clone();
             let id = arg_u64(&args, 0);
             Box::pin(async move {
                 let id = owned.check_and_release(id)?;
-                let pool = pools.lock().unwrap().remove(&id);
-                if let Some(pool) = pool {
-                    pool.close().await;
+                let topology = topologies.lock().unwrap().remove(&id);
+                if let Some(topology) = topology {
+                    topology.close().await;
                 }
                 Ok(Value::Undefined)
             })
@@ -196,9 +259,29 @@ pub(crate) fn install(
     Ok(())
 }
 
-fn lookup(owned: &Handles, pools: &Pools, id: u64) -> std::result::Result<Arc<Pool>, OpError> {
+/// Tag sets as `[{ dc: "ny" }, {}]`.
+fn tag_sets(value: Option<&Value>) -> Vec<Vec<(String, String)>> {
+    let Some(Value::Array(sets)) = value else {
+        return Vec::new();
+    };
+    sets.iter()
+        .map(|set| match set {
+            Value::Object(fields) => fields
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn lookup(
+    owned: &Handles,
+    topologies: &Topologies,
+    id: u64,
+) -> std::result::Result<Arc<Topology>, OpError> {
     let id = owned.check(id)?;
-    pools.lock().unwrap().get(&id).cloned().ok_or_else(|| {
+    topologies.lock().unwrap().get(&id).cloned().ok_or_else(|| {
         OpError::new(ExceptionClass::Error, "the client is closed").with_code(ErrorCode::Io)
     })
 }
@@ -219,7 +302,9 @@ fn answer(failure: Failure) -> std::result::Result<Value, OpError> {
         Failure::Lost(message) => ("lost", message, None),
         Failure::Auth(message) => ("auth", message, None),
         Failure::Unsupported(message) => ("unsupported", message, None),
+        Failure::Selection(message) => ("selection", message, None),
         Failure::Closed => ("closed", "the client is closed".to_string(), None),
+        Failure::Cancelled => ("cancelled", "the operation was cancelled".to_string(), None),
     };
     let mut error = vec![
         ("kind".to_string(), Value::String(kind.to_string())),

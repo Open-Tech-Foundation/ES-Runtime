@@ -24,8 +24,9 @@ and examples carry over: `insertOne`, `find`, `updateMany`, `aggregate`,
 `bulkWrite`, `createIndex`. Every option and result is on the
 [MongoDB reference](/api/db/mongodb).
 
-It connects to one MongoDB 7.0 or later server. Replica sets, sharded clusters,
-transactions, `mongodb+srv://` and change streams are not supported yet.
+It connects to MongoDB 7.0 or later: one server or a replica set. Sharded
+clusters, transactions, `mongodb+srv://` and change streams are not supported
+yet.
 
 ## Permissions
 
@@ -149,9 +150,42 @@ await orders.insertOne(order, { session });
 const placed = await orders.findOne({ _id: order._id }, { session });
 ```
 
+## Replica sets
+
+List one or more members and name the set; the client finds the rest and
+follows elections:
+
+```js
+const client = await connect(
+  "mongodb://db1.internal,db2.internal/app?replicaSet=rs0",
+  { driver: mongodb },
+);
+```
+
+Writes go to the primary. Reads do too, unless you say otherwise, for the whole
+client or for one read:
+
+```js
+const reports = await connect(url, { driver: mongodb, readPreference: "secondaryPreferred" });
+
+const nearby = await orders
+  .find({ day }, { readPreference: { mode: "nearest", tags: [{ dc: "eu" }] } })
+  .toArray();
+```
+
+A read from a secondary may not see the latest writes; `maxStalenessSeconds`
+keeps reads off secondaries that have fallen behind.
+
+During an election there is briefly no primary. Writes wait for the new one, up
+to `serverSelectionTimeoutMS` (30 seconds by default), and then proceed. To
+reach one member and nothing else, use `directConnection=true`.
+
+Every member must be reachable under the name the set's configuration gives it,
+and allowed by `--allow-net`.
+
 ## Pool size
 
-A client keeps a pool of connections, 100 at most by default. Set
+A client keeps a pool of connections to each server, 100 at most by default. Set
 `maxPoolSize` in the URL or the options, or `pool: { max }` in `connect()`.
 Operations past that wait for a connection; `signal` and `timeoutMS` stop the
 wait too. An idle client keeps nothing running, so a program that has finished

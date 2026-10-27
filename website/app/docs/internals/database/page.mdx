@@ -136,6 +136,15 @@ the one op a command already is, so a pool in the host adds no crossing. And
 MongoDB has no prepared statements, so there is no protocol state that wants the
 same connection twice.
 
+A client is a topology: what it knows of every server, kept by the rules of
+MongoDB's discovery and monitoring specification, with a pool per server. The
+rules are pure functions over that state, so the specification's own test suite
+drives them without a network. The I/O around them never schedules itself. The
+driver checks every server from an unreferenced timer each heartbeat, and when
+no server suits an operation the op says so at once and the driver rechecks and
+retries until `serverSelectionTimeoutMS`. Every deadline is a JavaScript timer,
+and an idle client has nothing pending.
+
 What the host pool buys is cancellation that reaches everywhere. Each command
 carries a ticket, so an `AbortSignal` or a timeout finds it still queued for a
 connection (it leaves the queue), connecting, or waiting on the server (its
@@ -215,7 +224,7 @@ not a gate.
 
 ## What is not here yet
 
-- **MongoDB beyond one server.** Replica sets and transactions, `mongodb+srv://`,
+- **More of MongoDB.** Transactions and retried operations, `mongodb+srv://`,
   sharded clusters, compression, change streams, and authentication other than
   SCRAM (DECISIONS D186).
 - **Zero-copy at the op boundary.** Batches are copied across today; that is the
