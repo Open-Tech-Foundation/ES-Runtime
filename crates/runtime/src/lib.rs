@@ -7302,6 +7302,34 @@ mod tests {
         assert!(console_line("console.log(new Map([['k', 1]]))").contains("Map(1) { 'k' => 1 }"));
     }
 
+    #[test]
+    fn console_uses_a_class_s_custom_inspect() {
+        let hook = "const I = Symbol.for('nodejs.util.inspect.custom');";
+        // A string is printed as it is, nested too.
+        let line = console_line(&format!(
+            "{hook} class Id {{ [I]() {{ return 'Id(7)'; }} }} console.log(new Id(), [new Id()])"
+        ));
+        assert_eq!(line.trim(), "Id(7) [ Id(7) ]");
+        // Anything else is inspected in its place; returning itself does not loop.
+        assert!(
+            console_line(&format!(
+                "{hook} console.log({{ [I]() {{ return {{ a: 1 }}; }} }})"
+            ))
+            .contains("{ a: 1 }")
+        );
+        assert!(
+            console_line(&format!(
+                "{hook} const o = {{ x: 1, [I]() {{ return this; }} }}; console.log(o)"
+            ))
+            .contains("x: 1")
+        );
+        // A secret's redaction comes before any hook.
+        assert!(console_line(&format!(
+            "{hook} console.log({{ [Symbol.for('runtime.secret.redacted')]: true, [I]() {{ return 'leak'; }} }})"
+        ))
+        .contains("[redacted]"));
+    }
+
     // ---- runtime:system (child processes, DECISIONS D37) --------------------
 
     /// What a spawn asked for, recorded so a test can assert on the *seam*

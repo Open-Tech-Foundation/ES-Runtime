@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `console.log` uses a class's `Symbol.for("nodejs.util.inspect.custom")`
+  method, the convention Node, Bun and Deno share, so BSON values print as
+  `ObjectId("…")` and `Decimal128("9.99")` rather than `ObjectId {}`. A secret's
+  redaction still comes first.
+- The MongoDB guide marks the driver **beta** and lists what works today and
+  what is in the pipeline before it is called production-ready.
 - `resolveDns(name, type, { nameServer?, signal? })` in `runtime:net`: DNS
   lookups of A, AAAA, CAA, CNAME, MX, NAPTR, NS, PTR, SOA, SRV and TXT records,
   in Deno's shape (D188). It needs `net`; a scoped `--allow-net` permits a

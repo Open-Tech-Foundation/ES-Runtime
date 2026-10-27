@@ -15,6 +15,7 @@
   // Objects carrying this global-registry marker (e.g. runtime:process Secrets)
   // render as "[redacted]" so secret values never leak into console output.
   const REDACTED_MARK = Symbol.for("runtime.secret.redacted");
+  const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
 
   function quote(s) {
     return (
@@ -77,6 +78,28 @@
       if (value[REDACTED_MARK] === true) return "[redacted]";
     } catch {
       /* exotic getters may throw; fall through to normal formatting */
+    }
+
+    // A class's own rendering, by the convention Node, Bun and Deno share:
+    // `[Symbol.for("nodejs.util.inspect.custom")](depth, options, inspect)`.
+    // After redaction, so a hook cannot unmask a secret. A string is printed
+    // as it is; anything else is inspected in its place, unless it is the
+    // value itself, which would recurse.
+    let custom;
+    try {
+      custom = value[INSPECT_CUSTOM];
+    } catch {
+      custom = undefined;
+    }
+    if (typeof custom === "function") {
+      seen.add(value);
+      try {
+        const shown = custom.call(value, depth, { depth }, (v) => inspect(v, seen, depth - 1));
+        if (typeof shown === "string") return shown;
+        if (shown !== value) return inspect(shown, seen, depth);
+      } finally {
+        seen.delete(value);
+      }
     }
 
     if (value instanceof Error) return value.stack || value.name + ": " + value.message;
