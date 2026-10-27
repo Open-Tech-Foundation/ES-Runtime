@@ -3842,7 +3842,7 @@ argument list is never silently dropped.
 | `stdin` | `"null" \| "piped" \| "inherit"`, or a body | `"null"` | A body — string, bytes, `Blob`, `Response`, or `ReadableStream` — is written to the child and stdin then closed. |
 | `stdout` / `stderr` | `"piped" \| "inherit" \| "null"` | `"piped"` | How the output is connected. |
 | `signal` | `AbortSignal` | — | Aborting kills the child; `output()` rejects with the abort reason. |
-| `timeout` | `number` (ms) | — | Kill the child after this long. `output()` rejects with a `TimeoutError`. |
+| `timeout` | `number` (ms) | — | Kill the child this long after each spawn. `output()` rejects with a `TimeoutError`. A child that exits first leaves no timer running. |
 | `killSignal` | `SignalName` | `"SIGTERM"` | The signal used by `kill()`, a timeout, or an abort. |
 | `maxBuffer` | `number` (bytes) | `16777216` | `output()` only: past this, the child is killed and the call throws `ERR_MAX_BUFFER`. |
 

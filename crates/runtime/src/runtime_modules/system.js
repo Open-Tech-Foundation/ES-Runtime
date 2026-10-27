@@ -186,6 +186,9 @@ function concat(chunks, total) {
 // module-scoped symbol rather than a public name: the two classes need one
 // word between them, and everything else about a ChildProcess is private.
 const TAKE_STDIN = Symbol("takeStdin");
+// How `Command` learns that a child it is timing has exited, so it can give up
+// the timer and the listener: a finished child leaves nothing behind.
+const ON_EXIT = Symbol("onExit");
 
 // A spawned process. Its streams are the web ones: `stdout`/`stderr` are pulled
 // from the host chunk by chunk (real backpressure — a child that outruns its
@@ -201,6 +204,7 @@ class ChildProcess {
   #openStreams;
   #streams;
   #stdinTaken;
+  #onExit;
 
   constructor(id, pid, options) {
     this.#id = id;
@@ -220,6 +224,7 @@ class ChildProcess {
     this.#streams = { stdin: null, stdout: null, stderr: null };
     // Set when a body given as `stdin` has taken the writable over.
     this.#stdinTaken = false;
+    this.#onExit = [];
   }
 
   // The streams are built on first use, not at spawn. A ReadableStream starts
@@ -252,11 +257,16 @@ class ChildProcess {
   // and the program can still exit (it is killed on the way out).
   get status() {
     if (this.#status === null) {
+      const exited = () => {
+        for (const fn of this.#onExit.splice(0)) fn();
+      };
       this.#status = ops.system_wait(this.#id).then((status) => {
         this.#exited = true;
         this.#maybeRelease();
+        exited();
         return status;
       });
+      this.#status.catch(exited);
     }
     return this.#status;
   }
@@ -337,6 +347,10 @@ class ChildProcess {
     this.#stdinTaken = true;
   }
 
+  [ON_EXIT](fn) {
+    this.#onExit.push(fn);
+  }
+
   #maybeRelease() {
     if (this.#released || !this.#exited || this.#openStreams > 0) return;
     this.#released = true;
@@ -384,6 +398,7 @@ class Command {
   #killSignal;
   #maxBuffer;
   #signal;
+  #timeout;
 
   constructor(program, options = {}) {
     // `new Command("ls", ["-l"])` is Node's `spawn(cmd, args)` shape. An array
@@ -416,7 +431,8 @@ class Command {
     this.#stderr = checkStdio("stderr", options.stderr, "piped");
     this.#killSignal = options.killSignal ?? "SIGTERM";
     this.#maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
-    this.#signal = abortSignal(options.signal, options.timeout);
+    this.#signal = checkSignal(options.signal);
+    this.#timeout = checkTimeout(options.timeout);
   }
 
   // Starts the child and resolves once it is running. Async — unlike Deno's
@@ -424,6 +440,13 @@ class Command {
   // program, permission denied) belongs to this call, not to a stream or a
   // status settled later.
   async spawn() {
+    return (await this.#start()).child;
+  }
+
+  // The child, and what stops it. Each run has its own deadline, counted from
+  // its own start: a command built early or run twice still gives each child
+  // the whole `timeout`.
+  async #start() {
     this.#signal?.throwIfAborted();
     const { id, pid } = await ops.system_spawn({
       program: this.#program,
@@ -440,7 +463,7 @@ class Command {
       stdout: this.#stdout,
       stderr: this.#stderr,
     });
-    if (this.#signal) watchAbort(this.#signal, child);
+    const stop = stopOn(child, this.#signal, this.#timeout);
     if (this.#input) {
       // Feed the given body in, then close stdin. Detached: a child that stops
       // reading (a `head`, a failed filter) breaks the pipe, and that must not
@@ -451,15 +474,14 @@ class Command {
         .pipeTo(sink)
         .catch(() => {});
     }
-    return child;
+    return { child, stop };
   }
 
   // Runs to completion and collects the output: the 90% case. Piped output is
   // read while the child runs — never after it exits — so a child that fills
   // its pipe cannot deadlock against a parent that is waiting for it.
   async output() {
-    const child = await this.spawn();
-    const abort = this.#signal;
+    const { child, stop } = await this.#start();
     const [stdout, stderr, status] = await Promise.all([
       this.#collect(child, child.stdout),
       this.#collect(child, child.stderr),
@@ -467,7 +489,7 @@ class Command {
     ]);
     // An abort races the child's own exit; if it fired, the reason is what the
     // caller asked to hear about, not the exit status that resulted from it.
-    abort?.throwIfAborted();
+    stop?.throwIfStopped();
     return { success: status.success, code: status.code, signal: status.signal, stdout, stderr };
   }
 
@@ -496,25 +518,60 @@ class Command {
   }
 }
 
-// The signal that ends the child: the caller's, a timeout, or both.
-function abortSignal(signal, timeout) {
+function checkSignal(signal) {
   if (signal !== undefined && !(signal instanceof AbortSignal)) {
     throw new TypeError("signal must be an AbortSignal");
   }
-  if (timeout === undefined) return signal ?? null;
+  return signal ?? null;
+}
+
+function checkTimeout(timeout) {
+  if (timeout === undefined) return null;
   if (typeof timeout !== "number" || !(timeout > 0)) {
     throw new TypeError("timeout must be a positive number of milliseconds");
   }
-  const deadline = AbortSignal.timeout(timeout);
-  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+  return timeout;
 }
 
-function watchAbort(signal, child) {
-  const kill = () => {
+// Kills the child when the caller's signal fires or its timeout passes,
+// whichever comes first, and gives both up when the child exits. The timer is
+// unreferenced: like a child nobody waits on, it is no reason on its own for
+// the program to stay running.
+function stopOn(child, signal, timeout) {
+  if (signal === null && timeout === null) return null;
+  let stopped = false;
+  let reason;
+  let timer = null;
+  const release = () => {
+    if (timer !== null) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  };
+  const stop = (why) => {
+    if (stopped) return;
+    stopped = true;
+    reason = why;
+    release();
     child.kill().catch(() => {});
   };
-  if (signal.aborted) kill();
-  else signal.addEventListener("abort", kill, { once: true });
+  const onAbort = () => stop(signal.reason);
+  if (signal !== null) {
+    // It may have fired while the child was starting, when nobody listened.
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  if (timeout !== null && !stopped) {
+    timer = setTimeout(
+      () => stop(new DOMException(`the command timed out after ${timeout}ms`, "TimeoutError")),
+      timeout,
+    );
+    globalThis.__timer_ref(timer, false);
+  }
+  child[ON_EXIT](release);
+  return {
+    throwIfStopped() {
+      if (stopped) throw reason;
+    },
+  };
 }
 
 export { Command, ChildProcess };

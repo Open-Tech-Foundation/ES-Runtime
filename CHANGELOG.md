@@ -27,6 +27,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `u128` comparisons that were not constant-time). It reaches the runtime
   through `digest`, under `crypto.subtle`'s Ed25519, X25519 and HMAC. `cargo
   audit` passes again.
+- A `Command` `timeout` no longer holds the program open after the child
+  exits: running `true` with `timeout: 5000` kept the process alive for the full
+  five seconds. The deadline now starts at each spawn rather than when the
+  `Command` is built, so a command built early or run twice gives every child
+  the whole timeout, and it is cleared when the child exits.
+- `AbortSignal.timeout()` no longer keeps the process alive on its own, matching
+  Node, Deno and Bun. Work still in flight holds the process open, and the
+  deadline fires while it does.
 - Aborting a `runtime:db` statement now rejects with the signal's reason even
   when the cancelled statement ends in a result rather than an error. MySQL 8.4
   ends a killed `SELECT SLEEP(5)` with the row `1`, which used to resolve as

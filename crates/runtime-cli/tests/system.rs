@@ -293,6 +293,51 @@ try {
     assert!(s.contains("TimeoutError true"), "{s}");
 }
 
+/// A timeout ends with its child: a child that finished first leaves no timer
+/// holding the program open.
+#[test]
+fn a_timeout_is_given_up_when_the_child_exits() {
+    let started = std::time::Instant::now();
+    let s = run(
+        "sys_timeout_done.mjs",
+        r#"
+import { Command } from "runtime:system";
+const out = await new Command("true", { timeout: 20_000 }).output();
+console.log("exited", out.success);
+"#,
+    );
+    assert!(s.contains("exited true"), "{s}");
+    let lived = started.elapsed();
+    assert!(lived < std::time::Duration::from_secs(10), "{lived:?}");
+}
+
+/// Each run counts its timeout from its own start, so a command built early, or
+/// run more than once, still gives every child the whole budget.
+#[test]
+fn a_timeout_counts_from_each_spawn() {
+    let s = run(
+        "sys_timeout_each.mjs",
+        r#"
+import { Command } from "runtime:system";
+const cmd = new Command("sleep", { args: ["0.1"], timeout: 400 });
+await new Promise((r) => setTimeout(r, 600));
+console.log("first", (await cmd.output()).success);
+console.log("second", (await cmd.output()).success);
+try {
+  await new Command("sleep", { args: ["30"], timeout: 100 }).output();
+} catch (e) {
+  console.log(e.name, e.message);
+}
+"#,
+    );
+    assert!(s.contains("first true"), "{s}");
+    assert!(s.contains("second true"), "{s}");
+    assert!(
+        s.contains("TimeoutError the command timed out after 100ms"),
+        "{s}"
+    );
+}
+
 #[test]
 fn an_abort_signal_kills_the_child() {
     let s = run(

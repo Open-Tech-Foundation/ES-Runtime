@@ -76,13 +76,18 @@
       return signal;
     }
 
+    // The timer is unreferenced, as in Node, Deno and Bun: a deadline on work
+    // that has finished is no reason for the program to keep running. Work
+    // still in flight holds the program open by itself, and the deadline fires
+    // while it does.
     static timeout(milliseconds) {
       const signal = new AbortSignal(INTERNAL);
-      setTimeout(() => {
+      const id = setTimeout(() => {
         signal._signalAbort(
           new DOMException("signal timed out", "TimeoutError"),
         );
       }, milliseconds);
+      globalThis.__timer_ref?.(id, false);
       return signal;
     }
 

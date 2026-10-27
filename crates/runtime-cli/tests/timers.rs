@@ -96,6 +96,28 @@ fn an_unreferenced_timeout_alone_does_not_keep_the_process() {
     assert!(lived < Duration::from_secs(5), "{lived:?}");
 }
 
+/// `AbortSignal.timeout`'s deadline is unreferenced, as in Node, Deno and Bun:
+/// once the work it guarded is done, it is no reason to keep running. Work still
+/// in flight holds the process, and the deadline fires during it.
+#[test]
+fn an_abort_signal_timeout_holds_the_process_only_while_work_does() {
+    let (out, lived) = run(
+        "abort-timeout",
+        r#"
+        const idle = AbortSignal.timeout(10_000);
+        idle.onabort = () => console.log("idle fired");
+        const busy = AbortSignal.timeout(50);
+        await new Promise((resolve) => {
+          busy.onabort = () => { console.log("busy fired"); resolve(); };
+          setTimeout(resolve, 2_000);
+        });
+        console.log("done");
+        "#,
+    );
+    assert_eq!(out, ["busy fired", "done"]);
+    assert!(lived < Duration::from_secs(5), "{lived:?}");
+}
+
 #[test]
 fn only_a_timer_id_is_accepted_and_a_spent_one_is_left_alone() {
     let (out, _) = run(
