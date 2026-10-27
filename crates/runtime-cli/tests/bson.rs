@@ -280,6 +280,34 @@ console.log(BSON.encode(ok).length > 0);
 }
 
 #[test]
+fn the_deepest_documents_allowed_fit_on_every_thread() {
+    // 256 levels, the limit, through the recursive native codecs: on the main
+    // thread and in a worker, whose stacks are both 8 MiB on every OS (D189).
+    // On Windows' default 1 MiB this aborted the process.
+    let body = "import { BSON, CBOR } from 'runtime:serialization';\n\
+        let d = {}; for (let i = 0; i < 255; i++) d = { d };\n\
+        const ok = BSON.decode(BSON.encode(d)) !== null && CBOR.decode(CBOR.encode(d)) !== null;\n";
+    let worker = write("deep_worker.mjs", &format!("{body}postMessage(ok);"));
+    let main = write(
+        "deep_main.mjs",
+        &format!(
+            "{body}console.log('main', ok);\n\
+             const w = new Worker(new URL('{}', import.meta.url));\n\
+             w.onmessage = (e) => {{ console.log('worker', e.data); w.terminate(); }};",
+            worker.file_name().unwrap().to_str().unwrap()
+        ),
+    );
+    let out = esrun().arg("--allow-all").arg(&main).output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["main true", "worker true"]
+    );
+}
+
+#[test]
 fn object_ids_are_unique_ordered_and_carry_their_time() {
     let out = run(
         "bson_oid.mjs",

@@ -31,6 +31,7 @@ const SKIPPED: &[&str] = &[
 ];
 
 fn main() {
+    reserve_main_stack();
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let templates = manifest.join("templates");
     println!("cargo:rerun-if-changed={}", templates.display());
@@ -145,5 +146,23 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) {
             .collect::<Vec<_>>()
             .join("/");
         files.push((relative, path.clone()));
+    }
+}
+
+/// Reserves 8 MiB of stack for the main thread on Windows (DECISIONS D189).
+/// The JS thread is the main thread, and MSVC's default is 1 MiB: less than
+/// V8's own JS limit leaves room for, so deep JS or a deep document in a
+/// native codec would abort the process instead of raising an error. Linux and
+/// macOS already give the main thread 8 MiB; Node reserves the same. It is
+/// address space, not memory — pages are committed as the stack grows.
+fn reserve_main_stack() {
+    const STACK: u64 = 8 * 1024 * 1024;
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        Ok("msvc") => println!("cargo::rustc-link-arg-bins=/STACK:{STACK}"),
+        Ok("gnu") => println!("cargo::rustc-link-arg-bins=-Wl,--stack,{STACK}"),
+        _ => {}
     }
 }

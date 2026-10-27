@@ -75,6 +75,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- On Windows, a deeply nested BSON or CBOR document (or deep JavaScript calling
+  native code) could overflow the 1 MiB main-thread stack and abort the
+  process. `esrun` and `esdev` now reserve 8 MiB, as Linux and macOS give, and
+  worker threads get 8 MiB on every OS (D189).
 - `p256`, `p384` and `p521` are updated to 0.14 for RUSTSEC-2026-0387: the 0.13
   line sat on `crypto-bigint` 0.5, whose constant-time operations had
   data-dependent timing, and the fix exists only on the 0.7 line 0.14 uses.

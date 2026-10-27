@@ -27,6 +27,10 @@ use es_runtime_providers::{
 };
 use tokio::sync::{Mutex, mpsc};
 
+/// A worker thread's stack: 8 MiB, as the main thread has (DECISIONS D189).
+/// Address space, committed only as it is used.
+const WORKER_STACK: usize = 8 * 1024 * 1024;
+
 /// Builds the runtime for one worker agent, **on that worker's own thread**.
 ///
 /// Supplied by the embedder because only it knows the snapshot, the provider
@@ -313,6 +317,9 @@ impl WorkerHost for ThreadWorkerHost {
         let registry = self.registry.clone();
         let agent_threads = self.agent_threads.clone();
         let thread = std::thread::Builder::new()
+            // The same stack as the main thread on every OS (D189), rather
+            // than Rust's 2 MiB default: a worker runs the same code.
+            .stack_size(WORKER_STACK)
             .name(if spec.name.is_empty() {
                 format!("worker-{id}")
             } else {
