@@ -18,50 +18,78 @@ use std::sync::Arc;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::Entropy;
 
-use p256::elliptic_curve::rand_core::{CryptoRng, RngCore};
-
 use crate::Result;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 
-/// Adapts an [`Entropy`] provider to the `rand_core` 0.6 traits the curve and
-/// RSA crates' key generation expects. `fill_bytes` cannot signal failure, so
-/// a provider error is latched in `failed` and checked after generation; the
-/// produced key is discarded in that case. Shared with [`crate::rsa_ops`].
+/// Adapts an [`Entropy`] provider to the random-number traits key generation
+/// expects: `rand_core` 0.10 for the curve crates, and 0.6 for the RSA crate
+/// ([`crate::rsa_ops`]), which has not moved yet. Neither lets the generator
+/// report a failure the caller sees, so a provider error is latched in `failed`
+/// and checked after generation; the produced key is discarded in that case.
 pub(crate) struct EntropyRng<'a> {
     pub(crate) entropy: &'a dyn Entropy,
     pub(crate) failed: bool,
 }
 
-impl RngCore for EntropyRng<'_> {
-    fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+impl EntropyRng<'_> {
+    fn fill(&mut self, dest: &mut [u8]) {
         if self.entropy.fill(dest).is_err() {
             self.failed = true;
             dest.fill(0);
         }
     }
+}
 
-    fn try_fill_bytes(
-        &mut self,
-        dest: &mut [u8],
-    ) -> std::result::Result<(), p256::elliptic_curve::rand_core::Error> {
-        self.fill_bytes(dest);
+impl p256::elliptic_curve::rand_core::TryRng for EntropyRng<'_> {
+    type Error = std::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+        let mut b = [0u8; 4];
+        self.fill(&mut b);
+        Ok(u32::from_le_bytes(b))
+    }
+
+    fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+        let mut b = [0u8; 8];
+        self.fill(&mut b);
+        Ok(u64::from_le_bytes(b))
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), Self::Error> {
+        self.fill(dest);
         Ok(())
     }
 }
 
-impl CryptoRng for EntropyRng<'_> {}
+impl p256::elliptic_curve::rand_core::TryCryptoRng for EntropyRng<'_> {}
+
+impl rsa::rand_core::RngCore for EntropyRng<'_> {
+    fn next_u32(&mut self) -> u32 {
+        let mut b = [0u8; 4];
+        self.fill(&mut b);
+        u32::from_le_bytes(b)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut b = [0u8; 8];
+        self.fill(&mut b);
+        u64::from_le_bytes(b)
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.fill(dest);
+    }
+
+    fn try_fill_bytes(
+        &mut self,
+        dest: &mut [u8],
+    ) -> std::result::Result<(), rsa::rand_core::Error> {
+        self.fill(dest);
+        Ok(())
+    }
+}
+
+impl rsa::rand_core::CryptoRng for EntropyRng<'_> {}
 
 /// Computes the message prehash for ECDSA/RSA, honouring `algorithm.hash` (so
 /// e.g. ECDSA over P-256 with SHA-512 works). Uses our `sha2` 0.11. Shared
@@ -89,9 +117,10 @@ macro_rules! curve_impl {
 
             use curve::ecdsa::signature::hazmat::{PrehashVerifier, RandomizedPrehashSigner};
             use curve::ecdsa::{Signature, SigningKey, VerifyingKey};
+            use curve::elliptic_curve::Generate;
             use curve::elliptic_curve::pkcs8::spki::{DecodePublicKey, EncodePublicKey};
             use curve::elliptic_curve::pkcs8::{DecodePrivateKey, EncodePrivateKey};
-            use curve::elliptic_curve::sec1::ToEncodedPoint;
+            use curve::elliptic_curve::sec1::ToSec1Point;
             use curve::{PublicKey, SecretKey};
             use $crate_path as curve;
 
@@ -101,7 +130,7 @@ macro_rules! curve_impl {
                     entropy,
                     failed: false,
                 };
-                let sk = SecretKey::random(&mut rng);
+                let sk = SecretKey::generate_from_rng(&mut rng);
                 if rng.failed {
                     return Err(operation_error(
                         "entropy provider failed during key generation",
@@ -118,7 +147,7 @@ macro_rules! curve_impl {
             pub fn public_point(pkcs8: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
                 let sk = SecretKey::from_pkcs8_der(pkcs8)
                     .map_err(|_| data_error("invalid PKCS#8 private key"))?;
-                Ok(sk.public_key().to_encoded_point(false).as_bytes().to_vec())
+                Ok(sk.public_key().to_sec1_point(false).as_bytes().to_vec())
             }
 
             /// Raw private scalar (field-width, big-endian) for JWK `d`.
@@ -154,7 +183,7 @@ macro_rules! curve_impl {
             pub fn import_spki(der: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
                 let pk = PublicKey::from_public_key_der(der)
                     .map_err(|_| data_error("invalid SPKI public key"))?;
-                Ok(pk.to_encoded_point(false).as_bytes().to_vec())
+                Ok(pk.to_sec1_point(false).as_bytes().to_vec())
             }
 
             /// SEC1 uncompressed public point → SPKI DER.

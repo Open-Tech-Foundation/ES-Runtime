@@ -180,22 +180,19 @@ ed25519-dalek = "3.0.0"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 hkdf = "0.13.0"
 pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
-# Elliptic curves for ECDSA/ECDH (SPEC §2.10). These sit on the older
-# `elliptic-curve` 0.13 / `digest` 0.10 generation — the unifying
-# `elliptic-curve` 0.14 is still pre-release — so they bring duplicate
-# `digest` 0.10, `sha2` 0.10, and `hkdf` 0.12 into the tree (the `ecdsa`
-# feature transitively enables the curves' bundled `sha2`-hash; `hkdf` 0.12 is
-# a direct dep of `elliptic-curve` 0.13). These are warn-level duplicates that
-# `deny.toml` permits (DECISIONS.md D9). We still compute the ECDSA prehash
+# Elliptic curves for ECDSA/ECDH (SPEC §2.10), on the `elliptic-curve` 0.14 /
+# `digest` 0.11 / `rand_core` 0.10 generation the rest of the crypto stack uses.
+# 0.13 sat on `crypto-bigint` 0.5, whose constant-time operations were not
+# (RUSTSEC-2026-0387), and the fix exists only on the 0.7 line 0.14 uses. We still compute the ECDSA prehash
 # ourselves with our `sha2` 0.11 so arbitrary `algorithm.hash` works (the
 # curves' built-in `DigestSigner` only covers one hash each), and we assemble
 # JWK in JS, so the `jwk` feature stays off.
-p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
-p384 = { version = "0.13.1", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
-p521 = { version = "0.13.3", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
-# RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP). Same `digest` 0.10 generation as
-# the EC crates above, so it reuses the already-present `sha2` 0.10 / `digest`
-# 0.10 (adds only `sha1` 0.10 within that cluster). Its `sha1`/`sha2` features
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
+p384 = { version = "0.14.0", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
+p521 = { version = "0.14.0", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
+# RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP). Still on the `digest` 0.10 /
+# `rand_core` 0.6 generation, so it brings `sha2` 0.10 and `sha1` 0.10 as
+# warn-level duplicates that `deny.toml` permits (DECISIONS.md D9). Its `sha1`/`sha2` features
 # re-export those hashes (with OID) for DigestInfo prefixes.
 rsa = { version = "0.9.10", default-features = false, features = ["std", "sha2"] }
 # digest-0.10 SHA-1 *with OID*, only for RSA's DigestInfo prefix (`rsa`

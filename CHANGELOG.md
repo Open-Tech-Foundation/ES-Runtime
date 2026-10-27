@@ -36,6 +36,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `p256`, `p384` and `p521` are updated to 0.14 for RUSTSEC-2026-0387: the 0.13
+  line sat on `crypto-bigint` 0.5, whose constant-time operations had
+  data-dependent timing, and the fix exists only on the 0.7 line 0.14 uses.
+  They are behind `crypto.subtle`'s ECDSA and ECDH. Signatures and shared
+  secrets were checked against Node's implementation on all three curves.
+- `tokio` is updated to 1.54.1 for RUSTSEC-2026-0386 (`AsyncFd` constructors
+  that violated I/O safety). `cargo deny` passes again.
 - `ctutils` is updated to 0.4.4 for RUSTSEC-2026-0385 (mask generation and
   `u128` comparisons that were not constant-time). It reaches the runtime
   through `digest`, under `crypto.subtle`'s Ed25519, X25519 and HMAC. `cargo
