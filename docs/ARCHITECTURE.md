@@ -112,7 +112,7 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 - **No panic across FFI:** boundaries wrapped in `catch_unwind`; all Rust errors converted to proper JS exception classes. A Rust panic must never unwind into V8.
 - **Intrinsic integrity:** the security boundary is in Rust, not JS — the op table and capability set live in the engine's `OpState`, so guest tampering (prototype pollution, global reassignment, forging `__ops`) cannot escalate privilege. JS-surface defense-in-depth (`harden.js`) locks the `__ops` binding and freezes namespace objects; SES-style primordial freezing is left to the embedder. See `SECURITY.md` / `docs/SECURITY-REVIEW.md`.
 - **Crypto:** vetted, constant-time library only; correct nonce/IV handling; no hand-rolled primitives.
-- **Memory safety:** `unsafe` minimized, centralized in `engine`, every invariant documented; no handle outlives its scope.
+- **Memory safety:** `unsafe` minimized, centralized in `engine`, every invariant documented; no handle outlives its scope. The one exception is `default-providers`' `dns::windows`, which reads Windows' DNS servers through `GetAdaptersAddresses` (D188); the rest of that crate denies `unsafe`.
 - **Supply chain:** pinned deps; `cargo-deny` + `cargo-audit` in CI.
 
 ---

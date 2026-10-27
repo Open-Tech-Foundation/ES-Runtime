@@ -28,8 +28,8 @@ use std::task::{Context, Poll};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, ConnectOptions, Datagram, DatagramOption, DatagramOptions, ListenOptions,
-    MulticastMembership, NetProvider, OutgoingDatagram, ProviderError, SocketInfo,
+    BoxFuture, ConnectOptions, Datagram, DatagramOption, DatagramOptions, DnsQuery, DnsRecord,
+    ListenOptions, MulticastMembership, NetProvider, OutgoingDatagram, ProviderError, SocketInfo,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -569,6 +569,25 @@ fn info_of(local: Option<SocketAddr>, remote: Option<SocketAddr>) -> SocketInfo 
 }
 
 impl NetProvider for SystemNet {
+    fn resolve_dns(&self, query: DnsQuery) -> BoxFuture<Result<Vec<DnsRecord>, ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            if let Some(allow) = &this.allow_connect {
+                if !allow.permits_query(&query.name) {
+                    return Err(ProviderError::Coded {
+                        code: ErrorCode::PermissionDenied,
+                        message: format!("{} is not an allowed host (resolve)", query.name),
+                    });
+                }
+                // The query is sent to the name server, so it is a connection.
+                if let Some((ip, port)) = &query.name_server {
+                    allow.check(ip, *port, "query a DNS server")?;
+                }
+            }
+            crate::dns::resolve(query).await
+        })
+    }
+
     fn connect(
         &self,
         host: String,

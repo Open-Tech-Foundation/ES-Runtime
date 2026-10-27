@@ -24,6 +24,7 @@ committed seed crashes. A real campaign belongs on dedicated infrastructure.
 | `yaml` | The YAML reader, and a write-and-reread of whatever it accepts |
 | `keys` | The hand-written RFC 8410 key DER parsers, and `atob` |
 | `bson` | BSON validation and the element walk the engine's decoder makes, and Decimal128 text, parsed and printed back |
+| `dns` | DNS responses as `resolveDns` reads them: counts, record lengths, compressed-name pointers, and each record type's layout |
 
 The JS↔Rust marshaler and the streams are deliberately absent: they need a live
 isolate, and standing V8 up per iteration would cut the iteration rate by orders
@@ -39,4 +40,5 @@ rediscover it. `seeds/urlpattern/crash-*` are the two that found the
 bracket-depth underflow in `urlpattern` 0.6.0.
 
 Targets reach the runtime's internals through `es-runtime`'s `fuzzing` feature
-(`crates/runtime/src/fuzz.rs`), which exists for this and is not public API.
+(`crates/runtime/src/fuzz.rs`), which exists for this and is not public API — except `dns`, which reaches the resolver through
+`es-runtime-default-providers`'s `fuzzing` feature, for the same reason.

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ConnectOptions, Datagram, DatagramOption, DatagramOptions, ListenOptions, MulticastMembership,
-    NetProvider, ProviderError, SocketInfo,
+    ConnectOptions, Datagram, DatagramOption, DatagramOptions, DnsQuery, DnsRecord, ListenOptions,
+    MulticastMembership, NetProvider, ProviderError, SocketInfo,
 };
 
 use crate::Result;
@@ -39,6 +39,58 @@ pub(crate) fn install(
     let sockets = inventory.track(Handles::new("socket"));
     let listeners = inventory.track(Handles::new("listener"));
     let datagrams = inventory.track(Handles::new("datagram socket"));
+
+    // DNS lookups (D188). Args: [name, type, name server IP or null, name
+    // server port, ticket]. A lookup is bounded by the provider's own
+    // deadlines; `net_resolve_dns_cancel` with the same ticket ends it early,
+    // for an AbortSignal, so an abandoned lookup holds nothing open.
+    let lookups: Arc<
+        std::sync::Mutex<std::collections::HashMap<u64, futures_channel::oneshot::Sender<()>>>,
+    > = Arc::default();
+    let n = net.clone();
+    let pending = lookups.clone();
+    engine.register_op(
+        OpDecl::r#async("net_resolve_dns", move |args| {
+            let n = n.clone();
+            let pending = pending.clone();
+            let name_server = args
+                .get(2)
+                .and_then(Value::as_str)
+                .map(|ip| (ip.to_string(), arg_u16(&args, 3)));
+            let query = DnsQuery {
+                name: arg_str(&args, 0),
+                record_type: arg_str(&args, 1),
+                name_server,
+            };
+            let ticket = arg_u64(&args, 4);
+            Box::pin(async move {
+                let net = require(&n)?;
+                let (stop, stopped) = futures_channel::oneshot::channel();
+                pending.lock().unwrap().insert(ticket, stop);
+                let lookup = net.resolve_dns(query);
+                let outcome = futures_util::future::select(lookup, stopped).await;
+                pending.lock().unwrap().remove(&ticket);
+                match outcome {
+                    futures_util::future::Either::Left((records, _)) => Ok(Value::Array(
+                        records.map_err(map_err)?.iter().map(dns_value).collect(),
+                    )),
+                    futures_util::future::Either::Right(_) => Err(OpError::new(
+                        ExceptionClass::Error,
+                        "the DNS lookup was cancelled",
+                    )
+                    .with_code_opt(Some(ErrorCode::Cancelled))),
+                }
+            })
+        })
+        .requires(Capability::Net),
+    )?;
+    let pending = lookups;
+    engine.register_op(OpDecl::sync("net_resolve_dns_cancel", move |args| {
+        if let Some(stop) = pending.lock().unwrap().remove(&arg_u64(&args, 0)) {
+            let _ = stop.send(());
+        }
+        Ok(Value::Undefined)
+    }))?;
 
     let n = net.clone();
     let owned = sockets.clone();
@@ -638,6 +690,76 @@ fn require(
 
 fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
+}
+
+/// A record as `resolveDns` returns it: Deno's shapes (D188).
+fn dns_value(record: &DnsRecord) -> Value {
+    let field = |k: &str, v: Value| (k.to_string(), v);
+    let text = |s: &str| Value::String(s.to_string());
+    let num = |n: f64| Value::Number(n);
+    match record {
+        DnsRecord::Text(s) => text(s),
+        DnsRecord::Txt(parts) => Value::Array(parts.iter().map(|p| text(p)).collect()),
+        DnsRecord::Caa {
+            critical,
+            tag,
+            value,
+        } => Value::Object(vec![
+            field("critical", Value::Bool(*critical)),
+            field("tag", text(tag)),
+            field("value", text(value)),
+        ]),
+        DnsRecord::Mx {
+            preference,
+            exchange,
+        } => Value::Object(vec![
+            field("preference", num(f64::from(*preference))),
+            field("exchange", text(exchange)),
+        ]),
+        DnsRecord::Naptr {
+            order,
+            preference,
+            flags,
+            services,
+            regexp,
+            replacement,
+        } => Value::Object(vec![
+            field("order", num(f64::from(*order))),
+            field("preference", num(f64::from(*preference))),
+            field("flags", text(flags)),
+            field("services", text(services)),
+            field("regexp", text(regexp)),
+            field("replacement", text(replacement)),
+        ]),
+        DnsRecord::Soa {
+            mname,
+            rname,
+            serial,
+            refresh,
+            retry,
+            expire,
+            minimum,
+        } => Value::Object(vec![
+            field("mname", text(mname)),
+            field("rname", text(rname)),
+            field("serial", num(f64::from(*serial))),
+            field("refresh", num(f64::from(*refresh))),
+            field("retry", num(f64::from(*retry))),
+            field("expire", num(f64::from(*expire))),
+            field("minimum", num(f64::from(*minimum))),
+        ]),
+        DnsRecord::Srv {
+            priority,
+            weight,
+            port,
+            target,
+        } => Value::Object(vec![
+            field("priority", num(f64::from(*priority))),
+            field("weight", num(f64::from(*weight))),
+            field("port", num(f64::from(*port))),
+            field("target", text(target)),
+        ]),
+    }
 }
 
 fn socket_value(id: u64, info: &SocketInfo) -> Value {

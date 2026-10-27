@@ -44,6 +44,17 @@ url.workspace = true
 # Safe (no `unsafe` in this crate) syscall wrappers, for sending a chosen signal
 # to a child process — `Child::kill` can only ever send SIGKILL. Unix-only;
 # already in the tree via tempfile, so no new crate in the graph.
+
+# `GetAdaptersAddresses`, for Windows' DNS servers (DECISIONS D188): raw API
+# declarations with no build script, already in the tree through tokio and mio,
+# so this adds no crate — only the features.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
 [target.'cfg(unix)'.dependencies]
 # `termios` is `tcgetwinsize` — the terminal's real size, for a program drawing
 # a progress line. `$COLUMNS` is not an answer: a shell exports it to itself
@@ -65,3 +76,7 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Exposes the DNS message reader to the fuzz targets; not public API.
+fuzzing = []

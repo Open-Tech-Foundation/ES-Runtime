@@ -14,8 +14,11 @@
 //! timer source and advances it to quiescence on tokio — the concrete loop the
 //! `runtime` crate deliberately does not own (D4).
 
-// `unsafe` is confined to `engine`; the default providers use none.
-#![forbid(unsafe_code)]
+// `unsafe` is confined to `engine`, with one exception here: `dns::windows`,
+// which reads Windows' DNS servers through `GetAdaptersAddresses` (DECISIONS
+// D188). `deny` rather than `forbid` only so that one module can say so; no
+// other module may.
+#![deny(unsafe_code)]
 
 mod accept_backoff;
 mod body_deadline;
@@ -24,6 +27,7 @@ mod checkout;
 mod clock;
 mod console;
 mod datagram;
+mod dns;
 mod driver;
 mod entropy;
 mod esm_resolve;
@@ -56,6 +60,13 @@ mod tls;
 #[cfg(test)]
 mod trace_capture;
 mod worker;
+
+/// The DNS response reader, for `fuzz/` only (DECISIONS D188).
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub fn fuzz_dns_response(bytes: &[u8]) {
+    dns::wire::fuzz(bytes);
+}
 
 pub mod path;
 pub mod testing;

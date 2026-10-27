@@ -24,6 +24,10 @@ arbitrary = { version = "1", features = ["derive"] }
 path = "../crates/runtime"
 features = ["fuzzing"]
 
+[dependencies.es-runtime-default-providers]
+path = "../crates/default-providers"
+features = ["fuzzing"]
+
 # Fuzzing is pointless without optimization, and a panic must abort so libFuzzer
 # sees it as a crash rather than an unwind that the harness swallows.
 [profile.release]
@@ -107,3 +111,9 @@ path = "fuzz_targets/bson.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dns"
+path = "fuzz_targets/dns.rs"
+test = false
+doc = false

@@ -340,6 +340,51 @@ declare module "runtime:net" {
    */
   export function bind(options: BindOptions): DatagramSocket;
 
-  const net: { connect: typeof connect; listen: typeof listen; bind: typeof bind };
+  /** The record types {@link resolveDns} looks up. */
+  export type RecordType = "A" | "AAAA" | "CAA" | "CNAME" | "MX" | "NAPTR" | "NS" | "PTR" | "SOA" | "SRV" | "TXT";
+
+  export interface CaaRecord { critical: boolean; tag: string; value: string }
+  export interface MxRecord { preference: number; exchange: string }
+  export interface NaptrRecord {
+    order: number;
+    preference: number;
+    flags: string;
+    services: string;
+    regexp: string;
+    replacement: string;
+  }
+  export interface SoaRecord {
+    mname: string;
+    rname: string;
+    serial: number;
+    refresh: number;
+    retry: number;
+    expire: number;
+    minimum: number;
+  }
+  export interface SrvRecord { priority: number; weight: number; port: number; target: string }
+
+  export interface ResolveDnsOptions {
+    /** Ask this server instead of the system's. Must be an allowed address. */
+    nameServer?: { ipAddr: string; port?: number };
+    /** Abandons the lookup; the promise rejects with the signal's reason. */
+    signal?: AbortSignal;
+  }
+
+  /**
+   * Look up DNS records (capability: `Net`, scoped to the host the name is
+   * about). A name that does not exist rejects with code `"NotFound"`; one
+   * without records of the type resolves to `[]`.
+   */
+  export function resolveDns(name: string, type: "A" | "AAAA" | "CNAME" | "NS" | "PTR", options?: ResolveDnsOptions): Promise<string[]>;
+  export function resolveDns(name: string, type: "CAA", options?: ResolveDnsOptions): Promise<CaaRecord[]>;
+  export function resolveDns(name: string, type: "MX", options?: ResolveDnsOptions): Promise<MxRecord[]>;
+  export function resolveDns(name: string, type: "NAPTR", options?: ResolveDnsOptions): Promise<NaptrRecord[]>;
+  export function resolveDns(name: string, type: "SOA", options?: ResolveDnsOptions): Promise<SoaRecord[]>;
+  export function resolveDns(name: string, type: "SRV", options?: ResolveDnsOptions): Promise<SrvRecord[]>;
+  /** Each TXT record is its character-strings, in order. */
+  export function resolveDns(name: string, type: "TXT", options?: ResolveDnsOptions): Promise<string[][]>;
+
+  const net: { connect: typeof connect; listen: typeof listen; bind: typeof bind; resolveDns: typeof resolveDns };
   export default net;
 }

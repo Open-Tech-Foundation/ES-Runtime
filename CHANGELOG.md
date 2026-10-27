@@ -13,6 +13,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `resolveDns(name, type, { nameServer?, signal? })` in `runtime:net`: DNS
+  lookups of A, AAAA, CAA, CNAME, MX, NAPTR, NS, PTR, SOA, SRV and TXT records,
+  in Deno's shape (D188). It needs `net`; a scoped `--allow-net` permits a
+  query about a host it names, ignoring leading `_`-labels, and a `nameServer`
+  must itself be allowed. The resolver is esrun's own — a fuzzed DNS message
+  reader and a UDP/TCP stub client asking the system's servers
+  (`/etc/resolv.conf`, or the Windows adapters) — so it adds no dependency.
 - `BSON` in `runtime:serialization`: `encode`, `decode` and `validate` for
   MongoDB's document format, with `ObjectId`, `Decimal128`, `UUID`,
   `Timestamp`, `Binary` (including vector helpers for subtype 9), `Code`,

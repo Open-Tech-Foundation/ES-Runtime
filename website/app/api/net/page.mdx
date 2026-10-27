@@ -1,6 +1,6 @@
 ---
 title: runtime:net
-description: TCP, TLS and UDP sockets — the WinterTC Sockets API. Bytes move over web streams; datagrams move as messages.
+description: TCP, TLS and UDP sockets — the WinterTC Sockets API — and DNS lookups. Bytes move over web streams; datagrams move as messages.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -9,9 +9,9 @@ import { Callout } from "@opentf/web-docs";
 
 TCP sockets. `connect()` follows the WinterTC Sockets API; `listen()` yields
 inbound connections. Bytes move over web streams. `bind()` is UDP — messages,
-not streams.
+not streams. `resolveDns()` looks up DNS records.
 
-<Callout type="info" title="Capability: Net (connect, send) / NetListen (listen, bind)">
+<Callout type="info" title="Capability: Net (connect, send, resolveDns) / NetListen (listen, bind)">
   Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
 </Callout>
 
@@ -23,7 +23,7 @@ not streams.
 ## Import
 
 ```js
-import { connect, listen, bind } from "runtime:net";
+import { connect, listen, bind, resolveDns } from "runtime:net";
 ```
 
 ## Functions
@@ -35,6 +35,7 @@ import { connect, listen, bind } from "runtime:net";
 | `connect({ path }, options?)` | `({ path }, { allowHalfOpen? }) => Socket` | Connect to a **Unix domain socket** at an absolute `path`, given alone. Plaintext only. The path must be named in `--allow-net=unix:<path>`; a bare `--allow-net` does not cover it. `SocketInfo.remoteAddress` is the path. Unix only. | `const sock = connect({ path: "/var/run/docker.sock" })` |
 | `listen({ path })` | `({ path }) => UnixListener` | Listen on a **Unix domain socket** at an absolute `path`, given alone. The path must be named in `--allow-listen=unix:<path>`. `addr` resolves to `{ path }`. A taken path (including a stale file) is `ERR_ADDRESS_IN_USE`; `close()` removes the file this listener created. Unix only. | `const server = listen({ path: "/run/app.sock" })` |
 | `bind(options)` | `({ hostname?, port, reusePort?, reuseAddress?, broadcast?, ttl?, multicastTtl?, multicastLoopback? }) => DatagramSocket` | Bind a UDP socket. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for loopback-only; a locked-down host may refuse a wildcard bind). `port 0` picks an ephemeral port (read it from `sock.addr`). Returns a `DatagramSocket` — `send`/`receive`, and async-iterable of datagrams. Binding needs NetListen; sending needs Net, checked per destination. Options are set at the bind and an omitted one leaves the OS default. | `const sock = bind({ hostname: "0.0.0.0", port: 5353 })` |
+| `resolveDns(name, type, options?)` | `(string, RecordType, { nameServer?, signal? }) => Promise<Record[]>` | Look up DNS records of one type. Deno's shape: see [DNS](#dns). | `await resolveDns("example.com", "MX")` |
 
 ## Client
 
@@ -181,9 +182,50 @@ await mdns.joinMulticast("224.0.0.251", { interface: "192.168.1.10" });
 `reusePort`, `reuseAddress` and `ipv6Only` are bind-time only — they must be set
 between `socket()` and `bind()`. The rest have setters.
 
+## DNS
+
+```js
+import { resolveDns } from "runtime:net";
+
+const txt = await resolveDns("_dmarc.example.com", "TXT");
+const [srv] = await resolveDns("_imaps._tcp.example.com", "SRV", {
+  nameServer: { ipAddr: "10.0.0.2", port: 53 },
+  signal: AbortSignal.timeout(3000),
+});
+```
+
+The name is asked as written — never extended by the system's search domains —
+and must be ASCII (an international name in its `xn--` form). Names in records
+are fully qualified, with a trailing dot. Each call asks DNS; nothing is cached.
+
+| Type | Each record |
+| --- | --- |
+| `A`, `AAAA` | address `string` |
+| `CNAME`, `NS`, `PTR` | name `string` |
+| `TXT` | `string[]` — the record's character-strings, in order |
+| `MX` | `{ preference, exchange }` |
+| `SRV` | `{ priority, weight, port, target }` |
+| `CAA` | `{ critical, tag, value }` |
+| `NAPTR` | `{ order, preference, flags, services, regexp, replacement }` |
+| `SOA` | `{ mname, rname, serial, refresh, retry, expire, minimum }` |
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `nameServer` | `{ ipAddr, port? }` | Ask this server (port default 53) instead of the system's. It must be allowed by `--allow-net`, since the query is sent there. |
+| `signal` | `AbortSignal` | Abandons the lookup; the promise rejects with the signal's reason. |
+
+The system's servers are the `nameserver` lines of `/etc/resolv.conf` on Linux
+and macOS, and the DNS servers of the active network adapters on Windows. A
+scoped `--allow-net` permits a query about a host it names, ignoring leading
+`_`-labels: `--allow-net=example.com` permits `_dmarc.example.com`, not
+`api.example.com`.
+
 ## Errors
 
 | Error | When |
 | --- | --- |
 | `TypeError` | Any socket failure — invalid options, or a connect / TLS / I/O error (the latter reject `.opened` or the streams). The message is prefixed `"SocketError: "` (WinterTC SocketError). |
 | `DOMException` | name `"NotAllowedError"` — the Net (connect, send) or NetListen (listen, bind) capability is not granted. |
+| `Error`, code `ERR_NOT_FOUND` | `resolveDns`: the name does not exist (NXDOMAIN). A name with no records of the type resolves to `[]` instead. |
+| `Error`, code `ERR_DNS` | `resolveDns`: no server answered — timeouts, `SERVFAIL`, `REFUSED` — or the name cannot be asked. |
+| `Error`, code `ERR_PERMISSION_DENIED` | `resolveDns`: a scoped `--allow-net` does not name the host, or the `nameServer`. |

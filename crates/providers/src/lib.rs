@@ -1151,6 +1151,60 @@ pub struct ConnectOptions {
     pub alpn: Vec<String>,
 }
 
+/// A DNS question for [`NetProvider::resolve_dns`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DnsQuery {
+    /// The name asked about, as written.
+    pub name: String,
+    /// The record type, upper-case: `A`, `AAAA`, `CAA`, `CNAME`, `MX`, `NAPTR`,
+    /// `NS`, `PTR`, `SOA`, `SRV` or `TXT`.
+    pub record_type: String,
+    /// A server to ask instead of the system's: an IP address and port.
+    pub name_server: Option<(String, u16)>,
+}
+
+/// One DNS record's data, as `resolveDns` returns it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum DnsRecord {
+    /// An address, or a name (A, AAAA, CNAME, NS, PTR).
+    Text(String),
+    Caa {
+        critical: bool,
+        tag: String,
+        value: String,
+    },
+    Mx {
+        preference: u16,
+        exchange: String,
+    },
+    Naptr {
+        order: u16,
+        preference: u16,
+        flags: String,
+        services: String,
+        regexp: String,
+        replacement: String,
+    },
+    Soa {
+        mname: String,
+        rname: String,
+        serial: u32,
+        refresh: i32,
+        retry: i32,
+        expire: i32,
+        minimum: u32,
+    },
+    Srv {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String,
+    },
+    /// One TXT record: its character strings, in order.
+    Txt(Vec<String>),
+}
+
 /// Options for [`NetProvider::listen`] (DECISIONS D28). With a non-empty
 /// `cert`+`key` the listener **terminates TLS**: every accepted connection
 /// completes a server-side handshake before it surfaces, and the negotiated
@@ -1386,6 +1440,22 @@ pub trait NetProvider: Send + Sync {
     fn listen_unix(&self, path: String) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let _ = path;
         Box::pin(async { Err(ProviderError::Other(UNSUPPORTED_UNIX.into())) })
+    }
+
+    /// Looks up DNS records (DECISIONS D188). `query.name` is asked as written,
+    /// never through search domains. A name that does not exist is an error
+    /// coded [`ErrorCode::NotFound`]; a name with no records of the type is an
+    /// empty list. The provider decides whether the name, and any
+    /// `query.name_server`, may be asked.
+    ///
+    /// The default errors: a provider resolves only if it says so.
+    fn resolve_dns(&self, query: DnsQuery) -> BoxFuture<Result<Vec<DnsRecord>, ProviderError>> {
+        let _ = query;
+        Box::pin(async {
+            Err(ProviderError::Other(
+                "this provider does not resolve DNS records".into(),
+            ))
+        })
     }
 
     /// Binds a UDP socket; resolves to (socket id, bound-address info). `port`

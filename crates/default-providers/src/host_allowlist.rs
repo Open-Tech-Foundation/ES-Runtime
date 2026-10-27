@@ -116,6 +116,32 @@ impl HostAllowlist {
         })
     }
 
+    /// Whether a DNS query about `name` is permitted (DECISIONS D188): the
+    /// name, with its leading `_`-labels removed, must be a host an entry names
+    /// (on any port). So allowing `cluster0.example.net` permits
+    /// `_mongodb._tcp.cluster0.example.net`, and `example.com` permits
+    /// `_dmarc.example.com` — records *about* a host the program may reach.
+    /// A port-only entry names no host, and an IP entry is never a name, so
+    /// neither permits a query.
+    pub fn permits_query(&self, name: &str) -> bool {
+        let name = name.strip_suffix('.').unwrap_or(name);
+        let mut host = name;
+        while let Some(rest) = host
+            .strip_prefix('_')
+            .and_then(|h| h.split_once('.'))
+            .map(|(_, rest)| rest)
+        {
+            host = rest;
+        }
+        !host.is_empty()
+            && self.entries.iter().any(|entry| match entry {
+                Entry::AnyPort(h @ Host::Name(_)) | Entry::Exact(h @ Host::Name(_), _) => {
+                    h.matches(host)
+                }
+                _ => false,
+            })
+    }
+
     /// Whether the Unix socket at `path` is named by an entry. Compared as
     /// written, like a host name: `/var/run/x.sock` and `/run/x.sock` are two
     /// entries even where one is a symlink to the other, because resolving
@@ -235,6 +261,34 @@ fn parse_port(entry: &str, port: &str) -> Result<u16, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_dns_query_is_judged_by_the_host_it_is_about() {
+        let list =
+            HostAllowlist::parse(["cluster0.example.net", "example.com:25", "10.0.0.1", "8080"])
+                .unwrap();
+        assert!(list.permits_query("cluster0.example.net"));
+        assert!(list.permits_query("_mongodb._tcp.cluster0.example.net"));
+        assert!(
+            list.permits_query("_dmarc.example.com."),
+            "a port-scoped entry still names its host"
+        );
+        assert!(list.permits_query("EXAMPLE.com"));
+        assert!(
+            !list.permits_query("api.example.com"),
+            "a subdomain is another host"
+        );
+        assert!(!list.permits_query("example.net"));
+        assert!(!list.permits_query("10.0.0.1"), "an IP entry is not a name");
+        assert!(
+            !list.permits_query("_x._tcp"),
+            "underscores alone name nothing"
+        );
+        assert!(
+            !list.permits_query("selector._domainkey.example.com"),
+            "only leading _-labels are removed"
+        );
+    }
     use super::*;
 
     fn list(entries: &[&str]) -> HostAllowlist {

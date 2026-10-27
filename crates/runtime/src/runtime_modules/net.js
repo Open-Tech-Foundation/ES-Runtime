@@ -618,5 +618,47 @@ function bind(options = {}) {
   return new DatagramSocket(ready);
 }
 
-export { connect, listen, bind };
-export default { connect, listen, bind };
+const DNS_RECORD_TYPES = new Set(["A", "AAAA", "CAA", "CNAME", "MX", "NAPTR", "NS", "PTR", "SOA", "SRV", "TXT"]);
+let dnsTicket = 1;
+
+// Looks up DNS records of one type (capability: Net, scoped to the host the
+// name is about — DECISIONS D188). Deno's `resolveDns` shape: a name with no
+// such records resolves to []; a name that does not exist rejects with
+// code "NotFound". The name is asked as written, with no search domains.
+async function resolveDns(name, type, options = {}) {
+  if (typeof name !== "string" || name === "") {
+    throw new TypeError("resolveDns: name must be a non-empty string");
+  }
+  if (!DNS_RECORD_TYPES.has(type)) {
+    throw new TypeError(`resolveDns: type must be one of ${[...DNS_RECORD_TYPES].join(", ")}`);
+  }
+  let serverIp = null;
+  let serverPort = 53;
+  if (options.nameServer !== undefined) {
+    const server = options.nameServer;
+    if (server === null || typeof server !== "object" || typeof server.ipAddr !== "string") {
+      throw new TypeError("resolveDns: nameServer must be { ipAddr, port? }");
+    }
+    serverIp = server.ipAddr;
+    if (server.port !== undefined) serverPort = validPort(server.port, { allowZero: false });
+  }
+  const signal = options.signal;
+  signal?.throwIfAborted();
+  const ticket = dnsTicket++;
+  const lookup = ops.net_resolve_dns(name, type, serverIp, serverPort, ticket);
+  if (!signal) return lookup;
+  const onAbort = () => ops.net_resolve_dns_cancel(ticket);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await lookup;
+  } catch (error) {
+    // Cancelled by the signal: reject with its reason, as fetch does.
+    if (signal.aborted) throw signal.reason;
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+export { connect, listen, bind, resolveDns };
+export default { connect, listen, bind, resolveDns };
