@@ -4234,5 +4234,71 @@ export default {
       "llrt": "ok",
       "esrun": "ok"
     }
+  },
+  "results_pdf": {
+    "text": {
+      "esrun": {
+        "ms": 287,
+        "rss_mb": 60.3
+      },
+      "node": {
+        "ms": 3304.2,
+        "rss_mb": 371.4
+      },
+      "bun": {
+        "ms": 1957.9,
+        "rss_mb": 193.6
+      },
+      "deno": {
+        "ms": 2430,
+        "rss_mb": 259.3
+      }
+    },
+    "merge": {
+      "esrun": {
+        "ms": 42.1,
+        "rss_mb": 92.7
+      },
+      "node": {
+        "ms": 545,
+        "rss_mb": 185.1
+      },
+      "bun": {
+        "ms": 486.1,
+        "rss_mb": 175.3
+      },
+      "deno": {
+        "ms": 466.6,
+        "rss_mb": 147.7
+      }
+    },
+    "split": {
+      "esrun": {
+        "ms": 19.8,
+        "rss_mb": 48.8
+      },
+      "node": {
+        "ms": 330.6,
+        "rss_mb": 142.3
+      },
+      "bun": {
+        "ms": 273.8,
+        "rss_mb": 126.6
+      },
+      "deno": {
+        "ms": 219.5,
+        "rss_mb": 99
+      }
+    }
+  },
+  "results_pdf_versions": {
+    "esrun": "esrun 0.43.0",
+    "node": "node v24.21.0 + pdf-lib 1.17.1 + pdfjs-dist 6.4.299",
+    "bun": "bun 1.4.3 + pdf-lib 1.17.1 + pdfjs-dist 6.4.299",
+    "deno": "deno 2.9.7 (stable, release, x86_64-unknown-linux-gnu) + pdf-lib 1.17.1 + pdfjs-dist 6.4.299"
+  },
+  "results_pdf_method": {
+    "jobs": 8,
+    "reps": 5
   }
 }

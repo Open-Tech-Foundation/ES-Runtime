@@ -10,7 +10,9 @@
 // WebSocket, images, PDFs, archives, durable state, the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
-// original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile.
+// original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile. PDF
+// is the one coloured exception: an original red document marked "PDF" (the
+// format is ISO 32000 and has no logo; Adobe's Acrobat mark is not used).
 //
 // Compiler quirks to respect (see components/StatusIcon.jsx): branch on
 // `name` via JSX conditionals, NOT a body lookup — a body read leaves
@@ -161,12 +163,10 @@ export default function StackIcon({ name }) {
       )}
       {name === "pdf" && (
         <span className={TILE}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
-            <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-            <path d="M8 13h8" />
-            <path d="M8 17h8" />
-            <path d="M8 9h2" />
+          <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#e11d48" />
+            <path d="M15 2v3a2 2 0 0 0 2 2h3z" fill="#fda4af" />
+            <text x="12" y="17.2" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="6.2" font-weight="800" fill="#fff">PDF</text>
           </svg>
         </span>
       )}
