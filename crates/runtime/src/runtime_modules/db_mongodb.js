@@ -138,6 +138,7 @@ const MONGO_OPTION_NAMES = new Map(
     "directConnection",
     "heartbeatFrequencyMS",
     "journal",
+    "loadBalanced",
     "localThresholdMS",
     "maxPoolSize",
     "maxStalenessSeconds",
@@ -148,6 +149,8 @@ const MONGO_OPTION_NAMES = new Map(
     "retryReads",
     "retryWrites",
     "serverSelectionTimeoutMS",
+    "srvMaxHosts",
+    "srvServiceName",
     "ssl",
     "timeoutMS",
     "tls",
@@ -177,16 +180,15 @@ function mongoCount(name, value) {
   return n;
 }
 
-/// The settings for a client: `mongodb://` URL first, then `options` over it.
+/// The settings for a client: the URL first, then `options` over it. A
+/// `mongodb+srv://` URL names one host whose seeds `mongoSeedlist` finds.
 function parseMongoConnectionString(url, options = {}) {
   const lower = url.toLowerCase();
-  if (lower.startsWith("mongodb+srv:")) {
-    throw mongoBad("mongodb+srv:// is not supported yet; connect with mongodb://host:port");
+  const srv = lower.startsWith("mongodb+srv://");
+  if (!srv && !lower.startsWith("mongodb://")) {
+    throw mongoBad(`${url} is not a mongodb:// or mongodb+srv:// connection string`);
   }
-  if (!lower.startsWith("mongodb://")) {
-    throw mongoBad(`${url} is not a mongodb:// connection string`);
-  }
-  let rest = url.slice("mongodb://".length);
+  let rest = url.slice(srv ? "mongodb+srv://".length : "mongodb://".length);
   let query = "";
   const q = rest.indexOf("?");
   if (q >= 0) {
@@ -204,7 +206,9 @@ function parseMongoConnectionString(url, options = {}) {
     user: null,
     password: null,
     database,
-    tls: false,
+    // mongodb+srv:// implies TLS; tls=false in the URL or options turns it off.
+    tls: srv,
+    srv: srv ? { host: null, serviceName: "mongodb", maxHosts: 0 } : null,
     maxPoolSize: MONGO_DEFAULT_POOL,
     connectTimeoutMS: MONGO_DEFAULT_CONNECT_TIMEOUT,
     serverSelectionTimeoutMS: MONGO_DEFAULT_SELECTION_TIMEOUT,
@@ -230,7 +234,15 @@ function parseMongoConnectionString(url, options = {}) {
     settings.password = password === null ? null : decodeURIComponent(password);
   }
 
-  for (const host of hostList.split(",")) {
+  if (srv) {
+    // One host name, and no port: the SRV records give the ports.
+    if (hostList.includes(",")) throw mongoBad("a mongodb+srv:// URL names exactly one host");
+    if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.?$/.test(hostList)) {
+      throw mongoBad(`${hostList} is not a host name for mongodb+srv:// (a port is not allowed)`);
+    }
+    settings.srv.host = hostList.toLowerCase().replace(/\.$/, "");
+  }
+  for (const host of srv ? [] : hostList.split(",")) {
     if (host === "") throw mongoBad(`${url} names an empty host`);
     if (/%2f|\.sock$/i.test(host)) throw mongoBad("Unix-socket connections are not supported yet");
     const ipv6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(host);
@@ -271,12 +283,47 @@ function parseMongoConnectionString(url, options = {}) {
     if (name === undefined) throw mongoBad(`the MongoDB driver does not know the option ${key}`);
     mongoOption(settings, name, value);
   }
-  settings.authSource ??= settings.database ?? "admin";
-  if (settings.directConnection && settings.hosts.length > 1) {
-    throw mongoBad("directConnection=true cannot name more than one host");
+  // What the URL and options named, so a TXT record cannot override them.
+  if (srv) settings.srv.named = new Set(Object.keys(given).map((key) => key.toLowerCase()));
+  mongoCheckSrv(settings);
+  // With SRV, a TXT record may still supply it.
+  if (!srv) settings.authSource ??= settings.database ?? "admin";
+  if (settings.directConnection && (srv || settings.hosts.length > 1)) {
+    throw mongoBad(
+      srv ? "directConnection=true cannot be used with mongodb+srv://" : "directConnection=true cannot name more than one host",
+    );
   }
   mongoCheckPreference(settings.readPreference);
   return settings;
+}
+
+/// The SRV options' rules, applied once after the URL and again after a TXT
+/// record has added its options.
+function mongoCheckSrv(settings) {
+  if (settings.srv === null) {
+    if (settings.srvGiven) throw mongoBad("srvServiceName and srvMaxHosts need a mongodb+srv:// URL");
+    return;
+  }
+  if (settings.srv.maxHosts > 0) {
+    if (settings.replicaSet !== null) throw mongoBad("srvMaxHosts cannot be used with replicaSet");
+    if (settings.loadBalanced) throw mongoBad("srvMaxHosts cannot be used with loadBalanced=true");
+  }
+}
+
+/// `mongodb+srv://`'s discovery (D188): the seeds from the SRV records — every
+/// one checked, in Rust, to be in the URL host's domain — and the TXT record's
+/// `authSource`, `replicaSet` and `loadBalanced`, which the URL and options
+/// override.
+async function mongoSeedlist(settings) {
+  const { host, serviceName, maxHosts, named } = settings.srv;
+  const found = await ops.mongo_seedlist(host, serviceName, maxHosts);
+  if (found.error !== undefined) throw mongoBad(`mongodb+srv://${host}: ${found.error}`);
+  settings.hosts = found.hosts;
+  for (const [name, value] of found.txt) {
+    if (!named.has(name.toLowerCase())) mongoOption(settings, name, value);
+  }
+  mongoCheckSrv(settings);
+  settings.authSource ??= settings.database ?? "admin";
 }
 
 /// `dc:ny,rack:1` as `{ dc: "ny", rack: "1" }`; empty is `{}`, any server.
@@ -392,6 +439,20 @@ function mongoOption(settings, name, value) {
     case "replicaSet":
       settings.replicaSet = String(value);
       return;
+    case "loadBalanced":
+      if (mongoBoolean(name, value)) {
+        throw mongoBad("load-balanced deployments are not supported yet; connect to the replica set");
+      }
+      settings.loadBalanced = false;
+      return;
+    case "srvServiceName":
+      settings.srvGiven = true;
+      if (settings.srv !== null) settings.srv.serviceName = String(value);
+      return;
+    case "srvMaxHosts":
+      settings.srvGiven = true;
+      if (settings.srv !== null) settings.srv.maxHosts = mongoCount(name, value);
+      return;
     case "readPreference": {
       const mode = MONGO_MODES.get(String(value).toLowerCase());
       if (mode === undefined) throw mongoBad(`${value} is not a read preference mode`);
@@ -436,6 +497,7 @@ function mongoOption(settings, name, value) {
 
 async function openMongo(url, options = {}) {
   const settings = parseMongoConnectionString(url, options);
+  if (settings.srv !== null) await mongoSeedlist(settings);
   let ca = new Uint8Array(0);
   if (settings.ca !== undefined) {
     ca = typeof settings.ca === "string" ? new TextEncoder().encode(settings.ca) : settings.ca;

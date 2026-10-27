@@ -24,8 +24,9 @@ and examples carry over: `insertOne`, `find`, `updateMany`, `aggregate`,
 `bulkWrite`, `createIndex`. Every option and result is on the
 [MongoDB reference](/api/db/mongodb).
 
-It connects to MongoDB 7.0 or later: one server or a replica set. Sharded
-clusters, `mongodb+srv://` and change streams are not supported yet.
+It connects to MongoDB 7.0 or later: one server or a replica set, named
+directly or through `mongodb+srv://`. Sharded clusters and change streams are
+not supported yet.
 
 ## Permissions
 
@@ -171,6 +172,25 @@ const nearby = await orders
   .find({ day }, { readPreference: { mode: "nearest", tags: [{ dc: "eu" }] } })
   .toArray();
 ```
+
+## Atlas and other SRV connection strings
+
+A `mongodb+srv://` string, as MongoDB Atlas gives out, works as it is. TLS is on
+by default. DNS supplies the members, so allow the lookup's host and each
+member it returns:
+
+```js
+const client = await connect(
+  "mongodb+srv://app:secret@cluster0.abcde.mongodb.net/shop",
+  { driver: mongodb },
+);
+```
+
+```sh
+esrun --allow-net=cluster0.abcde.mongodb.net,ac-1.abcde.mongodb.net:27017,ac-2.abcde.mongodb.net:27017,ac-3.abcde.mongodb.net:27017 app.js
+```
+
+A bare `--allow-net` covers all of them.
 
 A read from a secondary may not see the latest writes; `maxStalenessSeconds`
 keeps reads off secondaries that have fallen behind.

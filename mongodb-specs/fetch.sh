@@ -11,7 +11,7 @@ set -euo pipefail
 # Pinned so a run is reproducible. Bump deliberately.
 REV=9ea18a92308ed437e16dd95e6ff9c496daa61ecd
 
-DIRS=(source/bson-corpus/tests source/bson-binary-vector/tests source/sessions source/server-discovery-and-monitoring source/server-selection source/retryable-writes source/retryable-reads source/transactions source/transactions-convenient-api source/connection-string source/uri-options source/max-staleness)
+DIRS=(source/bson-corpus/tests source/bson-binary-vector/tests source/sessions source/server-discovery-and-monitoring source/server-selection source/retryable-writes source/retryable-reads source/transactions source/transactions-convenient-api source/connection-string source/uri-options source/max-staleness source/initial-dns-seedlist-discovery)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dest="$here/upstream"

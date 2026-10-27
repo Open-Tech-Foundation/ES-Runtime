@@ -48,8 +48,13 @@ namespace) is unstable and may change between minor releases until the API freez
   replica set, `client.transaction(fn)` runs `fn` in a transaction and commits
   it, retrying transient errors and an unknown commit as MongoDB's convenient
   transactions API does; sessions also have `startTransaction`,
-  `commitTransaction`, `abortTransaction` and `withTransaction`. Sharded
-  clusters, `mongodb+srv://` and change streams are not supported yet.
+  `commitTransaction`, `abortTransaction` and `withTransaction`.
+  `mongodb+srv://` finds the seeds through DNS by MongoDB's seedlist discovery
+  specification (D188): every SRV target must be in the URL host's domain, a
+  TXT record may set `authSource`, `replicaSet` and `loadBalanced`, TLS is on by
+  default, and `srvServiceName` and `srvMaxHosts` are supported; it passes the
+  specification's replica-set suite (`tsr test:mongodb-srv`). Sharded clusters
+  and change streams are not supported yet.
   `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 
 ### Changed

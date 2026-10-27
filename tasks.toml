@@ -276,6 +276,13 @@ dir = "packages/mysql"
 run = "./test/run.sh"
 dir = "packages/mongodb"
 
+# MongoDB's seedlist discovery suite (mongodb+srv://, D188). Separate from
+# test:mongodb because it needs ports 27017-27019 for its own replica set
+# (test/srv-replica-set.sh), the spec checkout, and a read grant for both.
+[tasks."test:mongodb-srv"]
+run = "./test/srv.sh"
+dir = "packages/mongodb"
+
 [tasks."test:redis"]
 run = "./test/run.sh"
 dir = "packages/redis"

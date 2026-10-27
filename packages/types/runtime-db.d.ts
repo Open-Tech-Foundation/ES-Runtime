@@ -634,6 +634,12 @@ declare module "runtime:db" {
     journal?: boolean;
     wtimeoutMS?: number;
     readConcernLevel?: string;
+    /** `mongodb+srv://` only: the SRV service asked for. Default `mongodb`. */
+    srvServiceName?: string;
+    /** `mongodb+srv://` only: at most this many SRV hosts, chosen at random; 0 for all. */
+    srvMaxHosts?: number;
+    /** Only `false`: load-balanced deployments are not supported yet. */
+    loadBalanced?: false;
   }
 
   export type ReadPreferenceMode = "primary" | "primaryPreferred" | "secondary" | "secondaryPreferred" | "nearest";

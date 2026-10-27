@@ -33,8 +33,8 @@ Every operation takes `signal` and `timeoutMS`, cursors are async iterables, and
 
 It connects to MongoDB 7.0 or later — one server or a replica set — with
 SCRAM-SHA-256 or SCRAM-SHA-1 and TLS, and supports transactions, sessions, read
-preferences and retried writes and reads. Sharded clusters, `mongodb+srv://`,
-change streams and other authentication mechanisms are not supported yet. See the
+preferences and retried writes and reads, through `mongodb://` or
+`mongodb+srv://`. Sharded clusters, change streams and other authentication mechanisms are not supported yet. See the
 [MongoDB guide](https://esrun.opentechf.org/docs/db/mongodb).
 
 Running esrun needs `--allow-net` for the server's host and port.

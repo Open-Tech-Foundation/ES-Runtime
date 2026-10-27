@@ -12,6 +12,7 @@
 
 mod pool;
 pub(crate) mod sdam;
+pub(crate) mod seedlist;
 pub(crate) mod select;
 #[cfg(test)]
 mod spec_tests;

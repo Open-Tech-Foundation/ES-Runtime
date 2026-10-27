@@ -232,8 +232,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          docker run -d -p 27017:27017 mongo:${{ matrix.mongo }} --setParameter enableTestCommands=1
-          docker run -d -p 27018:27017 -e MONGO_INITDB_ROOT_USERNAME=root \
+          docker run -d --name standalone -p 27017:27017 mongo:${{ matrix.mongo }} --setParameter enableTestCommands=1
+          docker run -d --name with-auth -p 27018:27017 -e MONGO_INITDB_ROOT_USERNAME=root \
             -e MONGO_INITDB_ROOT_PASSWORD=esrun mongo:${{ matrix.mongo }}
       - uses: pnpm/action-setup@v4
         with:
@@ -275,6 +275,14 @@ jobs:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           MONGODB_URL: mongodb://127.0.0.1:27017/esrun_test
           MONGODB_AUTH_URL: mongodb://root:esrun@127.0.0.1:27018/
+      # mongodb+srv:// against the seedlist suite's public DNS records, which
+      # point at a TLS replica set on 27017-27019 — so the two servers above
+      # give their ports up first.
+      - run: docker rm -f standalone with-auth
+      - run: echo "MONGODB_SRV_CA=$(packages/mongodb/test/srv-replica-set.sh ${{ matrix.mongo }})" >> "$GITHUB_ENV"
+      - run: tsr test:mongodb-srv
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
 
   # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
   # above, for the same reason — but it needs three servers rather than one,

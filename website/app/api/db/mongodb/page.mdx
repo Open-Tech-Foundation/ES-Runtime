@@ -27,9 +27,11 @@ package re-exports the driver as `driver`, with the BSON classes and the types.
 
 ## Connection options
 
-`mongodb://[user[:password]@]host[:port][,host[:port]…][/database][?options]`.
+`mongodb://[user[:password]@]host[:port][,host[:port]…][/database][?options]`,
+or `mongodb+srv://[user[:password]@]host[/database][?options]`.
 The hosts are seeds: from any member the client discovers the rest of the
-replica set. Options passed
+replica set. With `mongodb+srv://`, DNS gives the seeds; see
+[`mongodb+srv://`](#mongodbsrv). Options passed
 to `connect()` win over the URL's. An option not listed here is refused with
 `ERR_DB_UNSUPPORTED` rather than ignored.
 
@@ -38,7 +40,7 @@ to `connect()` win over the URL's. An option not listed here is refused with
 | `auth` | `{ username, password }` | from the URL | Credentials. A name or password in the URL must percent-encode `:`, `/` and `@`. |
 | `authSource` | `string` | the URL's database, else `admin` | Where the user is defined. |
 | `authMechanism` | `"SCRAM-SHA-256" \| "SCRAM-SHA-1"` | negotiated | Taken from what the server offers when absent. |
-| `tls` / `ssl` | `boolean` | `false` | Connect with TLS. The certificate is always verified. |
+| `tls` / `ssl` | `boolean` | `false`; `true` with `mongodb+srv://` | Connect with TLS. The certificate is always verified. |
 | `tlsCAFile` | `string` | — | A PEM CA bundle to trust besides the public roots. Implies `tls`. |
 | `ca` | `string \| Uint8Array` | — | The same, as PEM. |
 | `appName` | `string` | — | Reported to the server in the handshake. |
@@ -58,11 +60,34 @@ to `connect()` win over the URL's. An option not listed here is refused with
 | `retryWrites` | `boolean` | `true` | Retry a write once after a network or retryable error; see [Retries](#retries). |
 | `retryReads` | `boolean` | `true` | The same for reads. |
 | `compressors` | `string` | | Accepted; compression is not negotiated yet. |
+| `srvServiceName` | `string` | `mongodb` | `mongodb+srv://` only: the SRV service asked for, `_{name}._tcp.{host}`. |
+| `srvMaxHosts` | `number` | `0` | `mongodb+srv://` only: use at most this many of the SRV hosts, chosen at random; `0` for all. Not with `replicaSet`. |
+| `loadBalanced` | `boolean` | `false` | Only `false` is accepted; load-balanced deployments are not supported yet. |
 
-Refused with `ERR_DB_UNSUPPORTED`: `mongodb+srv://`, `loadBalanced`, a Unix
+Refused with `ERR_DB_UNSUPPORTED`: `loadBalanced=true`, a Unix
 socket, an authentication mechanism other than SCRAM, a read preference that
 contradicts itself (tags or staleness with `primary`), and `tlsInsecure`,
 `tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` set to `true`.
+
+### mongodb+srv://
+
+One host name stands for the deployment. Before connecting, the client looks up
+the SRV records `_mongodb._tcp.{host}` for the seeds and the TXT record on
+`{host}` for defaults:
+
+- Every SRV target must be in the host's domain — the host without its first
+  label, or, for a name of one or two labels, the whole name with at least one
+  more in front. One target outside it fails the connect, and no host is
+  contacted. `srvAllowedHostsSuffix` and `srvHostValidator`, which relax this,
+  are not offered.
+- At most one TXT record, setting only `authSource`, `replicaSet` and
+  `loadBalanced`. The URL and the options passed to `connect()` win over it.
+- A port, a second host, or `directConnection=true` is refused before any
+  lookup.
+
+The lookups are `resolveDns`'s ([`runtime:net`](/api/net#dns)), so they need
+`--allow-net` for the host, and each seed needs it again to be connected to.
+DNS is asked once, at `connect()`.
 
 `connect()` checks the seeds and every member they name, then opens one
 authenticated connection, so a wrong password or an unreachable deployment

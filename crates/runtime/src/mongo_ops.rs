@@ -35,6 +35,72 @@ pub(crate) fn install(
     // A topology still making its first checks, by the connect's ticket.
     let connecting: Topologies = Arc::new(Mutex::new(HashMap::new()));
 
+    // Args: [SRV host, service name, srvMaxHosts]. `mongodb+srv://`'s lookups
+    // (D188): resolves `{ hosts, txt }`, `txt` as [name, value] pairs, or
+    // `{ error }` when the records cannot be used. A lookup the allowlist
+    // refuses throws, as a connect would.
+    {
+        let net = net.clone();
+        let entropy = entropy.clone();
+        engine.register_op(
+            OpDecl::r#async("mongo_seedlist", move |args| {
+                let net = net.clone();
+                let entropy = entropy.clone();
+                let host = arg_str(&args, 0);
+                let service = arg_str(&args, 1);
+                let max_hosts = usize::try_from(arg_u64(&args, 2)).unwrap_or(usize::MAX);
+                Box::pin(async move {
+                    let net = net.ok_or_else(|| {
+                        OpError::new(
+                            ExceptionClass::Error,
+                            "networking is unavailable (no NetProvider configured)",
+                        )
+                    })?;
+                    let resolve = |q| net.resolve_dns(q);
+                    let mut pick = |n: usize| {
+                        let mut bytes = [0u8; 8];
+                        // A failed source picks the first: the choice spreads
+                        // load, and nothing depends on it being secret.
+                        let _ = entropy.fill(&mut bytes);
+                        usize::try_from(u64::from_ne_bytes(bytes) % n as u64).unwrap_or(0)
+                    };
+                    let found = crate::mongodb::seedlist::discover(
+                        &resolve, &host, &service, max_hosts, &mut pick,
+                    )
+                    .await;
+                    Ok(match found {
+                        Ok(list) => Value::Object(vec![
+                            (
+                                "hosts".into(),
+                                Value::Array(list.hosts.into_iter().map(Value::String).collect()),
+                            ),
+                            (
+                                "txt".into(),
+                                Value::Array(
+                                    list.txt
+                                        .into_iter()
+                                        .map(|(k, v)| {
+                                            Value::Array(vec![Value::String(k), Value::String(v)])
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                        ]),
+                        Err(crate::mongodb::seedlist::Refused::Denied(e)) => {
+                            return Err(OpError::new(e.exception_class(), e.exception_message())
+                                .with_code_opt(e.code()));
+                        }
+                        Err(refused) => Value::Object(vec![(
+                            "error".into(),
+                            Value::String(refused.to_string()),
+                        )]),
+                    })
+                })
+            })
+            .requires(Capability::Net),
+        )?;
+    }
+
     // Args: [seeds (array of host:port), directConnection, replicaSet (or
     // null), tls, ca (bytes), user (or null), password, passwordPrepared,
     // authSource, mechanism (or null), appName (or null), maxPoolSize,
