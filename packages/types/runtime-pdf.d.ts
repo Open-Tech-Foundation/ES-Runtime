@@ -64,10 +64,25 @@ declare module "runtime:pdf" {
     bbox: PDFBox;
   }
 
+  export interface PDFChar {
+    text: string;
+    /** Baseline start, `[x, y]` in points. */
+    origin: [number, number];
+    /** Baseline end: where the next character would start. */
+    end: [number, number];
+    /** Font size in points. */
+    size: number;
+    font: string;
+    /** Drawn invisibly, as the text layer of a scanned page is. */
+    invisible: boolean;
+  }
+
   export interface PDFTextLine {
     text: string;
     bbox: PDFBox;
     words: PDFWord[];
+    /** Present when `pageText` was asked for `{ chars: true }`. */
+    chars?: PDFChar[];
   }
 
   export interface PDFPageText {
@@ -81,6 +96,32 @@ declare module "runtime:pdf" {
     page?: number;
     open: boolean;
     children: PDFOutline[];
+  }
+
+  export interface PDFDestination {
+    name: string;
+    page?: number;
+  }
+
+  /** A bookmark for `setOutlines`. */
+  export interface PDFBookmark {
+    title: string;
+    /** An index into the edit's pages at that point. */
+    page?: number;
+    /** Shown expanded. Default false. */
+    open?: boolean;
+    children?: PDFBookmark[];
+  }
+
+  /** What `sanitize` removes, counted. */
+  export interface PDFSanitizeReport {
+    javascript: number;
+    externalActions: number;
+    links: number;
+    attachments: number;
+    xfa: number;
+    multimedia: number;
+    metadata: number;
   }
 
   export interface PDFAttachment {
@@ -158,8 +199,13 @@ declare module "runtime:pdf" {
     pages(): Promise<PDFPage[]>;
     /** Every page's text, pages separated by form feeds (`\f`). */
     text(): Promise<string>;
-    pageText(index: number): Promise<PDFPageText>;
+    pageText(index: number, options?: { chars?: boolean }): Promise<PDFPageText>;
     outlines(): Promise<PDFOutline[]>;
+    destinations(): Promise<PDFDestination[]>;
+    /** The XMP metadata packet, or undefined. */
+    xmp(): Promise<string | undefined>;
+    /** What `edit().sanitize(options)` would remove. Changes nothing. */
+    sanitizeReport(options?: PDFSanitizeOptions): Promise<PDFSanitizeReport>;
     attachments(): Promise<PDFAttachment[]>;
     attachment(name: string): Promise<Uint8Array | undefined>;
     edit(): PDFEdit;
@@ -177,6 +223,9 @@ declare module "runtime:pdf" {
     /** Clockwise, a multiple of 90, on top of the page's rotation. */
     rotate(pages: number | number[], degrees: number): PDFEdit;
     crop(pages: number | number[], box: PDFBox): PDFEdit;
+    setMediaBox(pages: number | number[], box: PDFBox): PDFEdit;
+    /** Replaces the bookmarks; an empty array removes them. */
+    setOutlines(items: PDFBookmark[]): PDFEdit;
     append(other: PDF | PDFEdit, pages?: number | number[]): PDFEdit;
     setInfo(info: PDFInfoUpdate): PDFEdit;
     addAttachment(

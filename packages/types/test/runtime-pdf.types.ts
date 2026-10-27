@@ -22,6 +22,10 @@ const text: string = await doc.text();
 const page: PDFPageText = await doc.pageText(0);
 const word: string | undefined = page.lines[0]?.words[0]?.text;
 const outlines: PDFOutline[] = await doc.outlines();
+const font: string | undefined = (await doc.pageText(0, { chars: true })).lines[0]?.chars?.[0]?.font;
+const named: string | undefined = (await doc.destinations())[0]?.name;
+const xmp: string | undefined = await doc.xmp();
+const scripts: number = (await doc.sanitizeReport({ links: true })).javascript;
 const data: Uint8Array | undefined = await doc.attachment("a.csv");
 
 const edit: PDFEdit = doc
@@ -30,6 +34,8 @@ const edit: PDFEdit = doc
   .delete(1)
   .rotate([0], 90)
   .crop(0, [0, 0, 100, 100])
+  .setMediaBox([0], [0, 0, 595, 842])
+  .setOutlines([{ title: "Intro", page: 0, open: true, children: [{ title: "Part" }] }])
   .append(doc, [0])
   .append(doc.edit())
   .setInfo({ title: "T", author: null, modDate: new Date() })
@@ -53,4 +59,4 @@ await edit.bytes({ version: "1.4" });
 // @ts-expect-error the constructor is private
 new PDF();
 
-export { count, version, copy, created, kind, text, word, outlines, data, bytes, blob, written };
+export { font, named, xmp, scripts, count, version, copy, created, kind, text, word, outlines, data, bytes, blob, written };

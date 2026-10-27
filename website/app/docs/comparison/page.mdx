@@ -139,7 +139,7 @@ mapping: [UDP guide](/docs/guides/udp#coming-from-node-deno-or-bun).
 
 ## Data and built-in backends
 
-Databases, images and mail: in the runtime, in a first-party package, or npm.
+Databases, images, PDFs and mail: in the runtime, in a first-party package, or npm.
 
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
@@ -149,6 +149,7 @@ Databases, images and mail: in the runtime, in a first-party package, or npm.
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
 | First-party SMTP client | <Yes /> | <No /> | <No /> | <No /> |
 | Built-in image processing | <Yes /> | <No /> | <Yes /> | <Partial /> |
+| Built-in PDF reading and editing | <Yes /> | <No /> | <No /> | <No /> |
 
 **On the database rows.** `postgres` and `mysql` live in `runtime:db`; Redis
 (`@opentf/esrun-redis`) is a first-party *package*. All sit

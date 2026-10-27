@@ -59,8 +59,11 @@ The returned `PDF` has these properties, read when it was opened:
 | --- | --- |
 | `pages()` | Per page: `width` and `height` as displayed (points, crop box, rotation applied), `rotate`, `mediaBox` and `cropBox` as `[left, bottom, right, top]`. |
 | `text()` | Every page's text in content-stream order, as `pdftotext -raw` gives it, each page followed by a form feed (`\f`). |
-| `pageText(index)` | `{ text, lines }`; each line is `{ text, bbox, words }` and each word `{ text, bbox }`, in displayed page coordinates with y up. An index outside the document is a `RangeError`. |
+| `pageText(index, { chars? })` | `{ text, lines }`; each line is `{ text, bbox, words }` and each word `{ text, bbox }`, in displayed page coordinates with y up. With `chars: true` each line also has `chars`: `{ text, origin, end, size, font, invisible }`, where `origin` and `end` are the baseline's `[x, y]`. An index outside the document is a `RangeError`. |
 | `outlines()` | The bookmarks: `{ title, page?, open, children }`. `page` is the index of the page the bookmark opens, when it names a page in this document. |
+| `destinations()` | The named destinations: `{ name, page? }`. |
+| `xmp()` | The XMP metadata packet as text, or `undefined`. |
+| `sanitizeReport(options?)` | What `edit().sanitize(options)` would remove, counted: `{ javascript, externalActions, links, attachments, xfa, multimedia, metadata }`. The document is not changed. |
 | `attachments()` | Embedded files: `{ name, filename?, description?, type?, size? }`. |
 | `attachment(name)` | That file's bytes, or `undefined`. |
 
@@ -86,6 +89,8 @@ indices are checked at the call against the pages the edit has at that point
 | `delete(pages)` | Remove these pages, with the bookmarks and named destinations that point to them. |
 | `rotate(pages, degrees)` | Turn clockwise by a multiple of 90, added to the page's rotation. |
 | `crop(pages, [left, bottom, right, top])` | Set the visible region, in points. |
+| `setMediaBox(pages, [left, bottom, right, top])` | Set the physical page size, in points. |
+| `setOutlines(items)` | Replace the bookmarks with `[{ title, page?, open?, children? }]`; `page` is an index into the pages the edit has at that point. An empty array removes them. |
 | `append(other, pages?)` | Append the pages of another `PDF` or `PDFEdit` — all, or the indices given. Shared fonts and images are copied once. |
 | `setInfo(info)` | Set document information: strings for the text fields, `Date`s for `creationDate` and `modDate`, `null` to remove one. Fields not named are kept. The XMP metadata is rewritten to match. |
 | `addAttachment(name, data, { type?, description? })` | Embed a file, replacing one of the same name. `data` is copied at the call. |

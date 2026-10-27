@@ -103,9 +103,10 @@ const groups = [
   },
   {
     name: "Ships with",
-    desc: "Native image processing and durable state.",
+    desc: "Native image processing, a PDF toolkit and durable state.",
     tiles: [
       { icon: "images", label: "Images", to: "/docs/guides/images" },
+      { icon: "pdf", label: "PDF toolkit", to: "/docs/guides/pdf" },
       { icon: "durable", label: "Durable workers", to: "/docs/guides/durable-workers" },
     ],
   },

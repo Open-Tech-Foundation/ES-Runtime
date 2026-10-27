@@ -18,11 +18,12 @@ namespace) is unstable and may change between minor releases until the API freez
   { password, strict, maxDecodedSize, signal })` takes bytes, a `Blob` or a
   `file()` — never a path string — and reports `pageCount`, `version`,
   `encrypted`, `permissions`, `info` and the repairs a damaged file needed.
-  `pages()`, `text()`, `pageText(i)` (lines and words with boxes),
-  `outlines()`, `attachments()` and `attachment(name)` reuse what opening
-  parsed. `doc.edit()` starts an immutable chain — `select`, `delete`,
-  `rotate`, `crop`, `append`, `setInfo`, `addAttachment`, `removeAttachment`,
-  `sanitize` — saved by `bytes`, `blob` or `write(file())`, in full or
+  `pages()`, `text()`, `pageText(i, { chars })` (lines, words and
+  characters with boxes), `outlines()`, `destinations()`, `xmp()`,
+  `attachments()`, `attachment(name)` and `sanitizeReport()` reuse what
+  opening parsed. `doc.edit()` starts an immutable chain — `select`,
+  `delete`, `rotate`, `crop`, `setMediaBox`, `append`, `setInfo`,
+  `setOutlines`, `addAttachment`, `removeAttachment`, `sanitize` — saved by `bytes`, `blob` or `write(file())`, in full or
   incrementally, optionally AES-256 encrypted. A full save of an encrypted
   file must pass `encrypt` or `encrypt: false`, so a password is never
   dropped by accident. `maxDecodedSize` defaults to 64 MiB; errors carry

@@ -117,3 +117,10 @@ name = "dns"
 path = "fuzz_targets/dns.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+bench = false

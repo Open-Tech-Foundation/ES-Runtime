@@ -16,7 +16,8 @@ itself.
 ### Added
 
 - `runtime:pdf`: `PDF` and `PDFEdit`, with the open, save, encrypt and
-  sanitize options and the page, text, outline and attachment shapes.
+  sanitize options and the page, text, character, outline, bookmark,
+  destination, attachment and sanitize-report shapes.
 - `runtime:serialization`: the `BSON` namespace — `encode`, `decode`,
   `validate`, and the `ObjectId`, `Decimal128`, `UUID`, `Timestamp`, `Binary`,
   `Code`, `BSONRegExp`, `MinKey`, `MaxKey` and `Double` classes.

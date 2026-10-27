@@ -27,7 +27,7 @@ host="$(rustc -vV | awk '/^host: /{print $2}')"
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=(url encoding urlpattern compression serialization yaml keys cbor archive image bson dns)
+  targets=(url encoding urlpattern compression serialization yaml keys cbor archive image pdf bson dns)
 fi
 
 for target in "${targets[@]}"; do

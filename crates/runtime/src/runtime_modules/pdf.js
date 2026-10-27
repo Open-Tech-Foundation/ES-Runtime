@@ -175,6 +175,42 @@ function checkIndex(index, count) {
   }
 }
 
+function sanitizeOptions(options) {
+  const o = optionsObject(options, "sanitize");
+  const chosen = {};
+  for (const [key, value] of Object.entries(o)) {
+    if (!SANITIZE.includes(key)) throw new TypeError(`sanitize does not know ${JSON.stringify(key)}`);
+    chosen[key] = Boolean(value);
+  }
+  return chosen;
+}
+
+function boxOf(box, what) {
+  if (!Array.isArray(box) || box.length !== 4 || !box.every(Number.isFinite)) {
+    throw new TypeError(`${what} must be [left, bottom, right, top]`);
+  }
+  return [...box];
+}
+
+// Matches the host's nesting bound.
+const MAX_BOOKMARK_DEPTH = 256;
+
+function bookmarkOf(item, count, depth) {
+  if (depth >= MAX_BOOKMARK_DEPTH) throw new RangeError("bookmarks nest too deeply");
+  if (item === null || typeof item !== "object") throw new TypeError("a bookmark must be an object");
+  if (typeof item.title !== "string") throw new TypeError("a bookmark needs a title string");
+  const bookmark = { title: item.title, open: item.open === true, children: [] };
+  if (item.page !== undefined && item.page !== null) {
+    checkIndex(item.page, count);
+    bookmark.page = item.page;
+  }
+  if (item.children !== undefined) {
+    if (!Array.isArray(item.children)) throw new TypeError("bookmark children must be an array");
+    bookmark.children = item.children.map((child) => bookmarkOf(child, count, depth + 1));
+  }
+  return bookmark;
+}
+
 /**
  * An open PDF. Reads reuse what opening parsed; edits go through `edit()`,
  * which never changes this document.
@@ -255,15 +291,39 @@ export class PDF {
     return this.#read("pdf_text");
   }
 
-  /** One page's `text` and its `lines`, each with a `bbox` and `words` (`{ text, bbox }`). */
-  async pageText(index) {
+  /**
+   * One page's `text` and its `lines`, each with a `bbox` and `words`
+   * (`{ text, bbox }`). With `{ chars: true }` each line also has `chars`:
+   * `{ text, origin, end, size, font, invisible }`.
+   */
+  async pageText(index, options) {
     checkIndex(index, this.pageCount);
-    return this.#read("pdf_page_text", index);
+    const o = optionsObject(options, "pageText");
+    return this.#read("pdf_page_text", index, o.chars === true);
   }
 
   /** The bookmarks: `{ title, page?, open, children }`; `page` when the destination is a page here. */
   async outlines() {
     return this.#read("pdf_outlines");
+  }
+
+  /** Named destinations: `{ name, page? }`, `page` when it is a page here. */
+  async destinations() {
+    return this.#read("pdf_destinations");
+  }
+
+  /** The XMP metadata packet as text, or undefined when there is none. */
+  async xmp() {
+    return this.#read("pdf_xmp");
+  }
+
+  /**
+   * What `edit().sanitize(options)` would remove, counted:
+   * `{ javascript, externalActions, links, attachments, xfa, multimedia, metadata }`.
+   * Nothing is changed.
+   */
+  async sanitizeReport(options) {
+    return this.#read("pdf_sanitize_report", sanitizeOptions(options));
   }
 
   /** Embedded files: `{ name, filename?, description?, type?, size? }`. */
@@ -350,10 +410,23 @@ export class PDFEdit {
   /** Sets these pages' visible region, `[left, bottom, right, top]` in points. */
   crop(pages, box) {
     const list = pageList(pages, this.#count, "crop");
-    if (!Array.isArray(box) || box.length !== 4 || !box.every(Number.isFinite)) {
-      throw new TypeError("a crop box must be [left, bottom, right, top]");
-    }
-    return this.#with(["crop", list, [...box]]);
+    return this.#with(["crop", list, boxOf(box, "a crop box")]);
+  }
+
+  /** Sets these pages' physical size, `[left, bottom, right, top]` in points. */
+  setMediaBox(pages, box) {
+    const list = pageList(pages, this.#count, "setMediaBox");
+    return this.#with(["mediaBox", list, boxOf(box, "a media box")]);
+  }
+
+  /**
+   * Replaces the bookmarks: `[{ title, page?, open?, children? }]`, where
+   * `page` is an index into the pages this edit has at this point. An empty
+   * array removes them.
+   */
+  setOutlines(items) {
+    if (!Array.isArray(items)) throw new TypeError("setOutlines takes an array of bookmarks");
+    return this.#with(["setOutlines", items.map((item) => bookmarkOf(item, this.#count, 0))]);
   }
 
   /** Appends pages of another PDF or PDFEdit — all of them, or the indices given. */
@@ -418,13 +491,7 @@ export class PDFEdit {
    * are kept unless set. Each option is a boolean.
    */
   sanitize(options) {
-    const o = optionsObject(options, "sanitize");
-    const chosen = {};
-    for (const [key, value] of Object.entries(o)) {
-      if (!SANITIZE.includes(key)) throw new TypeError(`sanitize does not know ${JSON.stringify(key)}`);
-      chosen[key] = Boolean(value);
-    }
-    return this.#with(["sanitize", chosen]);
+    return this.#with(["sanitize", sanitizeOptions(options)]);
   }
 
   // `{ handle, steps }` for the host, with every nested document's handle.

@@ -76,6 +76,14 @@ serve({ port: 8080 }, async (request) => {
 forms and multimedia. `sanitize({ links: true, metadata: true })` removes
 links and document metadata as well.
 
+To log or reject instead of stripping, count first; `sanitizeReport` changes
+nothing:
+
+```js
+const found = await doc.sanitizeReport();
+if (found.javascript > 0) console.warn("upload carried scripts", found);
+```
+
 `encrypt: false` is there because an upload may be encrypted: a full save of
 an encrypted file has to say whether to keep the encryption, so a password is
 never removed without the code saying so.

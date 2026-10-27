@@ -126,6 +126,7 @@ enum Step {
     Delete(Vec<usize>),
     Rotate(Vec<usize>, i32),
     Crop(Vec<usize>, Rect),
+    MediaBox(Vec<usize>, Rect),
     Append(Box<Nested>, Option<Vec<usize>>),
     SetInfo(Vec<(String, Option<String>)>),
     AddAttachment {
@@ -135,6 +136,17 @@ enum Step {
     },
     RemoveAttachment(String),
     Sanitize(SanitizeOptions),
+    SetOutlines(Vec<Bookmark>),
+}
+
+/// A bookmark as `setOutlines` takes it; `page` is resolved against the
+/// pages the document has when the step runs.
+#[derive(Debug, Clone, PartialEq)]
+struct Bookmark {
+    title: String,
+    page: Option<usize>,
+    open: bool,
+    children: Vec<Bookmark>,
 }
 
 /// Another document and the edits made to it, for `append`.
@@ -264,6 +276,8 @@ pub(crate) fn install(
         ("pdf_outlines", outlines),
         ("pdf_attachments", attachments),
         ("pdf_attachment", attachment),
+        ("pdf_xmp", xmp),
+        ("pdf_destinations", destinations),
     ] {
         let (reg, spawner) = (handles.clone(), spawner.clone());
         engine.register_op(OpDecl::r#async(name, move |mut args| {
@@ -282,6 +296,37 @@ pub(crate) fn install(
             })
         }))?;
     }
+
+    // What `sanitize(options)` would remove. Sanitizing needs a document of
+    // its own to change, so the bytes are opened again and nothing is kept.
+    let (reg, s) = (handles.clone(), spawner.clone());
+    engine.register_op(OpDecl::r#async("pdf_sanitize_report", move |args| {
+        let spawner = s.clone();
+        let parsed = lookup(&reg, &args).map(|handle| {
+            let options = sanitize_options(args.get(1));
+            (handle.bytes.clone(), handle_open(&handle), options)
+        });
+        Box::pin(async move {
+            let (bytes, open, options) = parsed?;
+            let result = offload(spawner, move || {
+                let mut doc = Document::open(bytes, open.options(None))?;
+                doc.sanitize(&options)
+            })
+            .await?;
+            Ok(match result {
+                Ok(report) => ok(Value::Object(vec![
+                    field("javascript", num(report.javascript as f64)),
+                    field("externalActions", num(report.external_actions as f64)),
+                    field("links", num(report.links as f64)),
+                    field("attachments", num(report.attachments as f64)),
+                    field("xfa", num(report.xfa as f64)),
+                    field("multimedia", num(report.multimedia as f64)),
+                    field("metadata", num(report.metadata as f64)),
+                ])),
+                Err(error) => failure(&error, None),
+            })
+        })
+    }))?;
 
     let reg = handles.clone();
     engine.register_op(OpDecl::sync("pdf_close", move |args| {
@@ -404,14 +449,19 @@ fn resolve(
     }
     Ok(Job {
         bytes: handle.bytes.clone(),
-        open: Open {
-            password: handle.password.clone(),
-            strictness: handle.strictness,
-            max_decoded_size: handle.max_decoded_size,
-        },
+        open: handle_open(&handle),
         doc: handle.doc.clone(),
         steps: out,
     })
+}
+
+/// The options `handle` was opened with, to open its bytes again.
+fn handle_open(handle: &PdfHandle) -> Open {
+    Open {
+        password: handle.password.clone(),
+        strictness: handle.strictness,
+        max_decoded_size: handle.max_decoded_size,
+    }
 }
 
 /// The document a job describes: the open one when there is nothing to
@@ -446,6 +496,17 @@ fn apply(doc: &mut Document, step: Step) -> std::result::Result<(), PdfError> {
         Step::Crop(pages, rect) => pages
             .into_iter()
             .try_for_each(|page| doc.set_crop_box(page, rect)),
+        Step::MediaBox(pages, rect) => pages
+            .into_iter()
+            .try_for_each(|page| doc.set_media_box(page, rect)),
+        Step::SetOutlines(bookmarks) => {
+            let pages: Vec<_> = doc.pages()?.iter().map(|p| p.id).collect();
+            let items: Vec<OutlineItem> = bookmarks
+                .iter()
+                .map(|b| outline_item(b, &pages))
+                .collect::<std::result::Result<_, _>>()?;
+            doc.set_outlines(&items)
+        }
         Step::SetInfo(fields) => {
             let mut info = doc.info();
             for (key, value) in fields {
@@ -668,12 +729,73 @@ fn pages(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError
     Ok(Value::Array(doc.pages()?.iter().map(page_value).collect()))
 }
 
+/// A bookmark as otf-pdf writes it: an explicit `[page /Fit]` destination.
+fn outline_item(
+    bookmark: &Bookmark,
+    pages: &[Option<otf_pdf::ObjId>],
+) -> std::result::Result<OutlineItem, PdfError> {
+    let dest = match bookmark.page {
+        None => None,
+        Some(index) => {
+            let id = pages.get(index).copied().flatten().ok_or(PdfError::syntax(
+                0,
+                "a bookmark's page index is out of range",
+            ))?;
+            Some(Object::Array(vec![
+                Object::Ref(id),
+                Object::Name(otf_pdf::Name::new(b"Fit".to_vec())),
+            ]))
+        }
+    };
+    Ok(OutlineItem {
+        id: None,
+        title: bookmark.title.clone(),
+        dest,
+        action: None,
+        open: bookmark.open,
+        children: bookmark
+            .children
+            .iter()
+            .map(|child| outline_item(child, pages))
+            .collect::<std::result::Result<_, _>>()?,
+        extra: otf_pdf::Dict::new(),
+    })
+}
+
+fn xmp(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+    Ok(match doc.xmp_metadata()? {
+        Some(bytes) => Value::String(String::from_utf8_lossy(&bytes).into_owned()),
+        None => Value::Undefined,
+    })
+}
+
+fn destinations(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+    let pages: Vec<_> = doc.pages()?.iter().map(|p| p.id).collect();
+    let named = doc.named_destinations()?;
+    Ok(Value::Array(
+        named
+            .iter()
+            .map(|(name, dest)| {
+                let mut fields = vec![field(
+                    "name",
+                    Value::String(String::from_utf8_lossy(name).into_owned()),
+                )];
+                if let Some(page) = dest_page(dest, &pages, &named, 0) {
+                    fields.push(field("page", num(page as f64)));
+                }
+                Value::Object(fields)
+            })
+            .collect(),
+    ))
+}
+
 fn text(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
     Ok(Value::String(TextExtractor::new(doc).text()?))
 }
 
 fn page_text(doc: &Document, args: &[Value]) -> std::result::Result<Value, PdfError> {
     let index = args.first().and_then(Value::as_number).unwrap_or(0.0) as usize;
+    let with_chars = matches!(args.get(1), Some(Value::Bool(true)));
     let page = TextExtractor::new(doc).page(index)?;
     let lines = page
         .lines
@@ -689,11 +811,32 @@ fn page_text(doc: &Document, args: &[Value]) -> std::result::Result<Value, PdfEr
                     ])
                 })
                 .collect();
-            Value::Object(vec![
+            let mut fields = vec![
                 field("text", Value::String(line.text.clone())),
                 field("bbox", rect_value(&line.bbox)),
                 field("words", Value::Array(words)),
-            ])
+            ];
+            if with_chars {
+                let chars = line
+                    .chars
+                    .iter()
+                    .map(|c| {
+                        Value::Object(vec![
+                            field("text", Value::String(c.text.clone())),
+                            field(
+                                "origin",
+                                Value::Array(vec![num(c.origin.0), num(c.origin.1)]),
+                            ),
+                            field("end", Value::Array(vec![num(c.end.0), num(c.end.1)])),
+                            field("size", num(c.size)),
+                            field("font", Value::String(c.font.clone())),
+                            field("invisible", Value::Bool(c.invisible)),
+                        ])
+                    })
+                    .collect();
+                fields.push(field("chars", Value::Array(chars)));
+            }
+            Value::Object(fields)
         })
         .collect();
     Ok(Value::Object(vec![
@@ -990,7 +1133,7 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
             }
             Step::Rotate(indices(arg(1))?, degrees as i32)
         }
-        "crop" => {
+        "crop" | "mediaBox" => {
             let rect = match arg(2) {
                 Some(Value::Array(items)) if items.len() == 4 => {
                     let n: Vec<f64> = items.iter().filter_map(Value::as_number).collect();
@@ -1004,8 +1147,21 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
                 _ => None,
             }
             .ok_or_else(|| OpError::type_error("a crop box must be [left, bottom, right, top]"))?;
-            Step::Crop(indices(arg(1))?, rect)
+            if name == "crop" {
+                Step::Crop(indices(arg(1))?, rect)
+            } else {
+                Step::MediaBox(indices(arg(1))?, rect)
+            }
         }
+        "setOutlines" => match arg(1) {
+            Some(Value::Array(items)) => Step::SetOutlines(
+                items
+                    .iter()
+                    .map(|item| parse_bookmark(item, 0))
+                    .collect::<std::result::Result<_, _>>()?,
+            ),
+            _ => return Err(OpError::type_error("setOutlines takes an array")),
+        },
         "append" => {
             let Some(Value::Object(other)) = arg(1) else {
                 return Err(OpError::type_error("append takes a PDF"));
@@ -1063,26 +1219,63 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
                 .ok_or_else(|| OpError::type_error("an attachment name must be a string"))?
                 .to_string(),
         ),
-        "sanitize" => {
-            let mut options = SanitizeOptions::default();
-            if let Some(Value::Object(fields)) = arg(1) {
-                for (key, slot) in [
-                    ("javascript", &mut options.javascript),
-                    ("externalActions", &mut options.external_actions),
-                    ("links", &mut options.links),
-                    ("attachments", &mut options.attachments),
-                    ("xfa", &mut options.xfa),
-                    ("multimedia", &mut options.multimedia),
-                    ("metadata", &mut options.metadata),
-                ] {
-                    if let Some(Value::Bool(b)) = get(fields, key) {
-                        *slot = *b;
-                    }
-                }
-            }
-            Step::Sanitize(options)
-        }
+        "sanitize" => Step::Sanitize(sanitize_options(arg(1))),
         other => return Err(OpError::type_error(format!("unknown PDF step {other:?}"))),
+    })
+}
+
+fn sanitize_options(value: Option<&Value>) -> SanitizeOptions {
+    let mut options = SanitizeOptions::default();
+    if let Some(Value::Object(fields)) = value {
+        for (key, slot) in [
+            ("javascript", &mut options.javascript),
+            ("externalActions", &mut options.external_actions),
+            ("links", &mut options.links),
+            ("attachments", &mut options.attachments),
+            ("xfa", &mut options.xfa),
+            ("multimedia", &mut options.multimedia),
+            ("metadata", &mut options.metadata),
+        ] {
+            if let Some(Value::Bool(b)) = get(fields, key) {
+                *slot = *b;
+            }
+        }
+    }
+    options
+}
+
+/// Bookmarks nest at most as deep as otf-pdf reads them back.
+const MAX_BOOKMARK_DEPTH: usize = 256;
+
+fn parse_bookmark(value: &Value, depth: usize) -> std::result::Result<Bookmark, OpError> {
+    if depth >= MAX_BOOKMARK_DEPTH {
+        return Err(OpError::range_error("bookmarks nest too deeply"));
+    }
+    let Value::Object(fields) = value else {
+        return Err(OpError::type_error("a bookmark must be an object"));
+    };
+    let title = get(fields, "title")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OpError::type_error("a bookmark needs a title"))?
+        .to_string();
+    let page = match get(fields, "page") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) if n.fract() == 0.0 && *n >= 0.0 => Some(*n as usize),
+        Some(_) => return Err(OpError::type_error("a bookmark's page must be an index")),
+    };
+    let children = match get(fields, "children") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| parse_bookmark(item, depth + 1))
+            .collect::<std::result::Result<_, _>>()?,
+        Some(_) => return Err(OpError::type_error("bookmark children must be an array")),
+    };
+    Ok(Bookmark {
+        title,
+        page,
+        open: matches!(get(fields, "open"), Some(Value::Bool(true))),
+        children,
     })
 }
 
@@ -1159,6 +1352,48 @@ fn require(fs: &Option<Arc<dyn FileSystem>>) -> std::result::Result<Arc<dyn File
 
 fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
+}
+
+/// Fuzz entry: arbitrary bytes through what `PDF.open` and the reads do —
+/// the open, the summary, pages, text, bookmarks and named destinations
+/// (whose lookups recurse), attachments and XMP — then a save with edits and a
+/// sanitize report (see [`crate::fuzz`]). otf-pdf fuzzes its parser
+/// upstream; this reaches the runtime's own walk over what it returns.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_open(bytes: &[u8]) {
+    // Small enough that a bomb or a huge object stops each iteration early.
+    let open = Open {
+        password: Vec::new(),
+        strictness: Strictness::Lenient,
+        max_decoded_size: 1 << 20,
+    };
+    let source = Shared(Arc::new(bytes.to_vec()));
+    let Ok(doc) = Document::open(source.clone(), open.options(None)) else {
+        return;
+    };
+    let _ = summary(&doc);
+    for read in [pages, text, outlines, destinations, attachments, xmp] {
+        let _ = read(&doc, &[]);
+    }
+    let _ = page_text(&doc, &[Value::Number(0.0), Value::Bool(true)]);
+    let count = doc.page_count().unwrap_or(0);
+    let mut steps = vec![ResolvedStep::Plain(Step::Sanitize(SanitizeOptions::ALL))];
+    if count > 0 {
+        steps.push(ResolvedStep::Plain(Step::Select(vec![count - 1, 0])));
+        steps.push(ResolvedStep::Plain(Step::SetOutlines(vec![Bookmark {
+            title: "x".into(),
+            page: Some(0),
+            open: true,
+            children: Vec::new(),
+        }])));
+    }
+    let job = Job {
+        bytes: source,
+        open,
+        doc: Arc::new(doc),
+        steps,
+    };
+    let _ = build(job, &None).and_then(|doc| doc.save(&SaveOptions::default()));
 }
 
 #[cfg(test)]
@@ -1243,6 +1478,49 @@ mod tests {
         );
         assert_eq!(steps[6], Step::RemoveAttachment("a.txt".into()));
         assert!(matches!(&steps[7], Step::Sanitize(o) if o.links && o.javascript));
+    }
+
+    #[test]
+    fn parses_bookmarks_and_media_boxes() {
+        let step = parse_step(&Value::Array(vec![
+            s("setOutlines"),
+            Value::Array(vec![Value::Object(vec![
+                field("title", s("A")),
+                field("page", n(1.0)),
+                field("open", Value::Bool(true)),
+                field(
+                    "children",
+                    Value::Array(vec![Value::Object(vec![field("title", s("B"))])]),
+                ),
+            ])]),
+        ]))
+        .expect("parse");
+        let Step::SetOutlines(items) = step else {
+            panic!("not outlines: {step:?}");
+        };
+        assert_eq!((items[0].page, items[0].open), (Some(1), true));
+        assert_eq!(
+            (items[0].children[0].page, items[0].children[0].open),
+            (None, false)
+        );
+
+        let boxed = parse_step(&Value::Array(vec![
+            s("mediaBox"),
+            list(&[0.0]),
+            list(&[0.0, 0.0, 595.0, 842.0]),
+        ]))
+        .expect("parse");
+        assert!(matches!(boxed, Step::MediaBox(p, r) if p == [0] && r.urx == 595.0));
+
+        // Nesting past the bound is refused rather than recursed into.
+        let mut deep = Value::Object(vec![field("title", s("x"))]);
+        for _ in 0..MAX_BOOKMARK_DEPTH {
+            deep = Value::Object(vec![
+                field("title", s("x")),
+                field("children", Value::Array(vec![deep])),
+            ]);
+        }
+        assert!(parse_bookmark(&deep, 0).is_err());
     }
 
     #[test]

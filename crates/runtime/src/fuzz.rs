@@ -126,6 +126,13 @@ pub fn image(bytes: &[u8]) {
     crate::image_ops::fuzz_decode(bytes);
 }
 
+/// Opens arbitrary bytes as a PDF, reads everything `runtime:pdf` reads, and
+/// saves it with edits. Cross-references, page trees, bookmarks and named
+/// destinations in a PDF are untrusted, and the runtime walks each of them.
+pub fn pdf(bytes: &[u8]) {
+    crate::pdf_ops::fuzz_open(bytes);
+}
+
 /// Validates BSON and, when it validates, walks every element the way the
 /// engine's decoder does. Also parses the input as Decimal128 text and, when
 /// that succeeds, checks the canonical text parses back to the same bytes.

@@ -453,3 +453,52 @@ w.onmessage = (e) => { console.log(e.data); w.terminate(); };
     );
     assert_eq!(out.trim(), "Hello");
 }
+
+/// Named destinations, XMP, per-character text, media boxes, bookmark
+/// editing and the sanitize report.
+#[test]
+fn the_rest_of_the_toolkit() {
+    let source = format!(
+        r#"
+import {{ PDF }} from "runtime:pdf";
+const doc = await PDF.open({});
+eq(await doc.destinations(), [{{ name: "third", page: 2 }}], "named destinations");
+eq(await doc.xmp(), undefined, "no XMP");
+const titled = await PDF.open(await doc.edit().setInfo({{ title: "Quarterly" }}).bytes());
+eq((await titled.xmp()).includes("Quarterly"), true, "XMP follows setInfo");
+
+const {{ lines }} = await doc.pageText(0, {{ chars: true }});
+const chars = lines[0].chars;
+eq(chars.map((c) => c.text).join(""), "Page 1", "chars");
+eq([chars[0].size, chars[0].font, chars[0].invisible, chars[0].origin.length], [24, "Helvetica", false, 2], "char fields");
+eq("chars" in (await doc.pageText(0)).lines[0], false, "chars only when asked");
+
+const resized = await PDF.open(await doc.edit().setMediaBox([0, 1], [0, 0, 595, 842]).bytes());
+eq((await resized.pages()).map((p) => p.mediaBox), [[0, 0, 595, 842], [0, 0, 595, 842], [0, 0, 612, 792]], "media box");
+
+const marked = await PDF.open(await doc.edit().select([2, 1, 0]).setOutlines([
+  {{ title: "Start", page: 0, open: true, children: [{{ title: "Middle", page: 1 }}] }},
+  {{ title: "No page" }},
+]).bytes());
+eq(await marked.outlines(), [
+  {{ title: "Start", page: 0, open: true, children: [{{ title: "Middle", page: 1, open: false, children: [] }}] }},
+  {{ title: "No page", open: false, children: [] }},
+], "set outlines");
+eq(await (await PDF.open(await doc.edit().setOutlines([]).bytes())).outlines(), [], "removed");
+
+eq(await doc.sanitizeReport(), {{ javascript: 1, externalActions: 0, links: 0, attachments: 0, xfa: 0, multimedia: 0, metadata: 0 }}, "report");
+eq((await doc.sanitizeReport({{ javascript: false }})).javascript, 0, "report honours options");
+eq((await doc.text()).includes("Page 1"), true, "the report changes nothing");
+
+throws(() => doc.edit().setOutlines([{{ title: "x", page: 3 }}]), (e) => eq(e instanceof RangeError, true, "RangeError"), "bookmark page");
+throws(() => doc.edit().setOutlines([{{ page: 0 }}]), (e) => eq(e instanceof TypeError, true, "TypeError"), "bookmark title");
+throws(() => doc.edit().setMediaBox(0, [0, 0]), (e) => eq(e instanceof TypeError, true, "TypeError"), "media box shape");
+console.log("ok");
+"#,
+        literal(&rich_pdf())
+    );
+    assert_eq!(
+        run("pdf_toolkit.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
