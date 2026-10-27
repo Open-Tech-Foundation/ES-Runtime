@@ -154,6 +154,7 @@ const sections = [
   ["results_http2", () => data.results_http2, "SECTIONS=http2"],
   ["memory_safety", () => data.memory_safety, "SECTIONS=memory_safety"],
   ["results_images", () => data.results_images, "SECTIONS=images"],
+  ["results_pdf", () => data.results_pdf, "SECTIONS=pdf"],
 ];
 for (const [path, get, source] of sections) {
   const v = get();
@@ -201,6 +202,10 @@ if (runtimes.includes("esrun")) {
     ["results_mysql_qps.mysql_qps", data.results_mysql_qps?.mysql_qps],
     ...Object.entries(data.results_images || {}).map(([k, v]) => [
       `results_images.${k}`,
+      v && { esrun: v.esrun?.ms },
+    ]),
+    ...Object.entries(data.results_pdf || {}).map(([k, v]) => [
+      `results_pdf.${k}`,
       v && { esrun: v.esrun?.ms },
     ]),
     ...["server", "client"].flatMap((side) =>

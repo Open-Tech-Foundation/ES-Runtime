@@ -38,6 +38,7 @@ mongodb-specs/upstream
 #.idea/
 bench/db/.scratch/
 bench/images/.data/
+bench/pdf/.data/
 bench/images/features/.samples/
 bench/images/features/.out/
 

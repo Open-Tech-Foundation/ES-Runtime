@@ -46,6 +46,8 @@
         "npm:msgpackr@^1.11.2",
         "npm:mysql2@^3.24.4",
         "npm:ndjson@2",
+        "npm:pdf-lib@^1.17.1",
+        "npm:pdfjs-dist@^6.4.299",
         "npm:postgres@^3.4.9",
         "npm:puppeteer-core@^25.11.0",
         "npm:redis@^6.2.0",

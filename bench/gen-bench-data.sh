@@ -33,8 +33,9 @@ TMP11="$(mktemp)"
 TMP12="$(mktemp)"
 TMP13="$(mktemp)"
 TMP14="$(mktemp)"
+TMP15="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP9" "$TMP10" "$TMP11" "$TMP12" "$TMP13" "$TMP14" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TMP9" "$TMP10" "$TMP11" "$TMP12" "$TMP13" "$TMP14" "$TMP15" "$TMP_COMBINED"' EXIT
 
 # Scoped or full, one code path.
 #
@@ -49,7 +50,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP8" "$TM
 # `workloads` is bench/run.sh and owns every charted row; the others own one
 # section each. Note the row-level workload update is the argument form above
 # (`gen-bench-data.sh regex strings`), which is cheaper still.
-ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia devserver buildtime pg_qps mysql_qps websocket http2 memory_safety images"
+ALL_SECTIONS="workloads rps rps_sustained rps_static rps_elysia devserver buildtime pg_qps mysql_qps websocket http2 memory_safety images pdf"
 # Row names as arguments scope the `workloads` section to those rows. They used
 # to be a separate mode that could not be combined with anything, so adding a
 # row and a section in one pass was impossible: each failed validation waiting
@@ -101,6 +102,10 @@ preflight() {
     if [ ! -f images/.data/photo.jpg ]; then
       python3 -c "import PIL" 2>/dev/null || problems+=("images generates its inputs with Pillow — pip install pillow")
     fi
+  fi
+  if selected pdf; then
+    [ -d node_modules/pdf-lib ] && [ -d node_modules/pdfjs-dist ] \
+      || problems+=("pdf needs pdf-lib and pdfjs-dist for the other runtimes — pnpm install")
   fi
   # Several rows write files into this directory, and on a spinning disk they
   # measure the disk. A warning rather than a refusal: bench/publish.sh is the
@@ -220,6 +225,9 @@ run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
 # runtime:images against Bun.Image and sharp on Node and Deno: 40 thumbnails at
 # once from a 12 MP JPEG and a 1280x800 PNG. See bench/images/run.sh.
 run_images() { BENCH_JSON=1 bash images/run.sh; }
+# runtime:pdf against pdf.js and pdf-lib on Node, Bun and Deno: text, merge
+# and split of a 200-page report, 8 at once. See bench/pdf/run.sh.
+run_pdf() { BENCH_JSON=1 bash pdf/run.sh; }
 
 # Re-measuring a few rows on top of a kept full run: the full run is reused,
 # the named rows are measured again and merged over it, and the result can be
@@ -249,6 +257,7 @@ run_section pg_qps "$TMP11" run_pg_qps
 run_section mysql_qps "$TMP12" run_mysql_qps
 run_section memory_safety "$TMP6" run_memory_safety
 run_section images "$TMP14" run_images
+run_section pdf "$TMP15" run_pdf
 
 # Merge onto whatever the module already holds, so unselected sections survive.
 # Two levels deep: `results_rps` gains a server key without losing its

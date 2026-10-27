@@ -13,6 +13,7 @@ import RpsChart from "../../../components/RpsChart.jsx";
 import MemorySafetyTable from "../../../components/MemorySafetyTable.jsx";
 import SustainedRpsTable from "../../../components/SustainedRpsTable.jsx";
 import ImagesTable from "../../../components/ImagesTable.jsx";
+import PdfTable from "../../../components/PdfTable.jsx";
 import Win from "../../../components/Win.jsx";
 import bench from "../../../src/benchmarks.js";
 
@@ -354,6 +355,25 @@ Where esrun is slower, the time is in Pixels' codecs.
   encoder writes PNG and JPEG only. See [Internals: images](/docs/internals/images);
   reproduce with `bench/images/run.sh`.
 </Callout>
+
+## PDF
+
+Eight documents at once: the text of a 200-page report, the report merged with
+itself, and its first ten pages split off. Wall ms, **min of 5**.
+
+<Callout type="info" title="What runs where">
+  [`runtime:pdf`](/api/pdf) on esrun. Node.js, Bun and Deno have no PDF support
+  built in, so each runs pdf.js (`pdfjs-dist`) for text and pdf-lib to edit.
+  Checksums on the extracted words and the pages written, refused on mismatch.
+</Callout>
+
+<PdfTable data={bench.results_pdf} metric="ms" />
+
+Whole-process peak RSS:
+
+<PdfTable data={bench.results_pdf} metric="rss_mb" />
+
+Reproduce with `bench/pdf/run.sh`; see [Internals: PDF](/docs/internals/pdf).
 
 ## Reproduce
 
