@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-27
+
 ### Fixed
 
 - On Windows, a deeply nested BSON or CBOR document (or deep JavaScript calling

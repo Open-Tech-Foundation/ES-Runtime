@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-27
+
 ### Added
 
 - `runtime:pdf`: read, edit, encrypt and extract text from PDFs with

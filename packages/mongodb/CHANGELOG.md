@@ -11,6 +11,8 @@ for the runtime itself.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-27
+
 ### Added
 
 - The package: `driver` (the runtime's `mongodb` driver), the BSON classes
