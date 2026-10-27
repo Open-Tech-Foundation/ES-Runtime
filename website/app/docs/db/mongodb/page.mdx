@@ -177,7 +177,10 @@ A read from a secondary may not see the latest writes; `maxStalenessSeconds`
 keeps reads off secondaries that have fallen behind.
 
 During an election there is briefly no primary. Writes wait for the new one, up
-to `serverSelectionTimeoutMS` (30 seconds by default), and then proceed. To
+to `serverSelectionTimeoutMS` (30 seconds by default), and then proceed. A
+write caught by the step-down itself is retried once on the new primary, and
+the server applies it only once; so is a read whose connection drops. See
+[retries](/api/db/mongodb#retries) for which operations qualify. To
 reach one member and nothing else, use `directConnection=true`.
 
 Every member must be reachable under the name the set's configuration gives it,

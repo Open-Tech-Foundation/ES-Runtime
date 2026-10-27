@@ -625,7 +625,9 @@ declare module "runtime:db" {
     readPreferenceTags?: Record<string, string>[];
     /** Secondaries further behind than this are not read from; at least 90. */
     maxStalenessSeconds?: number;
+    /** Retry a write once after a network or retryable error. Default true. */
     retryWrites?: boolean;
+    /** Retry a read once after a network or retryable error. Default true. */
     retryReads?: boolean;
     compressors?: string;
     w?: number | "majority" | (string & {});

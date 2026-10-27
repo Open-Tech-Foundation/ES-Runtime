@@ -79,6 +79,43 @@ const MONGO_FAILURES = {
   closed: DbErrorCode.Closed,
 };
 
+// Server errors a read may be retried after (the retryable reads specification).
+const MONGO_RETRYABLE_READ_CODES = new Set([262, 11600, 11602, 10107, 13435, 13436, 189, 134, 91, 7, 6, 89, 9001]);
+
+function mongoRetryableWrite(e) {
+  return (
+    e instanceof DbError &&
+    (e.code === DbErrorCode.ConnectionLost || e.server?.errorLabels?.includes("RetryableWriteError") === true)
+  );
+}
+
+function mongoRetryableRead(e) {
+  return e instanceof DbError && (e.code === DbErrorCode.ConnectionLost || MONGO_RETRYABLE_READ_CODES.has(e.backendCode));
+}
+
+/// The server's answer to a transaction number it cannot take, with the fix,
+/// as the retryable writes specification words it.
+function mongoActionableError(e) {
+  if (e instanceof DbError && e.backendCode === 20 && /^Transaction numbers/.test(e.message)) {
+    const better = dbError(
+      "This MongoDB deployment does not support retryable writes. Please add retryWrites=false to your connection string.",
+      DbErrorCode.Unsupported,
+      { backendCode: 20 },
+    );
+    better.server = e.server;
+    return better;
+  }
+  return e;
+}
+
+async function mongoActionable(send) {
+  try {
+    return await send();
+  } catch (e) {
+    throw mongoActionableError(e);
+  }
+}
+
 function mongoFailure(failure) {
   if (failure.kind === "server") {
     return mongoServerError({ code: failure.code, codeName: failure.codeName, errmsg: failure.message });
@@ -176,6 +213,8 @@ function parseMongoConnectionString(url, options = {}) {
     replicaSet: null,
     directConnection: false,
     readPreference: { mode: "primary", tags: [], maxStalenessSeconds: null },
+    retryWrites: true,
+    retryReads: true,
   };
 
   if (userinfo !== null) {
@@ -372,9 +411,7 @@ function mongoOption(settings, name, value) {
     }
     case "retryReads":
     case "retryWrites":
-      // Accepted so that Atlas's connection strings work; nothing is retried
-      // yet (see the MongoDB page).
-      mongoBoolean(name, value);
+      settings[name] = mongoBoolean(name, value);
       return;
     case "compressors":
       // Compression is not negotiated yet; a server talks uncompressed to a
@@ -717,9 +754,60 @@ class MongoConnection extends BaseConnection {
     const unacknowledged = command.writeConcern?.w === 0;
     const { session, owned } = this._sessionFor(options, unacknowledged);
     try {
-      return await this.#send(dbName, name, body, session, options, timeoutMS, signal, sequence);
+      return await this.#retrying(dbName, name, body, session, options, timeoutMS, signal, sequence, unacknowledged);
     } finally {
       if (owned) await session.endSession();
+    }
+  }
+
+  /// Whether the deployment takes retryable writes: it has sessions, and is not
+  /// a standalone.
+  _retryableWritesSupported() {
+    const topology = this._topology;
+    if (topology.logicalSessionTimeoutMinutes == null) return false;
+    return !(topology.type === "Single" && topology.servers[0]?.type === "Standalone");
+  }
+
+  /// Sends a command, and once more if the retryable writes or retryable reads
+  /// specification allows. A retried write carries the same lsid and
+  /// txnNumber, so the server applies it at most once.
+  async #retrying(dbName, name, body, session, options, timeoutMS, signal, sequence, unacknowledged) {
+    const send = () => this.#send(dbName, name, body, session, options, timeoutMS, signal, sequence);
+    const write =
+      options._retryableWrite === true &&
+      session !== null &&
+      !unacknowledged &&
+      this._settings.retryWrites &&
+      this._retryableWritesSupported();
+    const read = options._retryableRead === true && this._settings.retryReads;
+    if (write) {
+      const server = session._serverSession();
+      server.txnNumber += 1n;
+      body.txnNumber = server.txnNumber;
+    }
+    if (!write && !read) return mongoActionable(send);
+
+    let first;
+    try {
+      const doc = await send();
+      // A write concern error can be labelled retryable too.
+      if (!(write && doc.errorLabels?.includes("RetryableWriteError"))) return doc;
+      first = { doc };
+    } catch (e) {
+      if (!(write ? mongoRetryableWrite(e) : mongoRetryableRead(e))) throw mongoActionableError(e);
+      first = { error: e };
+    }
+    const previous = () => {
+      if (first.doc !== undefined) return first.doc;
+      throw first.error;
+    };
+    try {
+      return await send();
+    } catch (e) {
+      // No server for the retry, or a retry the server says wrote nothing: the
+      // first attempt's outcome is the one to report.
+      if (e?.mongoSelection === true || e?.server?.errorLabels?.includes("NoWritesPerformed")) return previous();
+      throw mongoActionableError(e);
     }
   }
 
@@ -811,9 +899,12 @@ class MongoConnection extends BaseConnection {
     // Stopped while it ran is stopped, however the command ended.
     if (stopped !== null) throw stopped;
     if (ran.error?.kind === "selection") {
-      throw dbError(
-        `no server could take the operation within serverSelectionTimeoutMS (${selectionTimeout} ms): ${ran.error.message}`,
-        DbErrorCode.Timeout,
+      throw Object.assign(
+        dbError(
+          `no server could take the operation within serverSelectionTimeoutMS (${selectionTimeout} ms): ${ran.error.message}`,
+          DbErrorCode.Timeout,
+        ),
+        { mongoSelection: true },
       );
     }
     if (ran.error !== undefined) throw mongoFailure(ran.error);
@@ -974,9 +1065,16 @@ async function mongoWrite(collection, kind, field, statements, options, ordered)
       size += encoded[end].length;
       end++;
     }
+    // A command is a retryable write when no statement in it can touch more
+    // than one document.
+    const batch = statements.slice(start, end);
+    const retryable =
+      kind === "insert" ||
+      (kind === "update" && batch.every((st) => st.multi !== true)) ||
+      (kind === "delete" && batch.every((st) => st.limit === 1));
     const reply = await collection._run(
       { [kind]: collection.collectionName, ...extra },
-      options,
+      { ...options, _retryableWrite: retryable },
       { name: field, documents: encoded.slice(start, end) },
     );
     result.n += Number(reply.n ?? 0);
@@ -1262,7 +1360,7 @@ class MongoCollection {
   async estimatedDocumentCount(options = {}) {
     const reply = await this._run(
       { count: this.collectionName, ...mongoPick(options, ["comment", "maxTimeMS"]), ...mongoReadConcern(this.db.client, options) },
-      { ...options, _inheritPreference: true },
+      { ...options, _inheritPreference: true, _retryableRead: true },
     );
     return Number(reply.n);
   }
@@ -1276,7 +1374,7 @@ class MongoCollection {
         ...mongoPick(options, ["collation", "comment", "hint", "maxTimeMS"]),
         ...mongoReadConcern(this.db.client, options),
       },
-      { ...options, _inheritPreference: true },
+      { ...options, _inheritPreference: true, _retryableRead: true },
     );
     return reply.values;
   }
@@ -1306,7 +1404,7 @@ class MongoCollection {
         ...mongoPick(options, ["sort", "arrayFilters", "hint", "collation", "comment", "maxTimeMS", "let", "bypassDocumentValidation"]),
         ...mongoWriteConcern(this.db.client, options),
       },
-      options,
+      { ...options, _retryableWrite: true },
     );
     if (reply.writeConcernError) mongoThrowWrite({ writeErrors: [], writeConcernError: reply.writeConcernError }, reply.value ?? null);
     return reply.value ?? null;
@@ -1436,7 +1534,13 @@ class MongoCursor {
         let reply;
         try {
           const served = {};
-          reply = await this._db.command(this._command(this._options), { ...this.#commandOptions, _served: served });
+          // The first command of a read cursor is a retryable read; a getMore
+          // never is.
+          reply = await this._db.command(this._command(this._options), {
+            ...this.#commandOptions,
+            _served: served,
+            _retryableRead: this._options._kind !== "write",
+          });
           this._server = served.server ?? null;
         } catch (e) {
           await this.#endImplicit();

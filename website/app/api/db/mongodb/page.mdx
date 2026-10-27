@@ -55,7 +55,8 @@ to `connect()` win over the URL's. An option not listed here is refused with
 | `serverSelectionTimeoutMS` | `number` | `30000` | How long an operation waits for a suitable server. |
 | `heartbeatFrequencyMS` | `number` | `10000` | How often servers are checked; at least 500. |
 | `localThresholdMS` | `number` | `15` | How much slower than the fastest suitable server another may be and still be chosen. |
-| `retryWrites`, `retryReads` | `boolean` | | Accepted; nothing is retried yet. |
+| `retryWrites` | `boolean` | `true` | Retry a write once after a network or retryable error; see [Retries](#retries). |
+| `retryReads` | `boolean` | `true` | The same for reads. |
 | `compressors` | `string` | | Accepted; compression is not negotiated yet. |
 
 Refused with `ERR_DB_UNSUPPORTED`: `mongodb+srv://`, `loadBalanced`, a Unix
@@ -114,6 +115,28 @@ makes the client check the deployment at once.
 Discovery, monitoring and selection follow MongoDB's server discovery and
 monitoring and server selection specifications, and pass their test suites
 (`tsr test:mongodb-specs`).
+
+## Retries
+
+A write is sent once more when its first attempt is lost with its connection
+or fails with an error the server labels `RetryableWriteError` (a step-down,
+a shutdown, or such a write concern error). The retry goes to the primary then
+selected, with the same session id and transaction number, so the server
+applies the write at most once. That covers `insertOne`, `insertMany`,
+`updateOne`, `replaceOne`, `deleteOne`, `bulkWrite` commands with no
+multi-document statement, and the `findOneAnd*` methods. `updateMany`,
+`deleteMany`, writes with `w: 0`, and writes to a standalone are sent once.
+
+A read is sent once more after a network error or one of the "node is
+recovering" or "not writable primary" codes: the first command of `find` and
+`aggregate` (without `$out` or `$merge`), `findOne`, `countDocuments`,
+`estimatedDocumentCount`, `distinct`, `listCollections` and `listIndexes`. A
+cursor's later batches are not retried, nor is `command()`.
+
+When the retry also fails, the error is the retry's, unless the server says it
+wrote nothing (`NoWritesPerformed`), in which case it is the first attempt's. A
+deployment that takes no retryable writes answers with an error naming
+`retryWrites=false` as the fix.
 
 ## Sessions
 

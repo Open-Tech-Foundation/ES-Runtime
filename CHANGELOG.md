@@ -36,7 +36,8 @@ namespace) is unstable and may change between minor releases until the API freez
   gossiped. Replica sets are discovered from any member and followed through
   elections, with reads routed by `readPreference` (modes, tag sets,
   `maxStalenessSeconds`); discovery, monitoring and selection pass MongoDB's
-  specification test suites. Sharded clusters, transactions, `mongodb+srv://`
+  specification test suites. Single-document writes and reads are retried once
+  after a network or retryable error (`retryWrites`, `retryReads`). Sharded clusters, transactions, `mongodb+srv://`
   and change streams are not supported yet.
   `@opentf/esrun-mongodb` re-exports the driver with the BSON classes and types.
 

@@ -25,7 +25,7 @@ export MONGODB_URL="${MONGODB_URL:-mongodb://127.0.0.1:27017/esrun_test}"
 [ -f "$here/../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
 
 status=0
-for test in smoke crud cursor batch errors cancel sessions auth replica; do
+for test in smoke crud cursor batch errors cancel sessions auth replica retry; do
   printf '\n== %s ==\n' "$test"
   # esrun grants nothing by default (DECISIONS D65): these load the built
   # package (imports), reach the server (net), and read MONGODB_*_URL (env).

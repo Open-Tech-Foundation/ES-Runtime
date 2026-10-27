@@ -2025,7 +2025,9 @@ takes `session`, `signal`, `timeoutMS` and, for reads, `readPreference` (a mode
 or `{ mode, tags, maxStalenessSeconds }`); without a `session` it runs in an
 implicit one, and server sessions are reused. When no server suits an
 operation it waits up to `serverSelectionTimeoutMS`, then fails with
-`ERR_DB_TIMEOUT`. Documents are BSON (see `runtime:serialization`).
+`ERR_DB_TIMEOUT`. Single-document writes and reads are retried once after a
+network or retryable error (`retryWrites`, `retryReads`, both on by default);
+a retried write carries the same transaction number, so it applies once. Documents are BSON (see `runtime:serialization`).
 A server error is a `DbError` with the server's number on `backendCode` and
 `{ code, codeName, errorLabels }` on `server`. Options, results and the error
 mapping are listed on the site's MongoDB reference page.
