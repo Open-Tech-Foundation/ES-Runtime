@@ -13,6 +13,8 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Fixed
 
 - The hash-field TTL tests run when the server has `HEXPIRE`, asked with
