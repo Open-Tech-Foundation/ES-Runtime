@@ -9,6 +9,7 @@ skip_publish = [
     "es-runtime-common",
     "es-runtime-default-providers",
     "es-runtime-engine",
+    "es-runtime-json",
     "es-runtime-providers",
 ]
 tag_format = "{name}@{version}"

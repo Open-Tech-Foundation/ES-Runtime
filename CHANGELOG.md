@@ -86,6 +86,8 @@ namespace) is unstable and may change between minor releases until the API freez
   container, for up to three minutes, and prints the server's log when one
   never answers. It started a `mongosh` container per probe and gave up after
   two minutes without saying why.
+- The release leaves `es-runtime-json` unpublished, as it does the other
+  internal crates; it had tried to publish it to crates.io and failed.
 
 ## [0.44.0] - 2026-10-27
 
