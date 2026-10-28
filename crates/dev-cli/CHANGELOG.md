@@ -47,6 +47,8 @@ is the point, since none of the three has any business in a deployment.
   search provider (`otf`), so the build skipped the index and the navbar
   search had nothing to query. The fullstack starter's sample middleware
   sends `x-powered-by: afw`.
+- The `docs` starter's root layout uses the theme's `afwd-shell` classes, so
+  the navbar, page and footer stack as the theme lays them out.
 
 ## [0.23.0] - 2026-10-27
 
