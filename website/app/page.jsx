@@ -103,7 +103,8 @@ const groups = [
     tiles: [
       { icon: "xml", label: "XML", to: "/docs/serialization/xml" },
       { icon: "yaml", label: "YAML", to: "/docs/serialization/yaml" },
-      { icon: "json", label: "JSON", to: "/docs/serialization/jsonl" },
+      { icon: "json", label: "JSONC", to: "/docs/serialization/jsonc" },
+      { icon: "json", label: "JSON5", to: "/docs/serialization/json5" },
       { icon: "toml", label: "TOML", to: "/docs/serialization/toml" },
       { icon: "csv", label: "CSV", to: "/docs/serialization/csv" },
       { icon: "messagepack", label: "MessagePack", to: "/docs/serialization/msgpack" },

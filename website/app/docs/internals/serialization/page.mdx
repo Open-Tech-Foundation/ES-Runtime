@@ -353,6 +353,42 @@ Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both
 document is a sequence — the shape it is usually read in is a stream, and the
 whole-file case is `text.split("\n").map(JSON.parse)` without a helper.
 
+### JSONC and JSON5
+
+One reader serves both, in its own crate (`es-runtime-json`), with the dialect
+decided at the call: JSONC refuses what JSON5 adds, because a `tsconfig.json`
+that `JSONC.parse` accepted with single quotes would still fail in `tsc`.
+
+**Parsing builds values in the engine**, like BSON's decoder: the reader
+reports each value as it reads it, and the engine makes the JavaScript value at
+once, with no JSON in between. JSON could not carry JSON5's `Infinity` and
+`NaN`, and a tree built first and converted after is the per-call garbage the
+other formats pay. Each object starts empty and gets its properties one at a
+time, so it stays in V8's fast mode and objects with the same keys share a
+shape, as `JSON.parse`'s do. V8's other way, an object made with all its
+properties in one call, comes out as a dictionary, and reading from it later is
+several times slower. The parser itself never builds a token: it looks at
+punctuation a byte at a time and only scans where a string, number or name
+starts.
+
+**Editing works on the text, not the value.** `edit` finds the member the path
+names with the same scanners, reads the file's habits (its indent, the space
+after its colons, its trailing commas, its quotes), and returns the text with
+that one value spliced in. Writing the file again from a value cannot do this,
+however the comments are kept: a value has no record of blank lines, key
+spacing or where a comment sat. The value itself is written by the dialect's
+`stringify`, so `edit` and `stringify` cannot disagree about what JSON5 looks
+like. Why comments are not kept as data is recorded in
+[DECISIONS D191](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+**The grammar is checked against the suites other parsers use**:
+JSONTestSuite and the JSON5 project's own tests run in both dialects on every
+`cargo test`, and every case where a dialect deliberately accepts more is
+listed with its reason. Two fuzz targets check that whatever JSONC reads,
+JSON5 reads the same way, and that every edit means exactly the change asked
+for. `scripts/jsonc_large.js` and `scripts/json5_large.js` in `bench/` compare
+each against what Bun, Deno and Node offer.
+
 ### BSON
 
 BSON is the one format that crosses no JSON and no value tree at all. Its

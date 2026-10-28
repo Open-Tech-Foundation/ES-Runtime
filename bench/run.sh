@@ -164,6 +164,8 @@ ROW_DEFS=(
   "system|spawn|ms|card|Spawn a child process"
 
   "serialization|jsonl_stream|ms|chart|JSONL streaming (large dataset)"
+  "serialization|jsonc_large|ms|chart|JSONC parsing (large dataset)"
+  "serialization|json5_large|ms|chart|JSON5 parsing (large dataset)"
   "serialization|xml_small|ms|chart|XML parsing (small dataset)"
   "serialization|xml_large|ms|chart|XML parsing (large dataset)"
   "serialization|yaml_small|ms|chart|YAML parsing (small dataset)"

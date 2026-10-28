@@ -1,6 +1,6 @@
 {
   "private": true,
-  "description": "Dev deps for the cross-runtime benchmark — sharp is the Node.js side of bench/images; Hono powers scripts/hono.js and Elysia powers scripts/elysia.js (rps.sh SERVER=scripts/<framework>.js); postgres.js and ioredis are the comparison clients for bench/db/pg and bench/db/redis. Install with: pnpm install",
+  "description": "Dev deps for the cross-runtime benchmark — sharp is the Node.js side of bench/images; Hono powers scripts/hono.js and Elysia powers scripts/elysia.js (rps.sh SERVER=scripts/<framework>.js); postgres.js and ioredis are the comparison clients for bench/db/pg and bench/db/redis; json5 and jsonc-parser are Node's side of scripts/json5_large.js and scripts/jsonc_large.js. Install with: pnpm install",
   "dependencies": {
     "@bufbuild/buf": "^1.71.0",
     "@bufbuild/protobuf": "^2.12.1",
@@ -14,6 +14,8 @@
     "hono": "^4.12.25",
     "ioredis": "^6.0.0",
     "js-yaml": "^4.2.0",
+    "json5": "^2.2.3",
+    "jsonc-parser": "^3.3.1",
     "msgpackr": "^1.11.2",
     "mysql2": "^3.24.4",
     "ndjson": "^2.0.0",

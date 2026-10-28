@@ -4,6 +4,7 @@
     "jsr:@std/bytes@^1.0.6": "1.0.6",
     "jsr:@std/cbor@0.1.10": "0.1.10",
     "jsr:@std/csv@1.0.6": "1.0.6",
+    "jsr:@std/jsonc@1.0.3": "1.0.3",
     "jsr:@std/streams@^1.0.9": "1.2.0",
     "jsr:@std/streams@^1.2.0": "1.2.0"
   },
@@ -24,6 +25,9 @@
         "jsr:@std/streams@^1.0.9"
       ]
     },
+    "@std/jsonc@1.0.3": {
+      "integrity": "9a4bb168c6b64e8e89944e45f96390a6e6e6865f59f02f0a70b24653911f2d64"
+    },
     "@std/streams@1.2.0": {
       "integrity": "256b934254778f2bf45f5713b934209ff29e9b4b7fd4ec095219966813758c5f"
     }
@@ -43,6 +47,8 @@
         "npm:hono@^4.12.25",
         "npm:ioredis@6",
         "npm:js-yaml@^4.2.0",
+        "npm:json5@^2.2.3",
+        "npm:jsonc-parser@^3.3.1",
         "npm:msgpackr@^1.11.2",
         "npm:mysql2@^3.24.4",
         "npm:ndjson@2",

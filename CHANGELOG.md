@@ -39,6 +39,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Testing / CI
 
+- `bench/run.sh` gains `jsonc_large` and `json5_large`: each runtime parses a
+  5,000-record document with what it ships — `runtime:serialization`, Bun's
+  `Bun.JSONC` and `Bun.JSON5`, Deno's `@std/jsonc`, and for Node (and Deno's
+  JSON5) the `jsonc-parser` and `json5` packages — and must read it the same.
 - `scripts/fs-discipline.sh` lists the DNS resolver's read of
   `/etc/resolv.conf` and the MongoDB specification tests' reads, which had
   left the check failing.

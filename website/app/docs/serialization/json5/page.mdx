@@ -1,0 +1,72 @@
+---
+title: JSON5
+description: Read, write and update JSON5 — unquoted keys, single quotes, comments — with runtime:serialization.
+---
+
+# JSON5
+
+JSON5 extends JSON with the parts of JavaScript's object syntax people write by
+hand: unquoted keys, single-quoted strings, comments, trailing commas, hex
+numbers and `Infinity`. `JSON5` in `runtime:serialization` reads it, writes it,
+and changes a value in it without disturbing the rest of the file. The exact
+rules are in the [API reference](/api/serialization#jsonc-and-json5).
+
+## Reading JSON5
+
+```js
+import { JSON5 } from "runtime:serialization";
+import { file } from "runtime:fs";
+
+const config = JSON5.parse(await file("renovate.json5").text());
+console.log(config.extends); // ["config:recommended"]
+```
+
+```json5
+{
+  // renovate.json5
+  extends: ['config:recommended'],
+  prHourlyLimit: 0x2,
+  schedule: ['before 6am on monday',],
+}
+```
+
+For the JSON it shares, `JSON5.parse` returns what `JSON.parse` would, and it
+takes the same `reviver` argument. A file that is not JSON5 throws a
+`SyntaxError` with its line and column; `JSON5.validate` checks a file without
+reading it into a value.
+
+## Writing JSON5
+
+`JSON5.stringify` takes the same arguments as `JSON.stringify` and writes JSON5:
+keys without quotes where they are plain identifiers, `Infinity` and `NaN` as
+themselves, and each string in the quote that needs fewer escapes.
+
+```js
+JSON5.stringify({ name: "app", limit: Infinity, tags: ["it's"] }, null, 2);
+// {
+//   name: 'app',
+//   limit: Infinity,
+//   tags: [
+//     "it's",
+//   ],
+// }
+```
+
+Pass `{ quote: '"' }` instead of the replacer to choose one quote for every
+string: `JSON5.stringify(value, { quote: '"', space: 2 })`.
+
+## Updating a file
+
+`JSON5.edit` returns the text with one value changed and every other byte kept,
+comments included. The new value is written in the file's own style: its
+quotes, its indentation, and its trailing commas.
+
+```js
+import { JSON5 } from "runtime:serialization";
+import { file, write } from "runtime:fs";
+
+const text = await file("renovate.json5").text();
+await write("renovate.json5", JSON5.edit(text, ["automerge"], true));
+```
+
+Pass `undefined` as the value to remove a key.

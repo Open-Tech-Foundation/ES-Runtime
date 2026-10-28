@@ -1,0 +1,81 @@
+---
+title: JSONC
+description: Read and update JSON with comments — tsconfig.json, VS Code settings — with runtime:serialization.
+---
+
+# JSONC
+
+JSONC is JSON with comments and trailing commas: the format of `tsconfig.json`,
+VS Code's settings and many other config files. `JSONC` in
+`runtime:serialization` reads it, and changes a value in it without disturbing
+the rest of the file. The exact rules are in the
+[API reference](/api/serialization#jsonc-and-json5).
+
+## Reading a config
+
+`JSONC.parse` takes the text and returns what `JSON.parse` would return for
+the same file with its comments removed.
+
+```js
+import { JSONC } from "runtime:serialization";
+import { file } from "runtime:fs";
+
+const tsconfig = JSONC.parse(await file("tsconfig.json").text());
+console.log(tsconfig.compilerOptions.target); // "ES2022"
+```
+
+A file that is not JSONC throws a `SyntaxError` that says where:
+
+```js
+JSONC.parse('{\n  name: "app"\n}');
+// SyntaxError: JSONC: a property name must be a double-quoted string at line 2 column 3
+```
+
+To check a file without reading it into a value, use `JSONC.validate`:
+
+```js
+const result = JSONC.validate(text, { detailed: true });
+if (!result.valid) console.error(result.error);
+```
+
+## Updating a config
+
+`JSONC.edit` returns the text with one value changed. Every other byte stays as
+it was — comments, blank lines, key order — so the diff a person reviews is the
+one line that changed.
+
+```js
+import { JSONC } from "runtime:serialization";
+import { file, write } from "runtime:fs";
+
+const text = await file("tsconfig.json").text();
+const updated = JSONC.edit(text, ["compilerOptions", "types"], ["@opentf/esrun-types"]);
+await write("tsconfig.json", updated);
+```
+
+```jsonc
+{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    "target": "ES2022", // the emitted language
+    "strict": true,
+    "types": [
+      "@opentf/esrun-types"
+    ]
+  }
+}
+```
+
+The new key takes the indentation and comma style of the keys around it, and
+`compilerOptions` would have been created if it was missing. Pass `undefined`
+as the value to remove a key; its comment on the same line goes with it.
+
+```js
+const without = JSONC.edit(text, ["compilerOptions", "strict"], undefined);
+```
+
+## Writing JSON
+
+`JSONC.stringify` is `JSON.stringify`: a comment cannot come from a value, so
+what it writes is plain JSON, which every JSONC reader accepts. To keep a
+file's comments, change it with `edit` rather than writing it out again.

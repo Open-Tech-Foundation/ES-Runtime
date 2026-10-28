@@ -85,6 +85,8 @@ const NAV = [
           { title: "YAML", path: "/docs/serialization/yaml" },
           { title: "TOML", path: "/docs/serialization/toml" },
           { title: "CSV", path: "/docs/serialization/csv" },
+          { title: "JSONC", path: "/docs/serialization/jsonc" },
+          { title: "JSON5", path: "/docs/serialization/json5" },
           { title: "JSON Lines", path: "/docs/serialization/jsonl" },
         ],
       },
