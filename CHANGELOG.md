@@ -88,6 +88,9 @@ namespace) is unstable and may change between minor releases until the API freez
   two minutes without saying why.
 - The release leaves `es-runtime-json` unpublished, as it does the other
   internal crates; it had tried to publish it to crates.io and failed.
+- The benchmark's comparison dependencies move to Hono 4.13 and
+  puppeteer-core 25.16, past advisories in Hono's `serveStatic` and in the zod
+  that puppeteer pulls in; `pnpm audit` is clean. Nothing in them ships.
 
 ## [0.44.0] - 2026-10-27
 
