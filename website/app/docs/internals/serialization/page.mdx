@@ -400,6 +400,15 @@ database drivers were rewritten to avoid. The bytes themselves are read and
 written by a small crate that knows no engine type, and that crate is what the
 fuzzer drives.
 
+**Decoded objects stay in V8's fast mode.** Each document and each class
+instance starts empty and gets its properties one at a time, so documents with
+the same fields share one shape, as `JSON.parse`'s objects do. V8's one-call
+way of making an object with all its properties gives a dictionary instead:
+quicker to build, but larger, slower to read from, and slower to collect. For
+a collection's documents the shape is the better trade on every count but one,
+a document of plain fields only, which builds a little slower; `bench/bson/decode.mjs`
+measures each.
+
 **The BSON types are classes, recognized by prototype.** `ObjectId`,
 `Decimal128` and the rest are plain JavaScript classes. The engine compares an
 object's prototype against theirs and reads one property for the value, so an

@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- `BSON.decode` builds documents and the BSON class instances in V8's fast
+  mode, as `JSON.parse` builds objects, where it used to build dictionaries
+  (D187). Documents with the same fields share a shape, so reading them is
+  several times faster, a decode holds less heap and costs less to collect,
+  and a typical collection decodes faster overall; a document of only plain
+  fields decodes somewhat slower. `bench/bson/decode.mjs` measures it. The
+  MongoDB driver's results come through the same decoder.
+
 ### Added
 
 - `JSONC` and `JSON5` in `runtime:serialization` (D191), each mirroring the

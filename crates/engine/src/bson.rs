@@ -145,8 +145,8 @@ impl<'s> Types<'s> {
         prototype: v8::Local<'s, v8::Value>,
         names: &[v8::Local<'s, v8::Name>],
         values: &[v8::Local<'s, v8::Value>],
-    ) -> v8::Local<'s, v8::Object> {
-        v8::Object::with_prototype_and_properties(scope, prototype, names, values)
+    ) -> Decoded<'s, v8::Object> {
+        fast_object(scope, self.object_prototype, prototype, names, values)
     }
 }
 
@@ -642,14 +642,14 @@ impl<'s> Decoder<'_, 's> {
             names.push(name.into());
             values.push(value);
         }
-        // Defined, not assigned: a `__proto__` key becomes an own property, and
-        // a repeated key keeps its last value.
-        Ok(v8::Object::with_prototype_and_properties(
+        let t = self.types;
+        fast_object(
             scope,
-            self.types.object_prototype,
+            t.object_prototype,
+            t.object_prototype,
             &names,
             &values,
-        ))
+        )
     }
 
     fn array(
@@ -682,7 +682,7 @@ impl<'s> Decoder<'_, 's> {
             Element::Binary { subtype: 0, bytes } => uint8_array(scope, bytes)?.into(),
             Element::Binary { subtype: 4, bytes } if bytes.len() == 16 => {
                 let hex = string(scope, &es_runtime_bson::to_hex(bytes))?;
-                t.instance(scope, t.uuid, &[t.data.into()], &[hex.into()])
+                t.instance(scope, t.uuid, &[t.data.into()], &[hex.into()])?
                     .into()
             }
             Element::Binary { subtype, bytes } => {
@@ -693,7 +693,7 @@ impl<'s> Decoder<'_, 's> {
                     t.binary,
                     &[t.names.buffer.into(), t.names.sub_type.into()],
                     &[buffer.into(), sub_type.into()],
-                )
+                )?
                 .into()
             }
             // Deprecated: read as null, its replacement. `undefined` would drop
@@ -715,19 +715,20 @@ impl<'s> Decoder<'_, 's> {
                     t.regexp,
                     &[t.names.pattern.into(), t.names.options.into()],
                     &[pattern.into(), options.into()],
-                )
+                )?
                 .into()
             }
             // Deprecated: read as the DBRef it was replaced by.
             Element::DbPointer { namespace, id } => {
                 let namespace = string(scope, namespace)?;
                 let id = self.object_id(scope, id)?;
-                v8::Object::with_prototype_and_properties(
+                fast_object(
                     scope,
+                    t.object_prototype,
                     t.object_prototype,
                     &[t.names.reference.into(), t.names.id.into()],
                     &[namespace.into(), id.into()],
-                )
+                )?
                 .into()
             }
             Element::Code(code) => {
@@ -738,7 +739,7 @@ impl<'s> Decoder<'_, 's> {
                     t.code,
                     &[t.names.code.into(), t.names.scope.into()],
                     &[code.into(), null.into()],
-                )
+                )?
                 .into()
             }
             Element::CodeWithScope { code, scope: doc } => {
@@ -749,30 +750,30 @@ impl<'s> Decoder<'_, 's> {
                     t.code,
                     &[t.names.code.into(), t.names.scope.into()],
                     &[code.into(), code_scope.into()],
-                )
+                )?
                 .into()
             }
             Element::Int32(n) => v8::Integer::new(scope, n).into(),
             Element::Timestamp(n) => {
                 let big = v8::BigInt::new_from_u64(scope, n);
-                t.instance(scope, t.timestamp, &[t.data.into()], &[big.into()])
+                t.instance(scope, t.timestamp, &[t.data.into()], &[big.into()])?
                     .into()
             }
             Element::Int64(n) => v8::BigInt::new_from_i64(scope, n).into(),
             Element::Decimal128(bytes) => {
                 let hex = string(scope, &es_runtime_bson::to_hex(&bytes))?;
-                t.instance(scope, t.decimal128, &[t.data.into()], &[hex.into()])
+                t.instance(scope, t.decimal128, &[t.data.into()], &[hex.into()])?
                     .into()
             }
-            Element::MinKey => t.instance(scope, t.min_key, &[], &[]).into(),
-            Element::MaxKey => t.instance(scope, t.max_key, &[], &[]).into(),
+            Element::MinKey => t.instance(scope, t.min_key, &[], &[])?.into(),
+            Element::MaxKey => t.instance(scope, t.max_key, &[], &[])?.into(),
         })
     }
 
     fn object_id(&self, scope: &mut v8::PinScope<'s, '_>, id: [u8; 12]) -> Decoded<'s, v8::Object> {
         let t = self.types;
         let hex = string(scope, &es_runtime_bson::to_hex(&id))?;
-        Ok(t.instance(scope, t.object_id, &[t.data.into()], &[hex.into()]))
+        t.instance(scope, t.object_id, &[t.data.into()], &[hex.into()])
     }
 }
 
@@ -851,4 +852,34 @@ fn bson_decode_inner<'s>(
             &OpError::new(ExceptionClass::SyntaxError, format!("Invalid BSON: {e}")),
         ),
     }
+}
+
+/// An object with `prototype` and these properties, built so V8 keeps it in
+/// fast mode.
+///
+/// `Object::with_prototype_and_properties` would do this in one call, but V8
+/// makes that object a dictionary, and every later property read on it is
+/// several times slower than on what `JSON.parse` builds. An object made empty
+/// and given its properties one at a time takes the same shape transitions as
+/// any other with those keys, so a thousand documents with the same fields
+/// share one shape. The properties are defined, not assigned: a `__proto__`
+/// key becomes an own property, and a repeated key keeps its first place and
+/// its last value.
+fn fast_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object_prototype: v8::Local<'s, v8::Value>,
+    prototype: v8::Local<'s, v8::Value>,
+    names: &[v8::Local<'s, v8::Name>],
+    values: &[v8::Local<'s, v8::Value>],
+) -> Decoded<'s, v8::Object> {
+    let object = v8::Object::new(scope);
+    if prototype != object_prototype {
+        object.set_prototype(scope, prototype).ok_or(Bad::Thrown)?;
+    }
+    for (name, value) in names.iter().zip(values) {
+        object
+            .create_data_property(scope, *name, *value)
+            .ok_or(Bad::Thrown)?;
+    }
+    Ok(object)
 }
