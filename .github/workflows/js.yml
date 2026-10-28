@@ -224,7 +224,11 @@ jobs:
     name: mongodb driver (${{ matrix.mongo }})
     needs: changes
     if: needs.changes.outputs.js == 'true'
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: it moves to Ubuntu 26, whose kernel (6.19+) MongoDB 8
+    # refuses to start on — its TCMalloc breaks on kernels 6.19 to 7.0.13
+    # (https://www.mongodb.com/docs/v8.0/release-notes/8.0/, SERVER-121912).
+    # Back to ubuntu-latest once the runner's kernel or MongoDB 8 has the fix.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
