@@ -10088,33 +10088,6 @@ fn init_adopts_a_root_main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An OTF Web project is built and run by `otfw`, not esdev — so `esdev
-/// build` and `esdev start` name that toolchain rather than refusing with
-/// the missing `esdev.json`, which reads as a misconfiguration.
-#[test]
-fn an_otfw_project_is_pointed_at_otfw() {
-    let dir = build_dir("t_otfw");
-    write_in(
-        &dir,
-        "package.json",
-        r#"{ "scripts": { "dev": "otfw dev", "build": "otfw build" } }"#,
-    );
-
-    let build = esdev_in(&dir).arg("build").output().expect("spawn esdev");
-    assert!(!build.status.success());
-    let message = stderr(&build);
-    assert!(message.contains("otfw"), "{message}");
-    assert!(message.contains("npm run build"), "{message}");
-
-    let start = esdev_in(&dir).arg("start").output().expect("spawn esdev");
-    assert!(!start.status.success());
-    let message = stderr(&start);
-    assert!(message.contains("otfw"), "{message}");
-    assert!(message.contains("npm run dev"), "{message}");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// A rehearsal runs each file under the named grants: `--deny-all` takes
 /// everything, and `--allow-*` grants back what the suite needs — the same
 /// flags, resolved the same way, as a run. A path the suite covers this way
@@ -12808,11 +12781,11 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
 }
 
 /// The AFW starter set scaffolds through `esdev create`: four templates,
-/// each with the axes `create-web` asks about, as flags. stdin is closed
+/// each with its extra axes (language, styling, blog) as flags. stdin is closed
 /// throughout, so every answer here comes from a flag.
 #[test]
-fn otf_templates_scaffold_from_flags() {
-    let parent = watch_dir("c_otf");
+fn afw_templates_scaffold_from_flags() {
+    let parent = watch_dir("c_afw");
 
     // TypeScript + plain CSS: renames, config, and no Tailwind prepend.
     let ts = esdev_in(&parent)
@@ -13009,8 +12982,8 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
 /// An axis flag where it does not apply is refused, like a stray `--mode` —
 /// and a value that is not one is refused with the values that are.
 #[test]
-fn otf_axes_are_refused_where_they_do_not_apply() {
-    let parent = watch_dir("c_otf_axes");
+fn afw_axes_are_refused_where_they_do_not_apply() {
+    let parent = watch_dir("c_afw_axes");
 
     for (template, flag, message) in [
         ("api", "--language=ts", "has no language"),
@@ -14687,7 +14660,7 @@ fn refresh_plugin(dir: &Path) {
         "plugins/refresh.mjs",
         r#"
 export default {
-  name: "otfw-refresh",
+  name: "afw-refresh",
   // The half a plugin cannot do for itself: finding the components to register
   // needs the syntax tree the compiler already has.
   jsx: { refresh: true },
@@ -14698,7 +14671,7 @@ export default {
       // anything shipped, so it goes in only where the loop is running this
       // build hot.
       if (!ctx.hot) return null;
-      return { code: `globalThis.__otfw_hot = ${JSON.stringify(ctx.target)};\n${code}` };
+      return { code: `globalThis.__afw_hot = ${JSON.stringify(ctx.target)};\n${code}` };
     },
   },
 };
@@ -14758,7 +14731,7 @@ fn a_release_build_tells_a_plugin_it_is_not_hot() {
         .collect::<String>();
     assert!(bundle.contains("Home"), "nothing was built");
     assert!(
-        !bundle.contains("__otfw_hot"),
+        !bundle.contains("__afw_hot"),
         "a release build installed a hot-reload wrapper: {bundle}"
     );
     // The compiler's half is gated on the same thing, and has to be: the
@@ -14786,11 +14759,11 @@ fn the_hot_dev_loop_tells_a_plugin_its_build_is_hot() {
 
     let _supervisor = start_in(&dir);
 
-    let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("__otfw_hot"));
+    let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("__afw_hot"));
     // The plugin's half: it was told this build is hot, so it installed its
     // wrapper.
     assert!(
-        bundle.contains(r#"__otfw_hot = "web""#),
+        bundle.contains(r#"__afw_hot = "web""#),
         "the hot build never reached the plugin: {bundle}"
     );
     // The compiler's half: `jsx: { refresh: true }` on the plugin's own
@@ -15627,7 +15600,7 @@ fn runtime_build_says_which_module_a_plugin_failed_in() {
 import { build } from "runtime:build";
 
 const reported = {
-  name: "otfw",
+  name: "afw",
   transform: {
     filter: { id: /dep\.js$/ },
     handler(code, id, ctx) {
@@ -15636,7 +15609,7 @@ const reported = {
   },
 };
 const crashed = {
-  name: "otfw",
+  name: "afw",
   transform: { filter: { id: /dep\.js$/ }, handler() { return nope.missing; } },
 };
 
@@ -15662,13 +15635,13 @@ for (const [what, plugin] of [["reported", reported], ["crashed", crashed]]) {
     // What ctx.error() said, attributed — and nothing else. Not a stack through
     // the dispatcher that carried it, and not a frame that is the message again.
     assert!(
-        printed.contains("reported | otfw | dep.js | null | cannot compile this route"),
+        printed.contains("reported | afw | dep.js | null | cannot compile this route"),
         "{printed}"
     );
     // A plugin that *crashed* is a different failure and keeps its stack: the
     // first frame is the line in the plugin, which is the whole of what helps.
     assert!(
-        printed.contains("crashed | otfw | dep.js | null | ReferenceError: nope is not defined"),
+        printed.contains("crashed | afw | dep.js | null | ReferenceError: nope is not defined"),
         "{printed}"
     );
     assert!(!printed.contains("Caused by"), "{printed}");

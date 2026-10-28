@@ -3,6 +3,6 @@
 // returning a response instead of `next(...)` short-circuits the pipeline.
 export default async function middleware(request, context, next) {
   const response = await next(request);
-  response.headers.set("x-powered-by", "otf");
+  response.headers.set("x-powered-by", "afw");
   return response;
 }

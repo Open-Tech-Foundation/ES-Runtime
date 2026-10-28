@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn a_bare_specifier_is_not_rewritten() {
         let dir = std::path::Path::new(".");
-        assert_eq!(specifier(dir, "@otfw/compiler").unwrap(), "@otfw/compiler");
+        assert_eq!(specifier(dir, "@afw/compiler").unwrap(), "@afw/compiler");
     }
 
     /// A relative path is resolved against the project, because the generated
@@ -518,13 +518,13 @@ mod tests {
         let source = driver(
             dir,
             &[PluginSpec {
-                module: "@otfw/compiler".to_string(),
+                module: "@afw/compiler".to_string(),
                 export: Some("compiler".to_string()),
                 options: Some(serde_json::json!({ "jsx": "automatic" })),
             }],
         )
         .unwrap();
-        assert!(source.contains("@otfw/compiler"), "{source}");
+        assert!(source.contains("@afw/compiler"), "{source}");
         assert!(source.contains("\"compiler\""), "{source}");
         assert!(source.contains("automatic"), "{source}");
     }

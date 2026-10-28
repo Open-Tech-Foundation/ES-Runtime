@@ -223,7 +223,7 @@ pub struct CreateConfig {
     /// Which mode of that template, or `None` to ask (or take the default).
     /// Meaningless — and refused — for a template that has only one shape.
     pub mode: Option<String>,
-    /// Which language an OTF template scaffolds, or `None` to ask (or take
+    /// Which language an AFW template scaffolds, or `None` to ask (or take
     /// the default). Meaningless — and refused — for other templates.
     pub language: Option<String>,
     /// Plain CSS or Tailwind, or `None` to ask (or take the default). Taken
@@ -343,7 +343,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                     template,
                     "language",
                     "language",
-                    is_otf(template),
+                    is_afw(template),
                     LANGUAGES,
                     Fallback::Preselected(DEFAULT_LANGUAGE),
                     config.language.as_deref(),
@@ -455,8 +455,8 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         None => answers.manager.expect("the loop answers it"),
     };
     let tailwind = answers.styling.as_deref() == Some("tailwind");
-    let otf = match answers.language {
-        Some(language) => Some(Otf {
+    let afw = match answers.language {
+        Some(language) => Some(Afw {
             language,
             styling: answers.styling,
             blog: answers.blog,
@@ -470,10 +470,10 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         .map(|(_, files)| *files)
         .expect("validated above");
     let files = files_for(files, mode.as_deref());
-    // OTF answers rewrite the file list — renames, patches, added and
+    // AFW answers rewrite the file list — renames, patches, added and
     // withheld files — so from here the list is owned either way.
-    let files: Vec<(String, Vec<u8>)> = match &otf {
-        Some(otf) => apply_otf(&template, otf, &files),
+    let files: Vec<(String, Vec<u8>)> = match &afw {
+        Some(afw) => apply_afw(&template, afw, &files),
         None => {
             let files = files
                 .into_iter()
@@ -651,7 +651,7 @@ fn next_steps(
 }
 
 /// The pre-write questions, in order. Which of them appear depends on the
-/// answers so far — a modeless template has no mode, a non-OTF one no axes.
+/// answers so far — a modeless template has no mode, a non-AFW one no axes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Step {
     Template,
@@ -800,26 +800,26 @@ fn describe_modes(template: &str) -> String {
 
 /// The templates that come from the AFW starter set rather than from this
 /// repository's own stack. They build through `@opentf/esdev-plugin-afw`
-/// named in their `esdev.json`, and they take the axes `create-web` asked
-/// about, which the shared template → mode → install flow does not have.
-const OTF_TEMPLATES: &[&str] = &["spa", "fullstack", "docs", "library"];
+/// named in their `esdev.json`, and they take extra axes (language, styling,
+/// blog), which the shared template → mode → install flow does not have.
+const AFW_TEMPLATES: &[&str] = &["spa", "fullstack", "docs", "library"];
 
-fn is_otf(template: &str) -> bool {
-    OTF_TEMPLATES.contains(&template)
+fn is_afw(template: &str) -> bool {
+    AFW_TEMPLATES.contains(&template)
 }
 
-/// The languages an OTF template scaffolds. `create-web` ships JavaScript and
-/// converts to TypeScript on request; the embedded files are the JavaScript
+/// The languages an AFW template scaffolds. The starters are JavaScript and
+/// convert to TypeScript on request; the embedded files are the JavaScript
 /// half, and the conversion is re-applied here rather than embedded twice.
 const LANGUAGES: &[(&str, &str)] = &[
     ("js", "JavaScript — .jsx source files"),
     ("ts", "TypeScript — .tsx source files and a tsconfig.json"),
 ];
 
-/// `create-web` starts its menu on JavaScript, so this does too.
+/// The menu starts on JavaScript, the language the starters are written in.
 const DEFAULT_LANGUAGE: &str = "js";
 
-/// The stylesheets an OTF app template offers. Only `spa` and `fullstack`
+/// The stylesheets an AFW app template offers. Only `spa` and `fullstack`
 /// ship `app/global.css` (`docs` is always Tailwind, a library has no
 /// styles), so only they ask. Tailwind is a one-line prepend — the toolchain
 /// compiles it — and a dependency, not a second project.
@@ -905,7 +905,7 @@ fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// Whether the `docs` template keeps its demo blog. `create-web` starts on
+/// Whether the `docs` template keeps its demo blog. The menu starts on
 /// yes; the embedded files are the blog-on-disk state with the config and
 /// page unpatched, so "no" only withholds files and "yes" patches two.
 const DEFAULT_BLOG: bool = true;
@@ -1185,24 +1185,23 @@ fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
 /// The extra answers an AFW template resolved to. `None` fields are axes
 /// the template does not take.
 #[derive(Debug)]
-struct Otf {
+struct Afw {
     language: String,
     styling: Option<String>,
     blog: Option<bool>,
 }
 
-/// Applies the OTF answers to the embedded files: renames, patches, added
-/// and withheld files. This is `create-web`'s `applyTypescript`,
-/// `applyDocsBlog` and Tailwind prepend, re-applied to embedded bytes rather
-/// than to a directory — the transforms are deterministic over file contents,
+/// Applies the AFW answers to the embedded files: renames, patches, added
+/// and withheld files: the TypeScript conversion, the docs blog and the
+/// Tailwind prepend, applied to embedded bytes rather than to a directory — the transforms are deterministic over file contents,
 /// so they unit-test without touching the filesystem.
-fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(String, Vec<u8>)> {
-    let ts = otf.language == "ts";
+fn apply_afw(template: &str, afw: &Afw, files: &[(String, &[u8])]) -> Vec<(String, Vec<u8>)> {
+    let ts = afw.language == "ts";
     let mut out: Vec<(String, Vec<u8>)> = Vec::new();
     for (path, contents) in files {
         // The demo blog is files on disk plus two patches: withholding it is
         // withholding the files, and nothing else.
-        if template == "docs" && otf.blog == Some(false) && path.starts_with("app/blog/") {
+        if template == "docs" && afw.blog == Some(false) && path.starts_with("app/blog/") {
             continue;
         }
         if ts && path == "jsconfig.json" {
@@ -1211,70 +1210,69 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
         let mut new_path = path.clone();
         let mut bytes = (*contents).to_vec();
         if ts {
-            if let Some(renamed) = otf_rename(&new_path) {
+            if let Some(renamed) = afw_rename(&new_path) {
                 new_path = renamed;
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     let renamed_base = new_path.rsplit('/').next().unwrap_or(&new_path).to_string();
-                    bytes = otf_patch_source(template, &renamed_base, text).into_bytes();
+                    bytes = afw_patch_source(template, &renamed_base, text).into_bytes();
                 }
             } else if template == "library" && new_path == "index.js" {
                 new_path = "index.ts".to_string();
                 if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = otf_patch_source(template, "index.ts", text).into_bytes();
+                    bytes = afw_patch_source(template, "index.ts", text).into_bytes();
                 }
             } else if new_path == "README.md" {
                 // READMEs name the file to edit; TypeScript renames it.
                 if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = otf_patch_source(template, "README.md", text).into_bytes();
+                    bytes = afw_patch_source(template, "README.md", text).into_bytes();
                 }
             } else if new_path.starts_with("tests/") {
                 // A test helper the renames leave alone still imports
                 // sources that moved: its imports follow them too.
                 if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = otf_patch_source(template, "test.js", text).into_bytes();
+                    bytes = afw_patch_source(template, "test.js", text).into_bytes();
                 }
             }
         }
-        if otf.styling.as_deref() == Some("tailwind")
+        if afw.styling.as_deref() == Some("tailwind")
             && new_path == "app/global.css"
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
-            bytes = format!("{OTF_TAILWIND_IMPORT}{text}").into_bytes();
+            bytes = format!("{AFW_TAILWIND_IMPORT}{text}").into_bytes();
         }
-        if template == "docs" && otf.blog == Some(true) {
+        if template == "docs" && afw.blog == Some(true) {
             if new_path == "afw.config.js"
                 && let Ok(text) = std::str::from_utf8(&bytes)
             {
-                bytes = otf_patch_blog_config(text).into_bytes();
+                bytes = afw_patch_blog_config(text).into_bytes();
             } else if new_path == "app/docs/page.mdx"
                 && let Ok(text) = std::str::from_utf8(&bytes)
             {
-                bytes = otf_patch_blog_page(text).into_bytes();
+                bytes = afw_patch_blog_page(text).into_bytes();
             }
         }
         // Without the demo blog there is nothing to index: the docs build
         // drops the blog posts plugin alongside `app/blog/`.
         if template == "docs"
-            && otf.blog == Some(false)
+            && afw.blog == Some(false)
             && new_path == "esdev.json"
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
-            bytes = otf_patch_docs_esdev(text).into_bytes();
+            bytes = afw_patch_docs_esdev(text).into_bytes();
         }
         if template == "library"
             && ts
             && new_path == "package.json"
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
-            bytes = otf_patch_library_manifest(text).into_bytes();
+            bytes = afw_patch_library_manifest(text).into_bytes();
         }
         // Tailwind is an `@import` the project resolves, so the project has
-        // to depend on it: `create-web` leans on npm hoisting (its default
-        // manager) to find the toolchain's copy, which a strict `node_modules`
-        // layout does not provide. `docs` always imports it; apps only on the
+        // to depend on it: relying on npm hoisting to find the toolchain's copy
+        // fails under a strict `node_modules` layout. `docs` always imports it; apps only on the
         // Tailwind styling.
         if new_path == "package.json"
-            && (template == "docs" || otf.styling.as_deref() == Some("tailwind"))
+            && (template == "docs" || afw.styling.as_deref() == Some("tailwind"))
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
             bytes = patch_tailwind_dep(text).into_bytes();
@@ -1287,7 +1285,7 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
             && new_path == "package.json"
             && let Ok(text) = std::str::from_utf8(&bytes)
         {
-            bytes = otf_patch_typescript(text).into_bytes();
+            bytes = afw_patch_typescript(text).into_bytes();
         }
         // The overlay wins, same as modes: a generated file replaces an
         // embedded one rather than being written beside it.
@@ -1297,7 +1295,7 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
         }
     }
     if ts {
-        for (path, contents) in otf_typescript_files(template) {
+        for (path, contents) in afw_typescript_files(template) {
             match out.iter_mut().find(|(existing, _)| *existing == path) {
                 Some(entry) => entry.1 = contents,
                 None => out.push((path, contents)),
@@ -1308,10 +1306,10 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
     out
 }
 
-/// The TypeScript renames `create-web` applies: `.jsx` sources, the test
+/// The TypeScript renames: `.jsx` sources, the test
 /// files that import them, and the server files the toolchain treats as
 /// code rather than components.
-fn otf_rename(path: &str) -> Option<String> {
+fn afw_rename(path: &str) -> Option<String> {
     if let Some(stem) = path.strip_suffix(".jsx") {
         return Some(format!("{stem}.tsx"));
     }
@@ -1333,7 +1331,7 @@ fn otf_rename(path: &str) -> Option<String> {
 
 /// The source patches: references follow the renames, layouts type their
 /// props, and the library's counter types its own.
-fn otf_patch_source(template: &str, basename: &str, content: &str) -> String {
+fn afw_patch_source(template: &str, basename: &str, content: &str) -> String {
     let mut next = content
         .replace("app/page.jsx", "app/page.tsx")
         .replace("app/api/hello/route.js", "app/api/hello/route.ts")
@@ -1347,15 +1345,15 @@ fn otf_patch_source(template: &str, basename: &str, content: &str) -> String {
     } else {
         next = next.replace(".jsx", ".tsx");
     }
-    next = otf_patch_layout_types(&next, basename);
-    next = otf_patch_component_types(&next, basename);
-    next = otf_patch_middleware_types(&next, basename);
-    next = otf_patch_handler_types(&next, basename);
+    next = afw_patch_layout_types(&next, basename);
+    next = afw_patch_component_types(&next, basename);
+    next = afw_patch_middleware_types(&next, basename);
+    next = afw_patch_handler_types(&next, basename);
     next
 }
 
 /// Layouts take children; TypeScript wants to know of what.
-fn otf_patch_layout_types(content: &str, basename: &str) -> String {
+fn afw_patch_layout_types(content: &str, basename: &str) -> String {
     if !basename.starts_with("layout.") {
         return content.to_string();
     }
@@ -1381,7 +1379,7 @@ fn otf_patch_layout_types(content: &str, basename: &str) -> String {
 }
 
 /// The library's counter types its one prop.
-fn otf_patch_component_types(content: &str, basename: &str) -> String {
+fn afw_patch_component_types(content: &str, basename: &str) -> String {
     if basename != "Counter.tsx" {
         return content.to_string();
     }
@@ -1395,7 +1393,7 @@ fn otf_patch_component_types(content: &str, basename: &str) -> String {
 /// untyped parameters are implicit `any` under `strict`. The types are
 /// type-only — erased before the build — from the server entry the file
 /// already runs under.
-fn otf_patch_middleware_types(content: &str, basename: &str) -> String {
+fn afw_patch_middleware_types(content: &str, basename: &str) -> String {
     if basename != "_middleware.ts" {
         return content.to_string();
     }
@@ -1416,7 +1414,7 @@ fn otf_patch_middleware_types(content: &str, basename: &str) -> String {
 /// untyped parameters are implicit `any` under `strict` (TS7006). The
 /// framework calls them with `(request, context)` and `(context)`, which is
 /// also how the template's own tests call them.
-fn otf_patch_handler_types(content: &str, basename: &str) -> String {
+fn afw_patch_handler_types(content: &str, basename: &str) -> String {
     let mut next = content.to_string();
     if basename == "route.ts" {
         next = next.replace(
@@ -1433,7 +1431,7 @@ fn otf_patch_handler_types(content: &str, basename: &str) -> String {
 }
 
 /// The library publishes its entry, and in TypeScript the entry is TypeScript.
-fn otf_patch_library_manifest(content: &str) -> String {
+fn afw_patch_library_manifest(content: &str) -> String {
     content
         .replace("\"./index.js\"", "\"./index.ts\"")
         .replace("\"index.js\"", "\"index.ts\"")
@@ -1454,7 +1452,7 @@ fn patch_tailwind_dep(content: &str) -> String {
 /// error when the compiler is not installed — rather than a bare `tsc`.
 /// String surgery, like [`patch_tailwind_dep`], so the embedded manifest
 /// keeps its formatting.
-fn otf_patch_typescript(content: &str) -> String {
+fn afw_patch_typescript(content: &str) -> String {
     let mut next = content.to_string();
     if !next.contains("\"typecheck\"") {
         next = next.replace(
@@ -1472,8 +1470,8 @@ fn otf_patch_typescript(content: &str) -> String {
 }
 
 /// The compiler macros are build-time, not runtime: their declarations ship
-/// as a `.d.ts` beside the sources, exactly as `create-web` writes them.
-const OTF_ENV_DTS: &str = "/** AFW compiler macros — provided at build time, not runtime. */
+/// as a `.d.ts` beside the sources.
+const AFW_ENV_DTS: &str = "/** AFW compiler macros — provided at build time, not runtime. */
 declare const $state: {
   <T>(initial: T): T;
   <T>(): T | undefined;
@@ -1483,7 +1481,7 @@ declare function $effect(fn: () => void | (() => void)): void;
 ";
 
 /// The `tsconfig.json` beside it, with the same per-template includes.
-fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
+fn afw_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
     let (env_path, include, allow_js): (&str, Vec<&str>, bool) = match template {
         "spa" | "fullstack" => ("app/afw-env.d.ts", vec!["app", "tests"], false),
         "library" => (
@@ -1525,38 +1523,38 @@ fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
     rendered.push('\n');
     vec![
         ("tsconfig.json".to_string(), rendered.into_bytes()),
-        (env_path.to_string(), OTF_ENV_DTS.as_bytes().to_vec()),
+        (env_path.to_string(), AFW_ENV_DTS.as_bytes().to_vec()),
     ]
 }
 
 /// The Tailwind choice is a one-line prepend — the toolchain compiles it.
-const OTF_TAILWIND_IMPORT: &str = "@import \"tailwindcss\";\n\n";
+const AFW_TAILWIND_IMPORT: &str = "@import \"tailwindcss\";\n\n";
 
 /// The demo blog is files on disk plus two patches; this is what "yes" adds.
-const OTF_BLOG_NAV: &str = "nav: [\n      { label: \"Docs\", href: \"/docs\" },\n      { label: \"Blog\", href: \"/blog\" },\n    ],";
-const OTF_BLOG_CONFIG: &str = "\n  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.\n  blog: {\n    dir: \"blog\",\n    lastUpdated: true,\n  },";
-const OTF_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `afw.config.js`, and the Blog nav entry\nif you only need docs.\n";
+const AFW_BLOG_NAV: &str = "nav: [\n      { label: \"Docs\", href: \"/docs\" },\n      { label: \"Blog\", href: \"/blog\" },\n    ],";
+const AFW_BLOG_CONFIG: &str = "\n  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.\n  blog: {\n    dir: \"blog\",\n    lastUpdated: true,\n  },";
+const AFW_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `afw.config.js`, and the Blog nav entry\nif you only need docs.\n";
 
-fn otf_patch_blog_config(content: &str) -> String {
+fn afw_patch_blog_config(content: &str) -> String {
     let mut config = content.to_string();
     if !config.contains("href: \"/blog\"") {
-        config = config.replace("nav: [{ label: \"Docs\", href: \"/docs\" }],", OTF_BLOG_NAV);
+        config = config.replace("nav: [{ label: \"Docs\", href: \"/docs\" }],", AFW_BLOG_NAV);
     }
     if !config.contains("blog:") {
         let trimmed = config.trim_end();
         let head = trimmed.strip_suffix("});").unwrap_or(trimmed);
-        config = format!("{head}{OTF_BLOG_CONFIG}\n}});\n");
+        config = format!("{head}{AFW_BLOG_CONFIG}\n}});\n");
     }
     config
 }
 
-fn otf_patch_blog_page(content: &str) -> String {
+fn afw_patch_blog_page(content: &str) -> String {
     if content.contains("## Blog (demo)") {
         return content.to_string();
     }
     content.replace(
         "\n## Edit Content\n",
-        &format!("{OTF_BLOG_DEMO_SECTION}\n## Edit Content\n"),
+        &format!("{AFW_BLOG_DEMO_SECTION}\n## Edit Content\n"),
     )
 }
 
@@ -1564,10 +1562,10 @@ fn otf_patch_blog_page(content: &str) -> String {
 /// the trailing comma that joins it to the entry after it. Withholding the
 /// blog is withholding the files plus this entry — a plugin indexing posts
 /// that do not exist would fail the release build instead.
-const OTF_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/afw-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
+const AFW_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/afw-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
 
-fn otf_patch_docs_esdev(content: &str) -> String {
-    content.replace(OTF_BLOG_PLUGIN_ENTRY, "")
+fn afw_patch_docs_esdev(content: &str) -> String {
+    content.replace(AFW_BLOG_PLUGIN_ENTRY, "")
 }
 
 /// How a menu value reads. Flags stay lowercase — what is chosen must match
@@ -1581,8 +1579,8 @@ fn display_name(name: &'static str) -> &'static str {
         "fullstack" => "FullStack",
         "hono" => "Hono",
         "lib" => "Library",
-        // The OTF starter's display is provisional: `lib` above already
-        // reads "Library", so this needs its own (see OTF_GROUP below).
+        // The AFW starter's display is provisional: `lib` above already
+        // reads "Library", so this needs its own (see AFW_GROUP below).
         "library" => "Component Library",
         "lit" => "Lit",
         "micro-ui" => "Micro-UI",
@@ -1599,21 +1597,21 @@ fn display_name(name: &'static str) -> &'static str {
     }
 }
 
-/// The OTF starters in the order `create-web` asks them — the embedded
+/// The AFW starters in menu order, simplest first — the embedded
 /// `TEMPLATES` list is alphabetical, which is for `--list`, not for choosing.
-const OTF_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
+const AFW_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
 
-/// The group entry that stands in for the four OTF starters in the first
+/// The group entry that stands in for the four AFW starters in the first
 /// menu. A name no flag spells, so it never leaks into the scriptable path.
-const OTF_GROUP: &str = "AFW";
-const OTF_GROUP_DESCRIPTION: &str = "AFW starters — SPA, fullstack, docs or library";
+const AFW_GROUP: &str = "AFW";
+const AFW_GROUP_DESCRIPTION: &str = "AFW starters — SPA, fullstack, docs or library";
 
 /// The first menu: this repository's own templates, then the AFW group.
 /// Pure, so a test can read what somebody choosing sees.
 fn template_menu_top() -> Vec<(&'static str, &'static str)> {
     let mut menu: Vec<(&'static str, &'static str)> = TEMPLATES
         .iter()
-        .filter(|(name, _)| !is_otf(name))
+        .filter(|(name, _)| !is_afw(name))
         .map(|(name, _)| {
             (
                 *name,
@@ -1624,13 +1622,13 @@ fn template_menu_top() -> Vec<(&'static str, &'static str)> {
             )
         })
         .collect();
-    menu.push((OTF_GROUP, OTF_GROUP_DESCRIPTION));
+    menu.push((AFW_GROUP, AFW_GROUP_DESCRIPTION));
     menu
 }
 
-/// The second menu, behind the group entry: the four OTF starters.
-fn template_menu_otf() -> Vec<(&'static str, &'static str)> {
-    OTF_ORDER
+/// The second menu, behind the group entry: the four AFW starters.
+fn template_menu_afw() -> Vec<(&'static str, &'static str)> {
+    AFW_ORDER
         .iter()
         .map(|name| {
             (
@@ -1646,8 +1644,8 @@ fn template_menu_otf() -> Vec<(&'static str, &'static str)> {
 
 /// Which template, asked on a terminal.
 ///
-/// Two menus rather than nine lines: the OTF starters choose behind their
-/// group entry, in `create-web`'s order. Neither menu has a default — the
+/// Two menus rather than nine lines: the AFW starters choose behind their
+/// group entry, simplest first. Neither menu has a default — the
 /// template is the one answer worth choosing explicitly — while flags,
 /// `-y` and unattended runs resolve exactly as before. Esc on the first
 /// menu cancels the run; Esc on the second steps back to the first.
@@ -1664,10 +1662,10 @@ fn ask_template() -> Option<String> {
     loop {
         let chosen =
             crate::prompt::select("Which Template?", &top, None, crate::prompt::OnEsc::Cancel)?;
-        if top[chosen].name != OTF_GROUP {
+        if top[chosen].name != AFW_GROUP {
             return Some(top[chosen].name.to_string());
         }
-        let otf: Vec<crate::prompt::Choice<'_>> = template_menu_otf()
+        let afw: Vec<crate::prompt::Choice<'_>> = template_menu_afw()
             .into_iter()
             .map(|(name, description)| crate::prompt::Choice {
                 name,
@@ -1677,9 +1675,9 @@ fn ask_template() -> Option<String> {
             })
             .collect();
         if let Some(chosen) =
-            crate::prompt::select("Which AFW Starter?", &otf, None, crate::prompt::OnEsc::Back)
+            crate::prompt::select("Which AFW Starter?", &afw, None, crate::prompt::OnEsc::Back)
         {
-            return Some(otf[chosen].name.to_string());
+            return Some(afw[chosen].name.to_string());
         }
     }
 }
@@ -2408,7 +2406,7 @@ mod tests {
             "https://registry.npmjs.org/@types%2Freact"
         );
 
-        let docs = otf_written("docs", "ts", None, Some(false));
+        let docs = afw_written("docs", "ts", None, Some(false));
         assert_eq!(
             registry_packages(&docs).expect("valid placeholders"),
             BTreeSet::from([
@@ -2495,7 +2493,7 @@ mod tests {
                 !text.contains("target/") && !text.contains(".cache/"),
                 "{template}: nothing here writes those"
             );
-            if is_otf(template) {
+            if is_afw(template) {
                 continue;
             }
             assert!(
@@ -2677,8 +2675,8 @@ mod tests {
     /// `npm test` and `npm run typecheck` must mean something, so each one
     /// ships a `tsconfig.json` and at least one test file.
     ///
-    /// Scoped to the esdev-native set: the OTF templates are `otfw` projects
-    /// until that migration lands, and are covered by their own tests.
+    /// Scoped to this repository's own stack: the AFW starters are covered
+    /// by their own tests.
     #[test]
     fn esdev_templates_ship_a_config_and_a_test() {
         for template in ["api", "react", "vanilla", "micro-ui", "lib"] {
@@ -2802,32 +2800,32 @@ mod tests {
         }
     }
 
-    /// The first menu holds this repository's templates plus the OTF group —
+    /// The first menu holds this repository's templates plus the AFW group —
     /// four more lines there is the flat list this grouping replaces.
     #[test]
-    fn the_template_menu_groups_the_otf_starters() {
+    fn the_template_menu_groups_the_afw_starters() {
         let top = template_menu_top();
         let names: Vec<&str> = top.iter().map(|(name, _)| *name).collect();
-        for otf in OTF_ORDER {
-            assert!(!names.contains(otf), "{otf} leaked into the first menu");
+        for afw in AFW_ORDER {
+            assert!(!names.contains(afw), "{afw} leaked into the first menu");
         }
-        assert_eq!(top.last().map(|(name, _)| *name), Some(OTF_GROUP));
+        assert_eq!(top.last().map(|(name, _)| *name), Some(AFW_GROUP));
         for (_, description) in &top {
             assert!(
                 !description.is_empty(),
                 "the menu shows an unexplained entry"
             );
         }
-        // Behind the group: the four starters, in `create-web`'s order.
-        let otf = template_menu_otf();
-        let names: Vec<&str> = otf.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, OTF_ORDER);
+        // Behind the group: the four starters, simplest first.
+        let afw = template_menu_afw();
+        let names: Vec<&str> = afw.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, AFW_ORDER);
     }
 
     /// The AFW starter set is embedded whole: apps, docs with its demo
     /// blog on disk, and the library without anything Bun-only.
     #[test]
-    fn the_otf_templates_are_in_the_binary() {
+    fn the_afw_templates_are_in_the_binary() {
         for expected in [
             "package.json",
             "index.html",
@@ -2880,10 +2878,10 @@ mod tests {
         }
     }
 
-    /// The OTF answers resolved from flags, without a terminal to ask on.
+    /// The AFW answers resolved from flags, without a terminal to ask on.
     /// Unit tests never see a TTY, so `None` here is the unattended default.
     #[test]
-    fn the_otf_axes_default_and_refuse() {
+    fn the_afw_axes_default_and_refuse() {
         assert!(matches!(
             resolve_choice(
                 "spa",
@@ -3004,8 +3002,8 @@ mod tests {
         ));
     }
 
-    /// The OTF answers applied, as `create` would write them.
-    fn otf_written(
+    /// The AFW answers applied, as `create` would write them.
+    fn afw_written(
         template: &str,
         language: &str,
         styling: Option<&str>,
@@ -3016,9 +3014,9 @@ mod tests {
             .find(|(name, _)| *name == template)
             .expect("the template is embedded");
         let files = files_for(files, None);
-        apply_otf(
+        apply_afw(
             template,
-            &Otf {
+            &Afw {
                 language: language.to_string(),
                 styling: styling.map(str::to_string),
                 blog,
@@ -3027,7 +3025,7 @@ mod tests {
         )
     }
 
-    fn otf_text(files: &[(String, Vec<u8>)], path: &str) -> String {
+    fn afw_text(files: &[(String, Vec<u8>)], path: &str) -> String {
         let (_, contents) = files
             .iter()
             .find(|(written, _)| written == path)
@@ -3039,7 +3037,7 @@ mod tests {
     /// layouts type their props, and the config arrives beside them.
     #[test]
     fn typescript_renames_patches_and_configures() {
-        let files = otf_written("spa", "ts", Some("css"), None);
+        let files = afw_written("spa", "ts", Some("css"), None);
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"app/page.tsx"));
         assert!(paths.contains(&"app/layout.tsx"));
@@ -3050,29 +3048,29 @@ mod tests {
         assert!(!paths.contains(&"tests/counter.test.js"));
         assert!(!paths.contains(&"jsconfig.json"));
 
-        let layout = otf_text(&files, "app/layout.tsx");
+        let layout = afw_text(&files, "app/layout.tsx");
         assert!(
             layout.contains("({ children }: { children: unknown })"),
             "the layout types its props: {layout}"
         );
-        let page = otf_text(&files, "app/page.tsx");
+        let page = afw_text(&files, "app/page.tsx");
         assert!(
             page.contains("app/page.tsx"),
             "references follow the rename: {page}"
         );
-        let readme = otf_text(&files, "README.md");
+        let readme = afw_text(&files, "README.md");
         assert!(
             readme.contains("app/page.tsx"),
             "the README names the file that exists: {readme}"
         );
-        let env = otf_text(&files, "app/afw-env.d.ts");
+        let env = afw_text(&files, "app/afw-env.d.ts");
         assert!(
             env.contains("declare const $state"),
             "macros declared: {env}"
         );
 
         let tsconfig: serde_json::Value =
-            serde_json::from_str(&otf_text(&files, "tsconfig.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&files, "tsconfig.json")).expect("valid JSON");
         assert_eq!(
             tsconfig["include"],
             serde_json::json!(["app", "tests"]),
@@ -3088,48 +3086,48 @@ mod tests {
     /// entry — in TypeScript, the TypeScript entry.
     #[test]
     fn typescript_configures_docs_and_library() {
-        let docs = otf_written("docs", "ts", None, Some(false));
+        let docs = afw_written("docs", "ts", None, Some(false));
         let tsconfig: serde_json::Value =
-            serde_json::from_str(&otf_text(&docs, "tsconfig.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&docs, "tsconfig.json")).expect("valid JSON");
         assert_eq!(
             tsconfig["include"],
             serde_json::json!(["app", "afw.config.js"])
         );
 
-        let library = otf_written("library", "ts", None, None);
+        let library = afw_written("library", "ts", None, None);
         let paths: Vec<&str> = library.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"index.ts"));
         assert!(paths.contains(&"src/Counter.tsx"));
         assert!(paths.contains(&"afw-env.d.ts"));
         assert!(!paths.contains(&"index.js"));
         let manifest: serde_json::Value =
-            serde_json::from_str(&otf_text(&library, "package.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&library, "package.json")).expect("valid JSON");
         assert_eq!(manifest["exports"]["."], serde_json::json!("./index.ts"));
         assert_eq!(manifest["files"], serde_json::json!(["index.ts", "src"]));
-        let counter = otf_text(&library, "src/Counter.tsx");
+        let counter = afw_text(&library, "src/Counter.tsx");
         assert!(
             counter.contains("{ initial = 0 }: { initial?: number }"),
             "the counter types its prop: {counter}"
         );
         // The esdev test reads the manifest, so it needs no patch per mode.
-        let test = otf_text(&library, "tests/counter.test.ts");
+        let test = afw_text(&library, "tests/counter.test.ts");
         assert!(test.contains("runtime:test"));
         assert!(!test.contains("bun:test"));
     }
 
-    /// The four OTF starters are native esdev projects: a project-local
-    /// esdev.json naming the framework plugin in its rendering mode, scripts
-    /// on esdev commands, and no retired `otfw` executable anywhere.
+    /// The four AFW starters are native esdev projects: a project-local
+    /// esdev.json naming the framework plugin in its rendering mode, and
+    /// scripts that run on esdev (or, for a fullstack deploy, esrun).
     #[test]
-    fn otf_templates_are_native_esdev_projects() {
+    fn afw_templates_are_native_esdev_projects() {
         for (template, mode, styling, blog) in [
             ("spa", "spa", Some("css"), None),
             ("fullstack", "ssr", Some("css"), None),
             ("docs", "ssg", None, Some(true)),
         ] {
-            let files = otf_written(template, "js", styling, blog);
+            let files = afw_written(template, "js", styling, blog);
             let config: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+                serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
             let plugins = config["plugins"].as_array().expect("a plugins array");
             assert!(
                 plugins.iter().any(|plugin| {
@@ -3144,13 +3142,13 @@ mod tests {
                 "{template}: the framework plugin with mode {mode}"
             );
             let manifest: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "package.json"))
+                serde_json::from_str(&afw_text(&files, "package.json"))
                     .expect("valid package.json");
             for (script, command) in manifest["scripts"].as_object().expect("scripts") {
                 let command = command.as_str().unwrap_or_default();
                 assert!(
-                    !command.starts_with("otfw "),
-                    "{template}: {script} still calls the retired CLI: {command}"
+                    command.starts_with("esdev ") || command.starts_with("esrun "),
+                    "{template}: {script} runs outside esdev and esrun: {command}"
                 );
             }
             assert!(
@@ -3161,16 +3159,16 @@ mod tests {
             );
             // The client entry mounts the generated route map, with the
             // generated loader patterns beside it.
-            let entry = otf_text(&files, "entry.js");
+            let entry = afw_text(&files, "entry.js");
             assert!(
                 entry.contains("loaderRoutes") && entry.contains("mountApp"),
                 "{template}: the entry mounts generated routes: {entry}"
             );
         }
         // The library compiles without route discovery and tests in the DOM.
-        let files = otf_written("library", "js", None, None);
+        let files = afw_written("library", "js", None, None);
         let config: serde_json::Value =
-            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
         let options = &config["plugins"][0]["options"];
         assert_eq!(options["target"], serde_json::json!("csr"));
         assert_eq!(options["routes"], serde_json::json!(false));
@@ -3188,18 +3186,18 @@ mod tests {
     /// from — keys a bundler cannot discover, so they are written, not found.
     #[test]
     fn fullstack_server_wiring_is_explicit() {
-        let files = otf_written("fullstack", "js", Some("css"), None);
+        let files = afw_written("fullstack", "js", Some("css"), None);
         assert!(
             !files.iter().any(|(name, _)| name.ends_with("bootstrap.js")),
             "no DOM shim entry ships"
         );
         let config: serde_json::Value =
-            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
         assert_eq!(
             config["build"]["targets"]["server"]["entry"],
             serde_json::json!("server.js")
         );
-        let server = otf_text(&files, "server.js");
+        let server = afw_text(&files, "server.js");
         for expected in [
             "registerRoutes(pages)",
             "createApiHandler",
@@ -3216,7 +3214,7 @@ mod tests {
             "registration comes from the server entry: {server}"
         );
         let manifest: serde_json::Value =
-            serde_json::from_str(&otf_text(&files, "package.json")).expect("valid package.json");
+            serde_json::from_str(&afw_text(&files, "package.json")).expect("valid package.json");
         let start = manifest["scripts"]["start"].as_str().unwrap_or_default();
         assert!(
             start.starts_with("esrun ") && start.contains("dist/server.js"),
@@ -3232,14 +3230,14 @@ mod tests {
     /// that would index posts that do not exist; keeping it keeps the entry.
     #[test]
     fn docs_blog_off_drops_the_posts_plugin() {
-        let without = otf_written("docs", "js", None, Some(false));
+        let without = afw_written("docs", "js", None, Some(false));
         let paths: Vec<&str> = without.iter().map(|(path, _)| path.as_str()).collect();
         assert!(
             !paths.iter().any(|path| path.starts_with("app/blog/")),
             "blog files withheld"
         );
         let config: serde_json::Value =
-            serde_json::from_str(&otf_text(&without, "esdev.json")).expect("valid esdev.json");
+            serde_json::from_str(&afw_text(&without, "esdev.json")).expect("valid esdev.json");
         let plugins = config["plugins"].as_array().expect("a plugins array");
         assert!(
             !plugins
@@ -3255,9 +3253,9 @@ mod tests {
             "docs navigation stays"
         );
 
-        let with = otf_written("docs", "js", None, Some(true));
+        let with = afw_written("docs", "js", None, Some(true));
         let config: serde_json::Value =
-            serde_json::from_str(&otf_text(&with, "esdev.json")).expect("valid esdev.json");
+            serde_json::from_str(&afw_text(&with, "esdev.json")).expect("valid esdev.json");
         assert!(
             config["plugins"]
                 .as_array()
@@ -3271,21 +3269,21 @@ mod tests {
 
     /// Test files are not renamed, but their imports follow the renames.
     #[test]
-    fn otf_test_imports_follow_ts_renames() {
-        let spa = otf_written("spa", "ts", Some("css"), None);
+    fn afw_test_imports_follow_ts_renames() {
+        let spa = afw_written("spa", "ts", Some("css"), None);
         assert!(
-            otf_text(&spa, "tests/counter.test.ts").contains("../app/page.tsx"),
+            afw_text(&spa, "tests/counter.test.ts").contains("../app/page.tsx"),
             "the SPA test imports what exists"
         );
-        let fullstack = otf_written("fullstack", "ts", Some("css"), None);
-        let api = otf_text(&fullstack, "tests/api.test.ts");
+        let fullstack = afw_written("fullstack", "ts", Some("css"), None);
+        let api = afw_text(&fullstack, "tests/api.test.ts");
         assert!(
             api.contains("../app/api/hello/route.ts"),
             "route import: {api}"
         );
         assert!(api.contains("../app/loader.ts"), "loader import: {api}");
-        let library = otf_written("library", "ts", None, None);
-        let test = otf_text(&library, "tests/counter.test.ts");
+        let library = afw_written("library", "ts", None, None);
+        let test = afw_text(&library, "tests/counter.test.ts");
         // The entry is TypeScript; the test's bundler-style import still
         // names `.js`, which the test runner resolves to `index.ts`.
         assert!(
@@ -3294,7 +3292,7 @@ mod tests {
         );
         // Middleware runs the pipeline typed: the untyped parameters are
         // implicit `any` under `strict` (TS7006).
-        let middleware = otf_text(&fullstack, "app/_middleware.ts");
+        let middleware = afw_text(&fullstack, "app/_middleware.ts");
         assert!(
             middleware
                 .contains("import type { MiddlewareContext, NextFn } from \"@opentf/afw/server\""),
@@ -3308,12 +3306,12 @@ mod tests {
         );
         // Route and loader handlers are typed the way the framework and the
         // template tests call them: request in, context in.
-        let route = otf_text(&fullstack, "app/api/hello/route.ts");
+        let route = afw_text(&fullstack, "app/api/hello/route.ts");
         assert!(
             route.contains("export function GET(_request: Request)"),
             "the route types its request: {route}"
         );
-        let loader = otf_text(&fullstack, "app/loader.ts");
+        let loader = afw_text(&fullstack, "app/loader.ts");
         assert!(
             loader.contains("params: Record<string, string>"),
             "the loader types its context: {loader}"
@@ -3324,16 +3322,16 @@ mod tests {
     /// `allowImportingTsExtensions` — which libraries need to publish sources,
     /// and spas need to consume them.
     #[test]
-    fn otf_tsconfigs_allow_importing_ts_extensions() {
+    fn afw_tsconfigs_allow_importing_ts_extensions() {
         for (template, styling, blog) in [
             ("spa", Some("css"), None),
             ("fullstack", Some("css"), None),
             ("docs", None, Some(false)),
             ("library", None, None),
         ] {
-            let files = otf_written(template, "ts", styling, blog);
+            let files = afw_written(template, "ts", styling, blog);
             let tsconfig: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "tsconfig.json")).expect("valid JSON");
+                serde_json::from_str(&afw_text(&files, "tsconfig.json")).expect("valid JSON");
             assert_eq!(
                 tsconfig["compilerOptions"]["allowImportingTsExtensions"],
                 serde_json::json!(true),
@@ -3351,8 +3349,8 @@ mod tests {
     /// and cleanup — not the manifest that points at it.
     #[test]
     fn library_tests_render_the_component() {
-        let files = otf_written("library", "js", None, None);
-        let test = otf_text(&files, "tests/counter.test.js");
+        let files = afw_written("library", "js", None, None);
+        let test = afw_text(&files, "tests/counter.test.js");
         for expected in [
             "import { Counter }",
             "render(Counter",
@@ -3369,9 +3367,9 @@ mod tests {
     /// dev loop never prerenders.
     #[test]
     fn docs_ssg_target_prerenders_on_release() {
-        let files = otf_written("docs", "js", None, Some(true));
+        let files = afw_written("docs", "js", None, Some(true));
         let config: serde_json::Value =
-            serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+            serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
         assert_eq!(
             config["build"]["targets"]["site-ssg"],
             serde_json::json!({
@@ -3380,7 +3378,7 @@ mod tests {
                 "then": "run",
             })
         );
-        let ssg = otf_text(&files, "ssg.js");
+        let ssg = afw_text(&files, "ssg.js");
         assert!(
             ssg.contains("no staging area") && ssg.contains("exit(0)"),
             "development skips the prerender: {ssg}"
@@ -3402,9 +3400,9 @@ mod tests {
             ("docs", None, Some(false)),
             ("library", None, None),
         ] {
-            let files = otf_written(template, "ts", styling, blog);
+            let files = afw_written(template, "ts", styling, blog);
             let manifest: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "package.json")).expect("valid JSON");
+                serde_json::from_str(&afw_text(&files, "package.json")).expect("valid JSON");
             assert_eq!(
                 manifest["scripts"]["typecheck"],
                 serde_json::json!("esdev typecheck"),
@@ -3420,9 +3418,9 @@ mod tests {
                 "{template}: TypeScript should resolve at scaffold time"
             );
 
-            let js = otf_written(template, "js", styling, blog);
+            let js = afw_written(template, "js", styling, blog);
             let manifest: serde_json::Value =
-                serde_json::from_str(&otf_text(&js, "package.json")).expect("valid JSON");
+                serde_json::from_str(&afw_text(&js, "package.json")).expect("valid JSON");
             assert!(
                 manifest["scripts"].get("typecheck").is_none(),
                 "{template}: JavaScript gained a typecheck script"
@@ -3446,7 +3444,7 @@ mod tests {
         ] {
             let files = plain_written(template, mode);
             let manifest: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "package.json"))
+                serde_json::from_str(&afw_text(&files, "package.json"))
                     .expect("valid template package.json");
             assert_eq!(
                 manifest["devDependencies"]["typescript"],
@@ -3464,7 +3462,7 @@ mod tests {
             ("react", Some("fullstack"), 8080),
         ] {
             let files = plain_written(template, mode);
-            let readme = otf_text(&files, "README.md");
+            let readme = afw_text(&files, "README.md");
             assert!(
                 readme.contains(&format!("http://localhost:{port}")),
                 "{template} {mode:?}: README has the wrong dev URL: {readme}"
@@ -3475,7 +3473,7 @@ mod tests {
     #[test]
     fn react_refresh_template_returns_a_source_map() {
         let files = plain_written("react", Some("static"));
-        let plugin = otf_text(&files, "plugins/react-refresh.mjs");
+        let plugin = afw_text(&files, "plugins/react-refresh.mjs");
         assert!(plugin.contains("sourcesContent: [code]"));
         assert!(plugin.contains("const mappings ="));
         assert!(plugin.contains("\";;;;\" +"));
@@ -3488,7 +3486,7 @@ mod tests {
         for mode in ["static", "fullstack"] {
             let files = plain_written("react", Some(mode));
             let config: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+                serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
             assert_eq!(
                 config["plugins"][0], "./plugins/react-refresh.mjs",
                 "{mode}"
@@ -3498,7 +3496,7 @@ mod tests {
                 assert!(target.get("refresh").is_none(), "{mode} {name}");
             }
         }
-        let plugin = otf_text(
+        let plugin = afw_text(
             &plain_written("react", Some("static")),
             "plugins/react-refresh.mjs",
         );
@@ -3510,7 +3508,7 @@ mod tests {
         for mode in ["static", "fullstack"] {
             let files = plain_written("react", Some(mode));
             let config: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "esdev.json")).expect("valid esdev.json");
+                serde_json::from_str(&afw_text(&files, "esdev.json")).expect("valid esdev.json");
             assert_eq!(config["jsx"]["importSource"], "react", "{mode}");
             assert_eq!(config["jsx"]["reactCompiler"], true, "{mode}");
         }
@@ -3523,7 +3521,7 @@ mod tests {
     #[test]
     fn every_servable_template_has_a_preview_script() {
         fn scripts(files: &[(String, Vec<u8>)]) -> serde_json::Value {
-            serde_json::from_str::<serde_json::Value>(&otf_text(files, "package.json"))
+            serde_json::from_str::<serde_json::Value>(&afw_text(files, "package.json"))
                 .map(|manifest| manifest["scripts"].clone())
                 .expect("valid JSON")
         }
@@ -3547,7 +3545,7 @@ mod tests {
             ("docs", "ts", None, Some(false), "esdev preview"),
         ] {
             assert_eq!(
-                scripts(&otf_written(template, language, styling, blog))["preview"],
+                scripts(&afw_written(template, language, styling, blog))["preview"],
                 serde_json::json!(script),
                 "{template} {language}: wrong preview script"
             );
@@ -3569,7 +3567,7 @@ mod tests {
             ("library", "ts", None, None),
         ] {
             assert!(
-                scripts(&otf_written(template, language, styling, blog))
+                scripts(&afw_written(template, language, styling, blog))
                     .get("preview")
                     .is_none(),
                 "{template} {language}: nothing servable to preview"
@@ -3580,7 +3578,7 @@ mod tests {
     /// JavaScript writes what is embedded: no config, no renames.
     #[test]
     fn javascript_writes_the_embedded_files() {
-        let files = otf_written("spa", "js", Some("css"), None);
+        let files = afw_written("spa", "js", Some("css"), None);
         let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"app/page.jsx"));
         assert!(paths.contains(&"jsconfig.json"));
@@ -3591,30 +3589,30 @@ mod tests {
     /// Tailwind is a prepend, not a project shape — and docs already has it.
     #[test]
     fn tailwind_prepends_the_import() {
-        let plain = otf_written("spa", "js", Some("css"), None);
-        assert!(!otf_text(&plain, "app/global.css").contains("@import"));
+        let plain = afw_written("spa", "js", Some("css"), None);
+        assert!(!afw_text(&plain, "app/global.css").contains("@import"));
         let plain_manifest: serde_json::Value =
-            serde_json::from_str(&otf_text(&plain, "package.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&plain, "package.json")).expect("valid JSON");
         assert!(
             plain_manifest["devDependencies"]
                 .get("tailwindcss")
                 .is_none(),
             "plain CSS pulls no compiler"
         );
-        let tw = otf_written("spa", "js", Some("tailwind"), None);
-        assert!(otf_text(&tw, "app/global.css").starts_with("@import \"tailwindcss\";\n\nbody {"));
+        let tw = afw_written("spa", "js", Some("tailwind"), None);
+        assert!(afw_text(&tw, "app/global.css").starts_with("@import \"tailwindcss\";\n\nbody {"));
         // An `@import` the project resolves is a dependency the project
         // declares: npm hoisting (upstream's default manager) finds the
         // toolchain's copy, and a strict `node_modules` layout does not.
         let tw_manifest: serde_json::Value =
-            serde_json::from_str(&otf_text(&tw, "package.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&tw, "package.json")).expect("valid JSON");
         assert_eq!(
             tw_manifest["devDependencies"]["tailwindcss"],
             serde_json::json!(registry_placeholder("tailwindcss"))
         );
-        let docs = otf_written("docs", "js", None, Some(false));
+        let docs = afw_written("docs", "js", None, Some(false));
         let docs_manifest: serde_json::Value =
-            serde_json::from_str(&otf_text(&docs, "package.json")).expect("valid JSON");
+            serde_json::from_str(&afw_text(&docs, "package.json")).expect("valid JSON");
         assert_eq!(
             docs_manifest["devDependencies"]["tailwindcss"],
             serde_json::json!(registry_placeholder("tailwindcss")),
@@ -3626,25 +3624,27 @@ mod tests {
     /// files that point at it.
     #[test]
     fn the_blog_is_files_plus_two_patches() {
-        let bare = otf_written("docs", "js", None, Some(false));
+        let bare = afw_written("docs", "js", None, Some(false));
         assert!(
             !bare.iter().any(|(path, _)| path.starts_with("app/blog/")),
             "no blog means no blog files"
         );
-        let config = otf_text(&bare, "afw.config.js");
+        let config = afw_text(&bare, "afw.config.js");
         assert!(!config.contains("blog:"));
+        // afw-docs builds its search index only for a provider it knows.
+        assert!(config.contains(r#"provider: "afw""#), "{config}");
 
-        let blogged = otf_written("docs", "js", None, Some(true));
+        let blogged = afw_written("docs", "js", None, Some(true));
         assert!(
             blogged
                 .iter()
                 .any(|(path, _)| path == "app/blog/hello-world/page.mdx"),
             "yes means the sample post"
         );
-        let config = otf_text(&blogged, "afw.config.js");
+        let config = afw_text(&blogged, "afw.config.js");
         assert!(config.contains("href: \"/blog\""));
         assert!(config.contains("dir: \"blog\""));
-        let page = otf_text(&blogged, "app/docs/page.mdx");
+        let page = afw_text(&blogged, "app/docs/page.mdx");
         assert!(page.contains("## Blog (demo)"));
         assert!(page.contains("## Edit Content"));
     }
@@ -3693,7 +3693,7 @@ mod tests {
         ] {
             let files = apply_tailwind(plain_written(template, mode));
             assert_eq!(
-                otf_text(&files, TAILWIND_STYLESHEET),
+                afw_text(&files, TAILWIND_STYLESHEET),
                 "@import \"tailwindcss\";\n",
                 "{template}"
             );
@@ -3705,7 +3705,7 @@ mod tests {
                 1,
                 "{template}: two stylesheets"
             );
-            let html = otf_text(&files, "index.html");
+            let html = afw_text(&files, "index.html");
             assert_eq!(
                 html.matches("<link rel=\"stylesheet\" href=\"./src/styles.css\" />")
                     .count(),
@@ -3717,7 +3717,7 @@ mod tests {
                 .unwrap();
             assert!(link < html.find("</head>").expect("a head"), "{template}");
             let manifest: serde_json::Value =
-                serde_json::from_str(&otf_text(&files, "package.json")).expect("still JSON");
+                serde_json::from_str(&afw_text(&files, "package.json")).expect("still JSON");
             assert!(
                 manifest.pointer("/devDependencies/tailwindcss").is_some(),
                 "{template}: {manifest}"
@@ -3730,18 +3730,18 @@ mod tests {
     #[test]
     fn plain_css_leaves_the_template_as_it_was() {
         let files = plain_written("vanilla", None);
-        let css = otf_text(&files, TAILWIND_STYLESHEET);
+        let css = afw_text(&files, TAILWIND_STYLESHEET);
         assert!(
             css.contains("font-family"),
             "the starter styles shipped: {css}"
         );
         assert!(!css.contains("@import"), "plain CSS pulls no import");
-        let html = otf_text(&files, "index.html");
+        let html = afw_text(&files, "index.html");
         assert!(
             html.contains("<link rel=\"stylesheet\" href=\"./src/styles.css\" />"),
             "the page loads it: {html}"
         );
-        assert!(!otf_text(&files, "package.json").contains("tailwindcss"));
+        assert!(!afw_text(&files, "package.json").contains("tailwindcss"));
     }
 
     /// One look, shared: the page templates ship byte for byte the same
@@ -3758,8 +3758,8 @@ mod tests {
             ("react", Some("fullstack")),
         ] {
             let files = plain_written(template, mode);
-            contents.push(otf_text(&files, TAILWIND_STYLESHEET));
-            let html = otf_text(&files, "index.html");
+            contents.push(afw_text(&files, TAILWIND_STYLESHEET));
+            let html = afw_text(&files, "index.html");
             assert!(
                 html.contains("<link rel=\"stylesheet\" href=\"./src/styles.css\" />"),
                 "{template} {mode:?}: the page does not load it"

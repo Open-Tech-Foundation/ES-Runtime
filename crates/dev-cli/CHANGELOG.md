@@ -34,6 +34,20 @@ is the point, since none of the three has any business in a deployment.
   `afw-env.d.ts`. The menu group reads "AFW". Projects scaffolded earlier keep
   working on the `@opentf/web*` packages they were pinned to.
 
+### Removed
+
+- `esdev build` and `esdev start` no longer recognise a project built by the
+  retired `otfw` CLI (an `otfw.config.js`, or scripts calling `otfw`) to point
+  at its own toolchain. AFW projects are esdev projects with an `esdev.json`;
+  a directory without one gets the ordinary missing-`esdev.json` error.
+
+### Fixed
+
+- The `docs` starter builds its search index: its config named an unknown
+  search provider (`otf`), so the build skipped the index and the navbar
+  search had nothing to query. The fullstack starter's sample middleware
+  sends `x-powered-by: afw`.
+
 ## [0.23.0] - 2026-10-27
 
 ### Fixed

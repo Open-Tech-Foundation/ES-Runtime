@@ -720,7 +720,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        format!("plugin `otfw` threw an error\n\nCaused by:\n    {indented}")
+        format!("plugin `afw` threw an error\n\nCaused by:\n    {indented}")
     }
 
     /// The whole point: the module and the plugin come back, and the message is
@@ -728,18 +728,18 @@ mod tests {
     #[test]
     fn a_pass_failure_names_the_module_and_the_plugin() {
         let carried = as_the_backend_renders_it(&blamed(
-            "otfw",
+            "afw",
             Some("/app/page.jsx"),
             "cannot compile this route",
         ));
         // The backend renders the frame from the same message, so it carries
         // the tag too — which is how a frame that is not one is told apart from
         // a frame that is.
-        let mut failed = failure(&carried, Some(&format!("[otfw] {carried}")));
+        let mut failed = failure(&carried, Some(&format!("[afw] {carried}")));
         attribute(&mut failed);
         assert_eq!(failed.message, "cannot compile this route");
         assert_eq!(failed.id.as_deref(), Some("/app/page.jsx"));
-        assert_eq!(failed.plugin.as_deref(), Some("otfw"));
+        assert_eq!(failed.plugin.as_deref(), Some("afw"));
         // Not a code frame: it is the message again behind a banner, so it is
         // dropped rather than shown twice.
         assert!(failed.frame.is_none());
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn a_cause_is_de_indented_by_the_four_anyhow_added() {
         let stack = "ReferenceError: nope is not defined\n    at handler (file:///p.mjs:4:9)";
-        let carried = as_the_backend_renders_it(&blamed("otfw", Some("/app/dep.js"), stack));
+        let carried = as_the_backend_renders_it(&blamed("afw", Some("/app/dep.js"), stack));
         let mut failed = failure(&carried, None);
         attribute(&mut failed);
         assert_eq!(failed.message, stack);
@@ -774,19 +774,19 @@ mod tests {
     /// whatever id the diagnostic itself had.
     #[test]
     fn a_whole_build_hook_leaves_the_diagnostics_own_id_alone() {
-        let carried = as_the_backend_renders_it(&blamed("otfw", None, "the manifest is missing"));
+        let carried = as_the_backend_renders_it(&blamed("afw", None, "the manifest is missing"));
         let mut failed = failure(&carried, None);
         failed.id = Some("/app/main.js".to_string());
         attribute(&mut failed);
         assert_eq!(failed.id.as_deref(), Some("/app/main.js"));
-        assert_eq!(failed.plugin.as_deref(), Some("otfw"));
+        assert_eq!(failed.plugin.as_deref(), Some("afw"));
     }
 
     /// The `end` hook is handed the batch as text, so the attribution has to
     /// come off there too — a plugin reading it wants what was said.
     #[test]
     fn text_shown_as_it_is_carries_no_attribution() {
-        let carried = as_the_backend_renders_it(&blamed("otfw", Some("/a.js"), "no"));
+        let carried = as_the_backend_renders_it(&blamed("afw", Some("/a.js"), "no"));
         assert_eq!(untagged(&carried), "no");
         assert_eq!(untagged("Unexpected token"), "Unexpected token");
     }
