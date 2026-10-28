@@ -64,6 +64,7 @@ The build is a security step, not only a packaging one.
 | `--minify` | Minify the output |
 | `--conditions=<list>` | Extra `exports` conditions, comma-separated; these add to `import`, `default`, `worker` |
 | `--define=<name>=<value>` | Replace a name at build time; `process.env.NODE_ENV` defaults to `"production"` |
+| `--inventory=<file>` | Write what the build shipped as a draft [dependency policy](/docs/security/dependency-policy): each package's version and `h1:` hash |
 | `--alias=<name>=<to>` | Rewrite a specifier before it resolves; repeatable |
 | `--sourcemap[=<kind>]` | A `.map` beside the output, or `=inline`, or `=hidden` |
 | `--target=<name>` | Build one target of the project's `esdev.json` |
@@ -110,34 +111,13 @@ file and the line.
 
 ## Import policy
 
-A build inlines every package it imports, so the runtime's
-[import policy](/docs/security/imports) never sees them where the bundle is
-deployed. Name the policy in `esdev.json` and every build applies it to what it
-ships:
-
-```json
-{
-  "build": {
-    "importPolicy": "./import-policy.json",
-    "targets": { "server": { "entry": "src/server.js", "out": "dist/server.js" } }
-  }
-}
-```
-
-Every module read into each bundle is judged — every target, browser and
-server, and the builds `esdev start` makes. A strict policy fails the build
-and names every refused package at once, and nothing is written:
-
-```text
-error: target "server": the import policy (./import-policy.json) refuses what this build ships:
-  denied: aws-sdk
-  not in the allow list: left-pad
-```
-
-With `"unlisted": "warn"` the build succeeds and lists what the allow list does
-not name; a denied package still fails it. Build tools whose code does not ship
-— Tailwind, PostCSS, TypeScript, plugins — are not judged, and neither is a
-module a plugin generates.
+A project whose `esdev.json` names `build.importPolicy` has every build judged
+against it: each module read into each bundle, for every target. A strict
+policy refuses an unapproved package, a denied one, or a copy whose version or
+files differ from the approved ones, lists them all, and writes nothing.
+`--inventory=<file>` writes what a build shipped as a draft policy, and
+`build.subresourceIntegrity` adds `integrity` attributes to the tags a release
+HTML build writes. See [Dependency policy](/docs/security/dependency-policy).
 
 ## Source maps
 

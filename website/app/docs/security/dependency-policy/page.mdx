@@ -1,0 +1,160 @@
+---
+title: Dependency policy
+description: Hold what a build ships to the packages your security team approved — by name, version and content — and pin the files a browser loads.
+---
+
+import { Callout } from "@opentf/afw-docs";
+
+# Dependency policy
+
+An application with hundreds of dependencies ships whatever its lockfile
+resolved last. A dependency policy makes that a decision: a security team
+writes down which packages may ship, at which version and with which content,
+and `esdev build` refuses anything else. It is checked where the bundle is
+made, which is the only place every package is visible — once built, a
+bundle's packages are inlined and no runtime can tell them apart.
+
+## Turn it on
+
+The policy is a JSON file in the repository, named by `esdev.json`:
+
+```json
+{
+  "build": {
+    "importPolicy": "./import-policy.json",
+    "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } }
+  }
+}
+```
+
+Every build then judges every module read into each bundle — server and
+browser targets alike, and the builds `esdev start` makes, so a refusal shows
+on a developer's machine before it reaches CI. Nothing on the command line
+turns it off or loosens it.
+
+## Three modes
+
+| Mode | Policy | For |
+| --- | --- | --- |
+| Deny-only | `{ "deny": ["aws-sdk"] }` | Blocking known-bad packages, allowing everything else |
+| Report | `{ "allow": [...], "unlisted": "warn" }` | Rolling a policy out: unlisted packages ship and are listed |
+| Strict | `{ "allow": [...] }` | Approved code only. `"unlisted": "error"` is the default |
+
+A denied package fails the build in every mode, and so does a package that is
+not the approved copy (below). `"@acme/*"` approves every package in a scope,
+so an organisation's own packages are one line.
+
+A refusal lists everything refused at once, and nothing is written — the last
+build that passed is still what is deployed:
+
+```text
+error: target "server": the import policy (./import-policy.json) refuses what this build ships:
+  denied: aws-sdk
+  not the approved copy: zod@3.24.0 (approved: 3.23.8)
+  not in the allow list: left-pad
+```
+
+## Pin the approved copy
+
+An entry can name a version, the hash of the package's installed files, and
+the reason it was approved:
+
+```json
+{
+  "allow": [
+    "./src",
+    "@acme/*",
+    {
+      "package": "zod",
+      "version": "3.23.8",
+      "integrity": "h1:…",
+      "reason": "input validation"
+    }
+  ]
+}
+```
+
+`version` is checked against the installed `package.json`. `integrity` is the
+same `h1:` hash Go's `go.sum` uses, taken over the package's installed
+directory, so a file changed after the review — by a compromised install or a
+patch nobody reviewed — fails the build even though the version still matches. A package installed at two
+versions needs an entry for each copy that ships. A local or linked package
+with no `version` can only be approved by name.
+
+## Write the first policy from a build
+
+Nobody writes three hundred entries by hand. Ask a build for what it shipped:
+
+```sh
+esdev build --inventory=import-policy.draft.json
+```
+
+The draft approves exactly what this build shipped: the project's own
+directories, then every package with its version, its hash and an empty
+`reason`. Review it, fill in the reasons, remove what should not be there, and
+commit it as the policy. From then on a dependency change is a diff in review,
+and one that skipped review fails the build.
+
+The configured policy is still applied while the draft is written, and the
+draft is written even when the policy refuses — that is when it is most
+useful. It is never written over the policy file itself.
+
+A practical rollout: start with `"unlisted": "warn"` so builds keep passing
+while the list is completed, then remove it once the build stops listing
+packages.
+
+## What is not judged
+
+The policy judges code that ships. Tailwind, PostCSS, TypeScript and esdev
+plugins run during the build but none of their code is in the output, so they
+never need approving, and neither does a module a plugin generates. Tests are
+not judged either: a test page is not shipped.
+
+## Pin what the browser loads
+
+A bundle can still be swapped after it is built — on a CDN, a proxy, or a
+misconfigured server. Turn on Subresource Integrity and every `<script>` and
+stylesheet `<link>` a release HTML build writes carries the hash of the file it
+names:
+
+```json
+{ "build": { "subresourceIntegrity": true, "targets": { ... } } }
+```
+
+```html
+<script type="module" src="/assets/page-Ch1Swek_.js" integrity="sha384-…"></script>
+```
+
+The browser refuses a file whose bytes differ. A tag naming another origin is
+left alone, since the build did not write that file and cannot hash it. It is
+off by default because a CDN that rewrites files (minifying, injecting) breaks
+it.
+
+## Payment pages
+
+PCI DSS v4.0 requirement 6.4.3, effective 31 March 2025, asks that every script
+loaded on a payment page be authorized, have its integrity assured, and be in
+an inventory with a written justification. The PCI Security Standards Council's
+guidance names Subresource Integrity and Content Security Policy among the
+integrity controls.
+
+| 6.4.3 asks for | What provides it |
+| --- | --- |
+| Each script authorized | A strict policy: only approved packages ship |
+| Each script's integrity assured | `version` and `integrity` pins at build time; `subresourceIntegrity` in the browser |
+| An inventory with a justification | The committed policy, each entry with its `reason` |
+
+<Callout type="warning" title="Not a compliance certificate">
+  These are controls an assessor can examine, not an attestation. Scope,
+  third-party scripts loaded from other origins, and change monitoring
+  (requirement 11.6.1) remain your assessment's to cover.
+</Callout>
+
+## And at run time
+
+`esrun --import-policy` reads the same file, so a policy means the same thing
+everywhere: it matches entries by name as it always has. Versions and hashes
+are checked only by the build, where packages are chosen; a deployed bundle is
+protected by its image digest and a read-only filesystem. See
+[Import policy](/docs/security/imports) for runtime loading, and the
+[CLI reference](/api/cli#import-policy) for every rule of the file.

@@ -40,7 +40,7 @@ See the [full rules](/api/cli#import-policy).
 
 A built application has its packages inlined, so name the same file in
 `esdev.json` as `build.importPolicy` and `esdev build` holds what it ships to
-it — see [Import policy in builds](/esdev/build#import-policy).
+it — see [Dependency policy](/docs/security/dependency-policy).
 
 <Callout type="note" title="The policy is not a way around --deny-imports">
   Two layers, not two alternatives. The `imports` **capability** decides whether
@@ -48,11 +48,11 @@ it — see [Import policy in builds](/esdev/build#import-policy).
   resolve. Without `--allow-imports`, an `"allow"` entry still loads nothing.
 </Callout>
 
-<Callout type="warning" title="A policy names packages, not content">
-  `"express"` says the loader may resolve that package. It says nothing about
-  which version, or whether the bytes are the ones you audited. Keep your
-  lockfile — it is the install-time half of this, and the policy does not
-  replace it.
+<Callout type="note" title="Versions and content are pinned by the build">
+  At run time `"express"` says the loader may resolve that package, at any
+  version. Pin versions and content where packages are chosen, in the build:
+  see [Dependency policy](/docs/security/dependency-policy). Keep your
+  lockfile too — it is the install-time half of this.
 </Callout>
 
 ## The command is part of the deployment

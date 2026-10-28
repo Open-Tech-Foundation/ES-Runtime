@@ -2320,6 +2320,14 @@ fn every_build_flag_is_applied_or_refused_in_a_project_build() {
             vec!["--sourcemap"],
             Expect::Bundle(|dir| dir.join("dist/app.js.map").is_file()),
         ),
+        (
+            "--inventory",
+            vec!["--inventory=inventory.json"],
+            Expect::Bundle(|dir| {
+                std::fs::read_to_string(dir.join("inventory.json"))
+                    .is_ok_and(|text| text.contains("\"allow\""))
+            }),
+        ),
         ("--out", vec!["--out=other.js"], Expect::Refused),
         ("--lib", vec!["--lib"], Expect::Refused),
         ("--format", vec!["--format=cjs"], Expect::Refused),

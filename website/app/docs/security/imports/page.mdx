@@ -31,33 +31,15 @@ everything not denied; an empty `"allow": []` and unknown keys are errors.
 Paths resolve relative to the policy file, so a committed policy means the same
 thing wherever the process is invoked from.
 
-## Three modes
+## Modes
 
-What a policy does with a package it does not list is written in the file:
+`"unlisted": "warn"` loads what an `allow` list does not name and reports it
+once per package; the default refuses it, and a denied module is refused
+either way. `"@acme/*"` names every package in a scope.
 
-| Mode | Policy | For |
-| --- | --- | --- |
-| Deny-only | `{ "deny": ["aws-sdk"] }` | Blocking known-bad packages, allowing the rest |
-| Report | `{ "allow": [...], "unlisted": "warn" }` | Rolling a policy out: unlisted packages load and are reported |
-| Strict | `{ "allow": [...] }` (`"unlisted": "error"` is the default) | Approved code only, as payment software needs |
-
-A denied package is refused in every mode, and nothing on a command line
-changes the mode. `"@acme/*"` approves every package in a scope.
-
-## In builds
-
-A deployed application is built, and a build inlines its packages, so the
-runtime loader never resolves them. Name the policy in `esdev.json` and every
-build judges what it ships against it:
-
-```json
-{ "build": { "importPolicy": "./import-policy.json", "targets": { ... } } }
-```
-
-Every module read into each bundle is judged, browser and server alike. A
-refusal fails the build and lists every refused package at once; nothing is
-written. Build tools whose code does not ship, such as Tailwind or PostCSS, are
-never judged. See [`esdev build`](/esdev/build#import-policy).
+A built application has its packages inlined, so the runtime never sees them:
+hold a build to the same file with a
+[dependency policy](/docs/security/dependency-policy).
 
 ## What it matches
 
@@ -76,11 +58,10 @@ located merely to learn its path.
   still loads nothing.
 </Callout>
 
-<Callout type="warning" title="Not yet: integrity pinning">
-  A policy names packages and paths, not content. `"express"` says the loader
-  may resolve that package; it does not prove which version or bytes were
-  audited. Versioned entries, package hashes and SRI on emitted scripts are the
-  next phases of DECISIONS D193. Lockfiles remain the install-time counterpart.
+<Callout type="note" title="Versions and hashes are the build's">
+  At run time a policy matches by name. An entry's `version` and `integrity`
+  are checked by `esdev build`, where packages are chosen into a bundle — see
+  [Dependency policy](/docs/security/dependency-policy).
 </Callout>
 
 For the capability that permits importing in the first place, see

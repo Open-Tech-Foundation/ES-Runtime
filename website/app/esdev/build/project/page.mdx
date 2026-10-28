@@ -28,6 +28,10 @@ they apply across build targets or to their own command.
 }
 ```
 
+`build.importPolicy` names the [dependency policy](/docs/security/dependency-policy)
+every build is held to, and `build.subresourceIntegrity: true` adds
+`integrity` attributes to the tags a release HTML build writes.
+
 `dev.app.port` is the app server's fallback port. In a static project,
 `dev.server.port` pins esdev's listener instead. The app owns the browser
 endpoint in full-stack mode; request proxying is not available yet. The old

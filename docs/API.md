@@ -1133,6 +1133,12 @@ esrun --allow-imports --allow-net=db.internal:5432 \
 - **Deny wins over allow.** A module named by both is refused.
 - **A scope entry, `"@acme/*"`, names every package in the scope** (D193). It is
   the only pattern: `*` anywhere else is an error.
+- **An `allow` entry may be an object** (D193):
+  `{ "package": "zod", "version": "3.23.8", "integrity": "h1:…", "reason": "…" }`
+  — `package` required, unknown keys an error, several entries for one package
+  allowed (one per approved copy). At run time it approves the package by name;
+  `esdev build` also checks the installed `version` and Go's `h1:` hash of the
+  installed directory, and a mismatch fails the build in every mode.
 - **`"unlisted"` says what happens to a module `"allow"` does not name**
   (D193): `"error"`, the default, refuses it; `"warn"` loads it and reports it
   once per package — how a policy is rolled out. A denied module is refused in
@@ -1162,18 +1168,18 @@ esrun --allow-imports --allow-net=db.internal:5432 \
   `build.importPolicy`. A refusal fails the build, names every refused package
   at once, and writes nothing. Build tools whose code does not ship (Tailwind,
   PostCSS, plugins) are not judged, and neither is a plugin's generated module.
+  `esdev build --inventory=<file>` writes what shipped as a draft policy, and
+  `build.subresourceIntegrity` adds SRI attributes to a release HTML build.
 
 The two layers do not substitute for each other: the `imports` capability
 decides whether the loader runs at all, the policy decides what it may resolve.
 A policy is therefore **not a way around a missing `imports` grant** — without
 `--allow-imports`, an allow entry still loads nothing.
 
-> **Not yet: content pinning.** A policy names packages and paths, not content.
-> `"express"` says the loader may resolve that package; it says nothing about
-> *which* version, or whether the bytes are the ones you audited. Versioned
-> entries and package hashes, an inventory command, SRI on emitted scripts and
-> integrity for build output are the next phases of D193. Lockfiles remain the
-> install-time counterpart.
+> **Content is pinned at build time.** At run time a policy matches by name;
+> the `version` and `integrity` of an entry are checked by `esdev build`, where
+> packages are chosen into a bundle (D193). Lockfiles remain the install-time
+> counterpart.
 
 **The parser is strict, and its grammar is two rules for every flag** — not just
 the permission ones:

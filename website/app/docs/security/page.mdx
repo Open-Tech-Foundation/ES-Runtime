@@ -65,6 +65,7 @@ The security boundary is in the native host, not in JavaScript:
 | **Deny-by-default capabilities** | `esrun` reaches no host-facing operation until the launch command grants it. |
 | **Filesystem root jail** | File and module paths are canonicalized and confined to the working directory. |
 | **Explicit import policy** | `--import-policy` separately controls which packages and paths may become running code. |
+| **Dependency policy for builds** | `esdev build` holds what it ships to an approved list — by name, version and `h1:` content hash — and can pin browser-loaded files with SRI. See [Dependency policy](/docs/security/dependency-policy). |
 | **Resource limits** | Heap, execution time, stack depth, pending host work, and worker memory are bounded or terminated. |
 | **Agent isolation** | Workers have separate isolates and attenuated permissions; handles belong to their creating agent. |
 | **No remote modules** | Network URLs cannot silently become executable modules. |

@@ -166,20 +166,25 @@ fn check(path: &Path, graph: &Graph, root: &Path) -> Result<Vec<String>, String>
 /// hash of its files where that entry gives one. The hash is taken once, and
 /// only if an entry asks for it.
 fn mismatch(policy: &ImportPolicy, name: &str, dir: &Path) -> Result<Option<String>, String> {
+    // A local or linked package may have no version; its `h1:` names files
+    // under `name@version/`, so without one it cannot match a hash either.
     let version = installed_version(dir)?;
+    let shown = match &version {
+        Some(version) => format!("{name}@{version}"),
+        None => format!("{name} (no version)"),
+    };
     let mut hash: Option<String> = None;
     let mut version_matched = false;
     for pin in policy.pins(name) {
-        if pin
-            .version
-            .as_ref()
-            .is_some_and(|wanted| *wanted != version)
-        {
+        if pin.version.is_some() && pin.version != version {
             continue;
         }
         version_matched = true;
         let Some(wanted) = &pin.integrity else {
             return Ok(None);
+        };
+        let Some(version) = &version else {
+            continue;
         };
         if hash.is_none() {
             hash = Some(h1(dir, &format!("{name}@{version}"))?);
@@ -189,28 +194,28 @@ fn mismatch(policy: &ImportPolicy, name: &str, dir: &Path) -> Result<Option<Stri
         }
     }
     Ok(Some(if version_matched {
-        format!("{name}@{version} (its files do not match the approved integrity)")
+        format!("{shown} (its files do not match the approved integrity)")
     } else {
         let approved: Vec<&str> = policy
             .pins(name)
             .into_iter()
             .filter_map(|pin| pin.version.as_deref())
             .collect();
-        format!("{name}@{version} (approved: {})", approved.join(", "))
+        format!("{shown} (approved: {})", approved.join(", "))
     }))
 }
 
-/// The `version` in the installed package's `package.json`.
-fn installed_version(dir: &Path) -> Result<String, String> {
+/// The `version` in the installed package's `package.json`, if it has one.
+fn installed_version(dir: &Path) -> Result<Option<String>, String> {
     let manifest = dir.join("package.json");
     let text = std::fs::read_to_string(&manifest)
         .map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
     let json: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| format!("{} is not JSON: {e}", manifest.display()))?;
-    json.get("version")
+    Ok(json
+        .get("version")
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| format!("{} has no \"version\"", manifest.display()))
+        .map(str::to_string))
 }
 
 /// The installed package directory a module belongs to: `…/node_modules/pkg`
@@ -387,15 +392,20 @@ pub fn write_inventory() -> Result<(), String> {
         .collect();
     let mut entries = Vec::new();
     for (dir, name) in &inventory.packages {
-        let version = installed_version(dir)?;
-        let integrity = h1(dir, &format!("{name}@{version}"))?;
-        entries.push((name.clone(), version, integrity));
+        // Without a version there is nothing to pin, so such a package — a
+        // local or linked one — is approved by name.
+        let entry = match installed_version(dir)? {
+            Some(version) => {
+                let integrity = h1(dir, &format!("{name}@{version}"))?;
+                serde_json::json!({ "package": name, "version": version, "integrity": integrity, "reason": "" })
+            }
+            None => serde_json::json!({ "package": name, "reason": "" }),
+        };
+        entries.push((name.clone(), entry.to_string(), entry));
     }
-    entries.sort();
-    entries.dedup();
-    allow.extend(entries.into_iter().map(|(package, version, integrity)| {
-        serde_json::json!({ "package": package, "version": version, "integrity": integrity, "reason": "" })
-    }));
+    entries.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    entries.dedup_by(|a, b| a.1 == b.1);
+    allow.extend(entries.into_iter().map(|(_, _, entry)| entry));
     let policy = serde_json::json!({ "allow": allow, "unlisted": "error" });
     let text = serde_json::to_string_pretty(&policy).map_err(|e| e.to_string())? + "\n";
     std::fs::write(&inventory.file, text)

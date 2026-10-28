@@ -284,6 +284,11 @@ pattern. `"unlisted"` says what happens to a module `"allow"` does not name:
 `"error"` (the default) refuses it, `"warn"` loads it and reports it once per
 package. A denied module is refused in every mode.
 
+An `allow` entry may be an object — `{ "package": "zod", "version": "3.23.8",
+"integrity": "h1:…", "reason": "…" }`, `package` required, unknown keys an
+error, one entry per approved copy. At run time it approves the package by
+name; `esdev build` also checks the installed version and hash.
+
 Paths resolve relative to the **policy file**, not the working directory — a
 policy is committed next to the project it governs and means the same thing
 wherever the run is invoked from. Matching runs on the resolved, canonicalized
@@ -299,14 +304,11 @@ read before a loader exists, and you named it.
   `--allow-imports`, an allow entry still loads nothing.
 </Callout>
 
-<Callout type="warning" title="A policy names packages, not content">
-  `"express"` says the loader may resolve that package. It says nothing about
-  which version, or whether the bytes are the ones you audited. Lockfiles remain
-  the install-time counterpart; content pinning is the next phase of D193.
+<Callout type="note" title="Content is pinned at build time">
+  At run time `"express"` says the loader may resolve that package, at any
+  version. Versions and hashes are checked by `esdev build`, where packages are
+  chosen into a bundle — see [Dependency policy](/docs/security/dependency-policy).
 </Callout>
-
-`esdev build` applies the same file to what a build ships — see
-[Import policy in builds](/esdev/build#import-policy).
 
 ### Strict by design
 

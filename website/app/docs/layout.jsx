@@ -209,6 +209,7 @@ const NAV = [
           { title: "Overview", path: "/docs/security" },
           { title: "Permissions & capabilities", path: "/docs/security/permissions" },
           { title: "Import policy", path: "/docs/security/imports" },
+          { title: "Dependency policy", path: "/docs/security/dependency-policy" },
           { title: "Processes and workers", path: "/docs/security/processes" },
           { title: "Network security", path: "/docs/security/networking" },
           { title: "Filesystem and secrets", path: "/docs/security/filesystem" },
