@@ -124,23 +124,28 @@ impl Process for SystemProcess {
         }
         let mut map: BTreeMap<String, String> = std::env::vars().collect();
         for (k, v) in overlay {
-            if self.env_override {
-                map.insert(k.to_string(), v.to_string());
-            } else {
-                map.entry(k.to_string()).or_insert_with(|| v.to_string());
+            match os_name(&map, k) {
+                Some(name) if self.env_override => {
+                    map.insert(name, v.to_string());
+                }
+                Some(_) => {}
+                None => {
+                    map.insert(k.to_string(), v.to_string());
+                }
             }
         }
         // An empty value counts as unset (D192): container templates write
         // `RUNTIME_ENV=` as often as they leave it out.
         for (k, v) in &self.env_defaults {
-            if map.get(k).is_none_or(String::is_empty) {
-                map.insert(k.clone(), v.clone());
+            let name = os_name(&map, k).unwrap_or_else(|| k.clone());
+            if map.get(&name).is_none_or(String::is_empty) {
+                map.insert(name, v.clone());
             }
         }
         // Last, so neither the OS environment nor an --env-file overlay can
         // reintroduce a name the allowlist leaves out.
         if let Some(allow) = &self.env_allow {
-            map.retain(|name, _| allow.contains(name));
+            map.retain(|name, _| allow.iter().any(|a| same_name(a, name)));
         }
         map.into_iter().collect()
     }
@@ -246,6 +251,30 @@ impl Process for SystemProcess {
     }
 }
 
+/// Whether two environment variable names are the same variable: exactly on
+/// Unix, ignoring ASCII case on Windows, where the OS spells `PATH` as `Path`
+/// and treats both as one.
+fn same_name(a: &str, b: &str) -> bool {
+    same_name_on(a, b, cfg!(windows))
+}
+
+fn same_name_on(a: &str, b: &str, windows: bool) -> bool {
+    if windows {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+/// The spelling `map` already holds for `name`, so an overlay or default
+/// replaces that variable instead of adding a second one beside it.
+fn os_name(map: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    if map.contains_key(name) {
+        return Some(name.to_string());
+    }
+    map.keys().find(|k| same_name(k, name)).cloned()
+}
+
 /// One write, all of it, then flushed. A short write is retried by
 /// `write_all`; anything left is a real failure and is reported as one rather
 /// than silently truncating what the program asked to print.
@@ -310,7 +339,18 @@ mod tests {
         assert_eq!(get(&env, unset), Some("default"));
         assert_eq!(get(&env, overlaid), Some("file"));
         assert_eq!(get(&env, empty), Some("default"));
-        assert_ne!(get(&env, "PATH"), Some("default"));
+        // Windows spells it `Path`; the default must not add a second `PATH`.
+        let path: Vec<_> = env.iter().filter(|(k, _)| same_name(k, "PATH")).collect();
+        assert_eq!(path.len(), 1, "one PATH variable, not two: {path:?}");
+        assert_ne!(path[0].1, "default");
+    }
+
+    #[test]
+    fn env_names_compare_as_the_platform_does() {
+        assert!(same_name_on("PATH", "PATH", false));
+        assert!(!same_name_on("Path", "PATH", false));
+        assert!(same_name_on("Path", "PATH", true));
+        assert!(!same_name_on("PATHS", "PATH", true));
     }
 
     #[test]
