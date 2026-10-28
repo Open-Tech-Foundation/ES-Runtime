@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- The `resolve()` example in `runtime:build` names `@opentf/afw`, the package
+  OTF Web was renamed to.
+
 ## [0.19.0] - 2026-10-27
 
 ### Added

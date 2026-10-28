@@ -117,7 +117,7 @@ Attributes are `Attr` nodes in a `NamedNodeMap`, not a plain string map. `getAtt
 
 `textContent` on an element is a full-subtree walk on read and a replace-all on write. `innerText` and `outerText` are the rendered text, read from the cascade rather than from boxes: `display: none` and `visibility: hidden` text is skipped, a block boundary is a line break (two around a `<p>`), a `<br>` is one, table cells are separated by tabs, white space collapses as the computed `white-space` says and `text-transform` applies. An element that is not rendered — detached, or inside `display: none` — reads its `textContent`, as the specification says. Writing either turns line breaks into `<br>` elements. `CharacterData` has the full editing surface (`appendData`, `insertData`, `deleteData`, `replaceData`, `substringData`), `Text` has `splitText` and `wholeText`, and every edit moves live ranges the way it moved the text.
 
-`cloneNode(true)` is a spec clone: it copies attributes, runs the cloning steps for `<template>` (which clones the content fragment separately), and does not copy event listeners or private framework state. This path matters more than usual here — see the OTF Web section.
+`cloneNode(true)` is a spec clone: it copies attributes, runs the cloning steps for `<template>` (which clones the content fragment separately), and does not copy event listeners or private framework state. This path matters more than usual here — see the AFW section.
 
 `MutationObserver` queues records and delivers them at the microtask checkpoint, which means hooking V8's microtask queue from the JS side via `queueMicrotask` and a delivery flag, not a `setTimeout(0)`. Getting this wrong makes framework effect scheduling behave differently under test than in a browser, which is the exact failure mode a test DOM exists to prevent.
 
@@ -361,7 +361,7 @@ say so rather than letting someone discover it in a failing test.
 
 **Custom elements: in.**
 
-OTF Web describes itself as built on standard Web Components, so `customElements` is in scope: `define`, `get`, `whenDefined`, `upgrade`, plus `connectedCallback`, `disconnectedCallback`, `adoptedCallback`, `attributeChangedCallback` with `observedAttributes`. This is the most invasive item in the spec — the custom element reaction stack threads through every mutation method and the parser has to upgrade elements as it constructs them — so it is built into the mutation algorithms from the start rather than retrofitted.
+AFW describes itself as built on standard Web Components, so `customElements` is in scope: `define`, `get`, `whenDefined`, `upgrade`, plus `connectedCallback`, `disconnectedCallback`, `adoptedCallback`, `attributeChangedCallback` with `observedAttributes`. This is the most invasive item in the spec — the custom element reaction stack threads through every mutation method and the parser has to upgrade elements as it constructs them — so it is built into the mutation algorithms from the start rather than retrofitted.
 
 **Scoped custom element registries: out.** `new CustomElementRegistry()` used
 with `attachShadow({ customElements })` or `createElement(name, {
@@ -371,7 +371,7 @@ specification's per-registry checks require — and upgrades nothing.
 
 **Shadow DOM: out, unless a check says otherwise.**
 
-Scoped CSS Modules and a context API that crosses Portal boundaries both suggest otfw scopes styles by class name rather than by shadow root. If that is right, shadow DOM stays out, and that is a large saving: retargeting rewrites event dispatch, slot assignment rewrites the flattened tree, and selector matching gains a second traversal mode. The check is a grep for `attachShadow` in the otfw runtime and its compiled output. If it appears, this section is wrong and the event and selector designs above need revisiting before implementation, not after.
+Scoped CSS Modules and a context API that crosses Portal boundaries both suggest AFW scopes styles by class name rather than by shadow root. If that is right, shadow DOM stays out, and that is a large saving: retargeting rewrites event dispatch, slot assignment rewrites the flattened tree, and selector matching gains a second traversal mode. The check is a grep for `attachShadow` in the AFW runtime and its compiled output. If it appears, this section is wrong and the event and selector designs above need revisiting before implementation, not after.
 
 ## esdev test integration
 
@@ -393,11 +393,11 @@ The starting document is `<!DOCTYPE html><html><head></head><body></body></html>
 
 The fake clock for `requestAnimationFrame` is shared with whatever timer control the test runner already exposes, so a test that advances timers also advances animation frames. Two independent clocks would be a source of confusing failures.
 
-## OTF Web support
+## AFW support
 
-otfw is the first consumer, and a zero-VDOM compiler stresses a different part of the DOM than a virtual-DOM library does.
+AFW is the first consumer, and a zero-VDOM compiler stresses a different part of the DOM than a virtual-DOM library does.
 
-| otfw feature | What the DOM must get right |
+| AFW feature | What the DOM must get right |
 | --- | --- |
 | JSX compiled to native DOM | `<template>` content fragments, `cloneNode(true)`, `importNode` |
 | List and conditional blocks | Comment nodes as anchors, `insertBefore` against a comment, removal between two anchors |
@@ -410,11 +410,11 @@ otfw is the first consumer, and a zero-VDOM compiler stresses a different part o
 | Scoped CSS Modules, Tailwind | `className` and `classList` only — no computed style needed |
 | SSR and SSG | No DOM at all; these render to strings |
 
-**Establish the real surface before writing code.** otfw already has a testing library and a suite that presumably runs on vitest with jsdom. Wrap jsdom's prototypes in recording proxies, run that suite, and collect every property and method touched with call counts. That produces the actual required surface and settles the `attachShadow` question in one run.
+**Establish the real surface before writing code.** AFW already has a testing library and a suite that presumably runs on vitest with jsdom. Wrap jsdom's prototypes in recording proxies, run that suite, and collect every property and method touched with call counts. That produces the actual required surface and settles the `attachShadow` question in one run.
 
-The recording sets implementation *priority*, not *semantics*. Building only what otfw calls, shaped the way otfw happens to call it, produces a mock that passes today and breaks on the next framework feature. Order from the recording; behaviour from the specs.
+The recording sets implementation *priority*, not *semantics*. Building only what AFW calls, shaped the way AFW happens to call it, produces a mock that passes today and breaks on the next framework feature. Order from the recording; behaviour from the specs.
 
-The acceptance gate for this phase is otfw's existing component test suite passing under `esdev test --dom` with no source changes to otfw itself. If otfw needs edits to run, the DOM is wrong, not otfw.
+The acceptance gate for this phase is AFW's existing component test suite passing under `esdev test --dom` with no source changes to AFW itself. If AFW needs edits to run, the DOM is wrong, not AFW.
 
 ## Conformance
 
@@ -477,7 +477,7 @@ WPT files are run through a small harness that provides `testharness.js` against
 
 Pass rates are recorded per directory and tracked over time, so a refactor that regresses selector matching shows up as a number rather than as a mystery in someone's test suite. Publishing those numbers is a stronger claim than jsdom makes cleanly.
 
-The bar for merging a feature: its WPT directory pass rate does not go down, and the otfw suite still passes.
+The bar for merging a feature: its WPT directory pass rate does not go down, and the AFW suite still passes.
 
 At the time of writing the slice runs 35 of its 72 files — the other 37 are
 skipped with a reason each — and passes 111 subtests. Of the 80 failures, 72 are
@@ -488,7 +488,7 @@ listed under criterion 3 above.
 
 Each step ends with something runnable, and nothing later forces a rewrite of anything earlier.
 
-1. **Record the surface.** Recording proxies over jsdom, otfw suite, call counts out. Settles `attachShadow` and orders everything below.
+1. **Record the surface.** Recording proxies over jsdom, AFW suite, call counts out. Settles `attachShadow` and orders everything below.
 2. **Tree core.** Nodes, sibling pointers, the mutation algorithms, `Attr` and `NamedNodeMap`, document version counter. Gate: WPT `dom/nodes` running, even at a low pass rate.
 3. **Live collections.** `childNodes`, `children`, `getElementsBy*`, index caching. These must come before anything that iterates, or the iteration code gets written against arrays.
 4. **Events.** `EventTarget`, dispatch, the event classes, focus tracking. Gate: WPT `dom/events`.
@@ -500,7 +500,7 @@ Each step ends with something runnable, and nothing later forces a rewrite of an
 10. **Custom elements.** Registry, upgrades, the reaction stack through the mutation algorithms and the parser. Gate: WPT `custom-elements`.
 11. **Window and stubs.** `location`, `history`, storage, rAF on the test clock, the never-firing observers.
 12. **Test runner integration.** `--dom` flag, per-file realm, global installation, starting HTML.
-13. **otfw green.** Run otfw's suite unmodified. Fix the DOM, not otfw.
+13. **AFW green.** Run AFW's suite unmodified. Fix the DOM, not AFW.
 14. **Publish the numbers.** WPT pass rates and the skip list in the `esdev` docs.
 
 Steps 2 through 4 are the foundation everything else assumes; if the reaction stack from step 10 was not anticipated in step 2's mutation algorithms, step 10 becomes a rewrite. That is the one ordering risk in the list, and it is why custom elements are decided in scope now rather than later.

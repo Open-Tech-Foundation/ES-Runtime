@@ -4,11 +4,11 @@
 import { resolve } from "runtime:build";
 
 const root = new URL("./", import.meta.url);
-const fromUrl: string = resolve("@opentf/web", root);
-const fromString: string = resolve("@opentf/web", root.href);
+const fromUrl: string = resolve("@opentf/afw", root);
+const fromString: string = resolve("@opentf/afw", root.href);
 
 // @ts-expect-error — `from` is required: without it there is nothing to resolve from.
-resolve("@opentf/web");
+resolve("@opentf/afw");
 
 export { fromString, fromUrl };
 

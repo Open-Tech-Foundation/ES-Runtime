@@ -460,7 +460,7 @@ declare module "runtime:build" {
    *
    * ```ts
    * const root = new URL("./", `file://${cwd()}/`);
-   * resolve("@opentf/web", root);
+   * resolve("@opentf/afw", root);
    * ```
    */
   export function resolve(specifier: string, from: string | URL): string;
