@@ -10,7 +10,7 @@ function DocsMark() {
       height="22"
       viewBox="0 0 22 22"
       aria-hidden="true"
-      className="afw-footer-badge-mark"
+      className="site-footer-badge-mark"
     >
       <rect
         width="22"
@@ -43,14 +43,14 @@ export default function BuiltWithBadge() {
       href={WEB_DOCS}
       target="_blank"
       rel="noreferrer"
-      className="afw-footer-badge"
+      className="site-footer-badge"
       aria-label="Built with AFW"
     >
       <DocsMark />
-      <span className="afw-footer-badge-copy">
-        <span className="afw-footer-badge-muted">Built with</span>
-        <span className="afw-footer-badge-brand">
-          <span className="afw-footer-badge-accent">AFW</span>
+      <span className="site-footer-badge-copy">
+        <span className="site-footer-badge-muted">Built with</span>
+        <span className="site-footer-badge-brand">
+          <span className="site-footer-badge-accent">AFW</span>
         </span>
       </span>
     </a>

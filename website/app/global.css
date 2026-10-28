@@ -439,18 +439,18 @@ button:not(:disabled),
 }
 
 /* Footer org link (logo + name). */
-.afw-footer {
+.afwd-footer {
   background-color: #09090b;
   border-top: 1px solid #27272a;
   color: #a1a1aa;
 }
-.afw-footer-org {
+.site-footer-org {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
 }
-.afw-footer-org-link {
+.site-footer-org-link {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
@@ -458,26 +458,26 @@ button:not(:disabled),
   text-decoration: none;
   transition: color 0.2s ease;
 }
-.afw-footer-org-link:hover {
+.site-footer-org-link:hover {
   color: #f4f4f5;
 }
-.afw-footer-org-link:focus-visible {
+.site-footer-org-link:focus-visible {
   outline: 2px solid var(--afw-accent);
   outline-offset: 3px;
   border-radius: 0.375rem;
 }
-.afw-footer-org-logo {
+.site-footer-org-logo {
   display: block;
   width: 1.5rem;
   height: 1.5rem;
   flex-shrink: 0;
 }
-.afw-footer-license {
+.site-footer-license {
   color: #71717a;
 }
 
 /* Footer "Built with AFW" badge (right side). */
-.afw-footer-badge {
+.site-footer-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
@@ -493,39 +493,39 @@ button:not(:disabled),
     box-shadow 0.2s ease,
     transform 0.2s ease;
 }
-.afw-footer-badge:hover {
+.site-footer-badge:hover {
   border-color: #d4d4d8;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transform: translateY(-1px);
 }
-.afw-footer-badge:focus-visible {
+.site-footer-badge:focus-visible {
   outline: 2px solid var(--afw-accent);
   outline-offset: 3px;
 }
-.afw-footer-badge-mark {
+.site-footer-badge-mark {
   display: block;
   flex-shrink: 0;
 }
-.afw-footer-badge-copy {
+.site-footer-badge-copy {
   display: flex;
   flex-direction: column;
   gap: 0.05rem;
   line-height: 1.1;
 }
-.afw-footer-badge-muted {
+.site-footer-badge-muted {
   font-size: 0.5625rem;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #52525b;
 }
-.afw-footer-badge-brand {
+.site-footer-badge-brand {
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: #000000;
 }
-.afw-footer-badge-accent {
+.site-footer-badge-accent {
   color: var(--afw-accent, #ff7a00);
 }
 
