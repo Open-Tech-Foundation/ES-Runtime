@@ -2333,7 +2333,7 @@ fn a_sharded_room_hibernates_and_wakes() {
         ben.c.send("ping");
         await until(() => ben.inbox.length === 2);
         ben.c.send("woken?");
-        await until(() => ana.inbox.length === 2);
+        await until(() => ana.inbox.length === 2 && ben.inbox.length === 3);
         console.log(ben.inbox.join(" / "));
         console.log(ana.inbox.join(" / "));
         ana.c.close(); ben.c.close();

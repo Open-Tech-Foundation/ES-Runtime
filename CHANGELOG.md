@@ -79,6 +79,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - `scripts/fs-discipline.sh` lists the DNS resolver's read of
   `/etc/resolv.conf` and the MongoDB specification tests' reads, which had
   left the check failing.
+- The sharded hibernating-room test waits for both clients to receive the
+  last broadcast before printing, where it waited for one and failed when the
+  other's copy was still in flight.
 
 ## [0.44.0] - 2026-10-27
 
