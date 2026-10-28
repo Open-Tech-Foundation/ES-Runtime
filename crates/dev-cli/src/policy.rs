@@ -431,7 +431,10 @@ fn shown_path(path: &Path, root: &Path) -> String {
     let root = es_runtime_default_providers::path::canonicalize(root)
         .unwrap_or_else(|_| root.to_path_buf());
     match path.strip_prefix(&root) {
-        Ok(relative) => format!("./{}", relative.to_string_lossy().replace('\\', "/")),
+        Ok(relative) => format!(
+            "./{}",
+            es_runtime_default_providers::path::to_slash(relative)
+        ),
         Err(_) => path.display().to_string(),
     }
 }
@@ -490,7 +493,8 @@ mod tests {
 
     #[test]
     fn a_package_dir_is_after_the_last_node_modules() {
-        let p = |s: &str| package_dir(Path::new(s)).map(|d| d.to_string_lossy().replace('\\', "/"));
+        let p =
+            |s: &str| package_dir(Path::new(s)).map(es_runtime_default_providers::path::to_slash);
         assert_eq!(
             p("/p/node_modules/zod/lib/a.js").as_deref(),
             Some("/p/node_modules/zod")
