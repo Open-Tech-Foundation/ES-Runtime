@@ -60,6 +60,9 @@ pub struct Project {
     /// The import policy file every build applies to what it ships
     /// (`build.importPolicy`, D193).
     pub import_policy: Option<PathBuf>,
+    /// Whether a release HTML build writes `integrity` attributes
+    /// (`build.subresourceIntegrity`, D193).
+    pub subresource_integrity: bool,
     /// The build targets, in name order.
     ///
     /// Sorted rather than left in the order they were written, because a JSON
@@ -421,7 +424,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// the day somebody runs the other command.
 const NORMALIZED_DEV_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
 
-const BUILD_KEYS: &[&str] = &["targets", "importPolicy"];
+const BUILD_KEYS: &[&str] = &["targets", "importPolicy", "subresourceIntegrity"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
 const DEV_KEYS: &[&str] = &["run", "watch", "serve", "app", "server", "outDir"];
 const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
@@ -661,8 +664,20 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
             ));
         }
     };
+    // SRI on the tags a release HTML build writes (D193). Opt-in: a CDN that
+    // rewrites files breaks it.
+    let subresource_integrity = match build.and_then(|build| build.get("subresourceIntegrity")) {
+        None => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => {
+            return Err(format!(
+                "{name}: `build.subresourceIntegrity` is true or false"
+            ));
+        }
+    };
     Ok(Some(Project {
         import_policy,
+        subresource_integrity,
         dir,
         targets,
         start,

@@ -1380,10 +1380,10 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
             .and_then(|output| {
                 crate::print_warnings!(output);
                 let files = crate::adapter::produced(&output.assets);
-                if let Some(policy) = &config.import_policy {
-                    for warning in crate::policy::check(policy, &graph, &cwd)? {
-                        crate::bundler::warn(warning);
-                    }
+                for warning in
+                    crate::policy::judge_bundle(config.import_policy.as_deref(), &graph, &cwd)?
+                {
+                    crate::bundler::warn(warning);
                 }
                 let files = remove_stylesheet_stubs(files, &stubs, &cwd.join(&out_dir));
                 produced.extend(files);
@@ -1707,10 +1707,8 @@ pub async fn bundle_browser_entries(
         crate::print_warnings!(output);
         (styles.take(), assets, produced, graph)
     };
-    if let Some(policy) = import_policy {
-        for warning in crate::policy::check(policy, &graph, root)? {
-            crate::bundler::warn(warning);
-        }
+    for warning in crate::policy::judge_bundle(import_policy, &graph, root)? {
+        crate::bundler::warn(warning);
     }
     // Into the same directory the bundle and its chunks go: a document's build
     // writes everything hashed under one `assets/`, and an imported file is one
@@ -2529,6 +2527,7 @@ async fn build_targets(
                 settings.source.jsx.clone(),
                 settings.source.tsconfig.clone(),
                 settings.source.import_policy.as_deref(),
+                settings.source.subresource_integrity,
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;

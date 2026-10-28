@@ -20570,3 +20570,141 @@ fn a_pinned_package_must_be_the_approved_version_and_files_in_every_mode() {
         "{err}"
     );
 }
+
+#[test]
+fn an_inventory_is_a_policy_that_approves_exactly_what_shipped() {
+    let dir = policy_project("policy_inventory", r#"{ "allow": ["./src"] }"#);
+    // The draft is written even though this policy refuses the build.
+    let out = esdev_in(&dir)
+        .args(["build", "--target=server", "--inventory=draft.json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let draft: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("draft.json")).unwrap()).unwrap();
+    assert_eq!(draft["unlisted"], "error");
+    let allow = draft["allow"].as_array().unwrap();
+    assert_eq!(allow[0], "./src");
+    let packages: Vec<&str> = allow[1..]
+        .iter()
+        .map(|e| e["package"].as_str().unwrap())
+        .collect();
+    assert_eq!(packages, ["@acme/ui", "aws-sdk", "left-pad"]);
+    for entry in &allow[1..] {
+        assert_eq!(entry["version"], "1.0.0");
+        assert!(
+            entry["integrity"].as_str().unwrap().starts_with("h1:"),
+            "{entry}"
+        );
+        assert_eq!(entry["reason"], "");
+    }
+
+    // Approved as it stands, it builds.
+    std::fs::copy(dir.join("draft.json"), dir.join("import-policy.json")).unwrap();
+    let out = build_in(&dir, "server");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // One byte of a package changed after the review is not the approved copy.
+    std::fs::write(
+        dir.join("node_modules/left-pad/index.js"),
+        "export default (s) => s;",
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("left-pad@1.0.0 (its files do not match the approved integrity)"),
+        "{err}"
+    );
+
+    // The reviewed file is never the draft's destination.
+    let out = esdev_in(&dir)
+        .args(["build", "--inventory=import-policy.json"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("is the import policy this project names"),
+        "{err}"
+    );
+}
+
+#[test]
+fn subresource_integrity_pins_every_script_and_stylesheet_a_release_html_build_writes() {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha384};
+
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sri_build");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/page.js"), "document.title = 'hi';\n").unwrap();
+    std::fs::write(dir.join("styles.css"), "body { color: red }\n").unwrap();
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><html><head><link rel=\"stylesheet\" href=\"./styles.css\">\
+         <script type=\"module\" src=\"./src/page.js\"></script>\
+         <script src=\"https://cdn.example.com/x.js\"></script></head><body></body></html>\n",
+    )
+    .unwrap();
+    let config = |sri: &str| {
+        std::fs::write(
+            dir.join("esdev.json"),
+            format!(
+                r#"{{"build":{{{sri}"targets":{{"web":{{"entry":"index.html","outdir":"dist"}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+    };
+
+    config(r#""subresourceIntegrity":true,"#);
+    let out = build_in(&dir, "web");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = std::fs::read_to_string(dir.join("dist/index.html")).unwrap();
+    let mut pinned = 0;
+    for (attr, rest) in html
+        .split(" integrity=\"")
+        .skip(1)
+        .zip(html.split(" integrity=\""))
+    {
+        let digest = attr.split('"').next().unwrap();
+        // The URL is the attribute just before this one.
+        let url = rest.rsplit("=\"/").next().unwrap().trim_end_matches('"');
+        let bytes = std::fs::read(dir.join("dist").join(url)).unwrap();
+        let want = base64::engine::general_purpose::STANDARD.encode(Sha384::digest(&bytes));
+        assert_eq!(digest, format!("sha384-{want}"), "{url}");
+        pinned += 1;
+    }
+    assert_eq!(pinned, 2, "the script and the stylesheet: {html}");
+    assert!(
+        html.contains("<script src=\"https://cdn.example.com/x.js\"></script>"),
+        "another origin is not ours to hash: {html}"
+    );
+
+    // Off unless asked for.
+    config("");
+    let out = build_in(&dir, "web");
+    assert!(out.status.success());
+    assert!(
+        !std::fs::read_to_string(dir.join("dist/index.html"))
+            .unwrap()
+            .contains("integrity=")
+    );
+
+    config(r#""subresourceIntegrity":"yes","#);
+    let out = build_in(&dir, "web");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("`build.subresourceIntegrity` is true or false")
+    );
+}

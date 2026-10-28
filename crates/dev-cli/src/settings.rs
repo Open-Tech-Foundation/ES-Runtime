@@ -61,6 +61,8 @@ pub struct Source {
     pub tsconfig: Option<PathBuf>,
     /// The import policy each build applies to what it ships (D193).
     pub import_policy: Option<PathBuf>,
+    /// Whether a release HTML build writes `integrity` attributes (D193).
+    pub subresource_integrity: bool,
 }
 
 /// A root `jsconfig.json` with no `tsconfig.json` beside it: what TypeScript's
@@ -112,6 +114,7 @@ impl Settings {
             source: Source {
                 tsconfig: jsconfig(&project.dir),
                 import_policy: project.import_policy,
+                subresource_integrity: project.subresource_integrity,
                 root: project.dir.clone(),
                 jsx: project.jsx,
                 alias: project.alias,

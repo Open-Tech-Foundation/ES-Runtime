@@ -72,10 +72,25 @@ impl Plugin for Recorder {
     }
 }
 
+/// What a bundle read, recorded for `--inventory` when it was asked for, and
+/// judged against `policy` when the project names one. `Ok` carries the
+/// warnings to print when the policy reports rather than refuses.
+pub fn judge_bundle(
+    policy: Option<&Path>,
+    graph: &Graph,
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    record_inventory(graph, root)?;
+    match policy {
+        Some(path) => check(path, graph, root),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// The policy at `path`, applied to what `graph` read into a bundle. `Ok`
 /// carries the warnings to print when the policy reports rather than refuses
 /// (`"unlisted": "warn"`); a refusal names every module refused, at once.
-pub fn check(path: &Path, graph: &Graph, root: &Path) -> Result<Vec<String>, String> {
+fn check(path: &Path, graph: &Graph, root: &Path) -> Result<Vec<String>, String> {
     let shown = shown_path(path, root);
     let policy = ImportPolicy::from_file(path)?;
     let mut denied = BTreeSet::new();
@@ -276,6 +291,123 @@ fn collect_files(
             out.push((format!("{prefix}/{name}"), path));
         }
     }
+    Ok(())
+}
+
+// ---- --inventory ------------------------------------------------------------
+
+/// What `esdev build --inventory=<file>` collects across every bundle of the
+/// build: the project's own top-level directories, and each installed copy of
+/// a package, by its directory.
+struct Inventory {
+    file: PathBuf,
+    paths: BTreeSet<String>,
+    packages: BTreeMap<PathBuf, String>,
+}
+
+static INVENTORY: Mutex<Option<Inventory>> = Mutex::new(None);
+
+/// Asks this build for an inventory written to `file`. Refused when `file` is
+/// the policy the project names: the draft is for a review, and writing it
+/// over the reviewed file would make the build approve whatever it found.
+pub fn start_inventory(file: &str, config: Option<&str>) -> Result<(), String> {
+    let file = std::env::current_dir()
+        .map_err(|e| format!("cannot read working directory: {e}"))?
+        .join(file);
+    let settings = crate::settings::Settings::load(config)?;
+    if let Some(policy) = &settings.source.import_policy {
+        let same = |a: &Path, b: &Path| {
+            es_runtime_default_providers::path::canonicalize(a).ok()
+                == es_runtime_default_providers::path::canonicalize(b).ok()
+                && a.exists()
+        };
+        if same(&file, policy) {
+            return Err(format!(
+                "--inventory={} is the import policy this project names: the inventory \
+                 is a draft to review, so write it elsewhere and copy what you approve",
+                file.display()
+            ));
+        }
+    }
+    if let Ok(mut held) = INVENTORY.lock() {
+        *held = Some(Inventory {
+            file,
+            paths: BTreeSet::new(),
+            packages: BTreeMap::new(),
+        });
+    }
+    Ok(())
+}
+
+fn record_inventory(graph: &Graph, root: &Path) -> Result<(), String> {
+    let Ok(mut held) = INVENTORY.lock() else {
+        return Ok(());
+    };
+    let Some(inventory) = held.as_mut() else {
+        return Ok(());
+    };
+    let canonical_root = es_runtime_default_providers::path::canonicalize(root)
+        .unwrap_or_else(|_| root.to_path_buf());
+    for id in &graph.ids() {
+        let file = Path::new(id.split('?').next().unwrap_or(id));
+        let Ok(real) = es_runtime_default_providers::path::canonicalize(file) else {
+            continue;
+        };
+        match (package_of(&real), package_dir(&real)) {
+            (Some(name), Some(dir)) => {
+                inventory.packages.insert(dir, name);
+            }
+            _ => {
+                // The project's own file, by the top-level entry it is under:
+                // `./src`, or the file itself at the root.
+                if let Ok(relative) = real.strip_prefix(&canonical_root)
+                    && let Some(first) = relative.components().next()
+                {
+                    inventory
+                        .paths
+                        .insert(format!("./{}", first.as_os_str().to_string_lossy()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Writes the inventory, if one was asked for: an import policy approving
+/// exactly what the build shipped, each package at its installed version and
+/// hash with an empty `reason` for the review to fill in.
+pub fn write_inventory() -> Result<(), String> {
+    let Some(inventory) = INVENTORY.lock().ok().and_then(|mut held| held.take()) else {
+        return Ok(());
+    };
+    let mut allow: Vec<serde_json::Value> = inventory
+        .paths
+        .iter()
+        .map(|path| serde_json::Value::String(path.clone()))
+        .collect();
+    let mut entries = Vec::new();
+    for (dir, name) in &inventory.packages {
+        let version = installed_version(dir)?;
+        let integrity = h1(dir, &format!("{name}@{version}"))?;
+        entries.push((name.clone(), version, integrity));
+    }
+    entries.sort();
+    entries.dedup();
+    allow.extend(entries.into_iter().map(|(package, version, integrity)| {
+        serde_json::json!({ "package": package, "version": version, "integrity": integrity, "reason": "" })
+    }));
+    let policy = serde_json::json!({ "allow": allow, "unlisted": "error" });
+    let text = serde_json::to_string_pretty(&policy).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&inventory.file, text)
+        .map_err(|e| format!("cannot write {}: {e}", inventory.file.display()))?;
+    let paint = crate::style::Palette::stdout();
+    println!(
+        "{} {} {} {}",
+        paint.green("inventory"),
+        paint.dim("→"),
+        paint.cyan(inventory.file.display()),
+        paint.dim("(review it, fill in each \"reason\", and name it as build.importPolicy)")
+    );
     Ok(())
 }
 

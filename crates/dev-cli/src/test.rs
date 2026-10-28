@@ -1346,6 +1346,7 @@ mod tests {
             source: crate::settings::Source {
                 root: PathBuf::from("/p"),
                 import_policy: Some(PathBuf::from("/p/import-policy.json")),
+                subresource_integrity: true,
                 jsx: crate::transform::JsxSettings {
                     function: Some(crate::transform::JsxFunction::InScope {
                         factory: "h".to_string(),

@@ -522,6 +522,8 @@ OPTIONS:
                                 process.env.NODE_ENV defaults to \"production\"
                                 for an application, and to nothing for --lib
     --conditions=<list>         Extra `exports` conditions, comma-separated
+    --inventory=<file>          Write what the build shipped as a draft import
+                                policy: each package's version and h1: hash
     --lib                       Build a library: keep the module structure,
                                 leave dependencies external, emit .d.ts
     --format=<list>             --lib only: the module systems to write.
@@ -885,6 +887,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     let mut sourcemap: Option<String> = None;
     let mut config_path: Option<String> = None;
     let mut target: Option<String> = None;
+    let mut inventory: Option<String> = None;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -895,6 +898,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
             "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--target" => target = Some(require_value(flag, value)?.to_string()),
+            "--inventory" => inventory = Some(require_value(flag, value)?.to_string()),
             "--out" => out = Some(require_value(flag, value)?.to_string()),
             "--lib" => {
                 reject_value(flag, value)?;
@@ -1006,6 +1010,9 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
             path => sources.push(path.to_string()),
         }
+    }
+    if let Some(path) = &inventory {
+        policy::start_inventory(path, config_path.as_deref())?;
     }
     // A project build and a command-line build are the same build with its
     // settings in different places, so asking for both is ambiguous rather than
@@ -3153,7 +3160,15 @@ async fn run() -> ExitCode {
         }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(*config).await,
-        Ok(Command::Build(request)) => build::run(request).await,
+        Ok(Command::Build(request)) => {
+            // Written even when the build failed: a policy that refuses what
+            // shipped is when the draft is most wanted (D193).
+            let built = build::run(request).await;
+            match (built, policy::write_inventory()) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(e), _) | (Ok(()), Err(e)) => Err(e),
+            }
+        }
         Ok(Command::Start(config)) => start::start(*config).await,
         Ok(Command::Preview(config)) => preview::run(config).await,
         Ok(Command::Typecheck(args)) => match std::env::current_dir() {

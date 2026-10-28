@@ -38,6 +38,15 @@ is the point, since none of the three has any business in a deployment.
   `esdev build` checks each shipped copy's installed version and, where
   `integrity` is given, Go's `h1:` hash of its installed files; a mismatch
   fails the build in every mode (D193).
+- `esdev build --inventory=<file>` writes what the build shipped as a draft
+  import policy — each package's version and `h1:` hash, an empty `reason`,
+  and the project's own directories — for a security team to review and
+  commit. The configured policy is still applied, and the draft is written
+  even when it refuses; the reviewed file itself is never overwritten.
+- `build.subresourceIntegrity` adds `integrity="sha384-…"` to every
+  `<script>` and stylesheet, `preload` or `modulepreload` `<link>` a release
+  HTML build writes, so a browser refuses a file that changed after the build.
+  Off by default, as a CDN that rewrites files breaks it.
 
 ### Changed
 

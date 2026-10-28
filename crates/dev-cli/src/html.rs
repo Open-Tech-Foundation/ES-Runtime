@@ -237,6 +237,68 @@ fn discover(html: &str) -> Vec<Reference> {
     found
 }
 
+/// `html` with `integrity="sha384-…"` on every `<script src>` and every
+/// stylesheet, `preload` or `modulepreload` `<link href>` that names a file
+/// this build wrote under `out_dir` (D193): a browser refuses the file if its
+/// bytes are not the ones built. A tag that already carries `integrity` is
+/// left as its author wrote it, and so is one naming another origin, which the
+/// build did not write and cannot hash.
+pub fn with_integrity(html: &str, out_dir: &Path) -> Result<String, String> {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha384};
+
+    let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
+    emitter.naively_switch_states(true);
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    for token in Tokenizer::new_with_emitter(html, emitter).flatten() {
+        let Token::StartTag(tag) = token else {
+            continue;
+        };
+        let attribute: &[u8] = match tag.name.as_slice() {
+            b"script" => b"src",
+            b"link" => {
+                let rel = tag
+                    .attributes
+                    .get(b"rel".as_slice())
+                    .map(|rel| String::from_utf8_lossy(&rel.value).to_ascii_lowercase())
+                    .unwrap_or_default();
+                if !rel
+                    .split_ascii_whitespace()
+                    .any(|rel| matches!(rel, "stylesheet" | "preload" | "modulepreload"))
+                {
+                    continue;
+                }
+                b"href"
+            }
+            _ => continue,
+        };
+        if tag.attributes.contains_key(b"integrity".as_slice()) {
+            continue;
+        }
+        let Some(value) = tag.attributes.get(attribute) else {
+            continue;
+        };
+        let url = String::from_utf8_lossy(&value.value).into_owned();
+        let path = url.split(['?', '#']).next().unwrap_or(&url);
+        if path.starts_with("//") || path.contains(':') || path.is_empty() {
+            continue;
+        }
+        let file = out_dir.join(path.trim_start_matches('/'));
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        let digest = base64::engine::general_purpose::STANDARD.encode(Sha384::digest(&bytes));
+        let end = trim_terminator(html, value.span.start..value.span.end);
+        inserts.push((end, format!(" integrity=\"sha384-{digest}\"")));
+    }
+    let mut document = html.to_string();
+    inserts.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    for (at, text) in inserts {
+        document.insert_str(at, &text);
+    }
+    Ok(document)
+}
+
 /// The end of an attribute, given a span that may run one character past it.
 fn trim_terminator(html: &str, span: Range<usize>) -> usize {
     let text = &html[span.clone()];
@@ -664,6 +726,7 @@ pub async fn build(
     jsx_settings: crate::transform::JsxSettings,
     tsconfig: Option<std::path::PathBuf>,
     import_policy: Option<&Path>,
+    subresource_integrity: bool,
 ) -> Result<(String, Vec<crate::contract::Output>), String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -963,6 +1026,12 @@ pub async fn build(
         })
         .collect();
     let mut document = through_html_hooks(plugins, document, &id, Some(&listing), &ctx).await?;
+    // Last of all, on the document as it will be served, so a tag a plugin
+    // wrote is covered too. A release build only: the dev loop rewrites files
+    // under a page that has already loaded them.
+    if subresource_integrity && dev.is_none() {
+        document = with_integrity(&document, out_dir)?;
+    }
 
     if let Some(dev) = dev {
         // Into the *output*, never the source. The file the developer edits is
@@ -1477,5 +1546,52 @@ mod tests {
             hashed_name(Path::new("/p/styles.css"), b"body{color:red}")
         );
         assert_eq!(name, hashed_name(Path::new("/p/styles.css"), b"body{}"));
+    }
+
+    #[test]
+    fn integrity_goes_on_what_the_build_wrote_and_nowhere_else() {
+        let out = std::env::temp_dir().join(format!("esdev-sri-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(out.join("assets")).unwrap();
+        std::fs::write(out.join("assets/a.js"), "a").unwrap();
+        std::fs::write(out.join("assets/c.js"), "c").unwrap();
+        std::fs::write(out.join("icon.png"), "png").unwrap();
+        // sha384("a"), standard base64, as `openssl dgst -sha384 -binary | base64` gives it.
+        let a = "sha384-VKWbnyKwuAiA2EJ+VIt8I6vYc0huHwNdzpzWl+hRdQM8qojm1XvDXvrgta/TFF8x";
+        let html = concat!(
+            r#"<script type="module" src="/assets/a.js"></script>"#,
+            r#"<link rel="modulepreload" href="./assets/c.js">"#,
+            r#"<script src="/assets/a.js" integrity="sha384-mine"></script>"#,
+            r#"<link rel="icon" href="/icon.png">"#,
+            r#"<script src="/assets/missing.js"></script>"#,
+            r#"<script>var s = '<script src="/assets/a.js">';</script>"#,
+        );
+        let written = with_integrity(html, &out).unwrap();
+        assert!(
+            written.contains(&format!(r#"src="/assets/a.js" integrity="{a}"></script>"#)),
+            "{written}"
+        );
+        assert!(
+            written
+                .contains(r#"<link rel="modulepreload" href="./assets/c.js" integrity="sha384-"#),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#"integrity="sha384-mine""#),
+            "an author's own is kept: {written}"
+        );
+        assert!(
+            written.contains(r#"<link rel="icon" href="/icon.png">"#),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#"<script src="/assets/missing.js"></script>"#),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#"var s = '<script src="/assets/a.js">';"#),
+            "a string is not a tag: {written}"
+        );
+        assert_eq!(written.matches("integrity=").count(), 3, "{written}");
     }
 }
