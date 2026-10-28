@@ -70,6 +70,10 @@ struct Fixture {
     /// esdev's output, kept outside the project so writing it does not count
     /// as a change to the project being watched.
     log: PathBuf,
+    /// The browser's profile, outside the project for the same reason: the
+    /// browser writes to it as it runs, and each write inside the project
+    /// was a rebuild and a reload the test did not make.
+    profile: PathBuf,
     esdev: Option<Child>,
     browser: Option<Child>,
     port: u16,
@@ -92,6 +96,7 @@ impl Drop for Fixture {
         }
         let _ = std::fs::remove_dir_all(&self.dir);
         let _ = std::fs::remove_file(&self.log);
+        let _ = std::fs::remove_dir_all(&self.profile);
     }
 }
 
@@ -174,7 +179,9 @@ impl Fixture {
             .spawn()
             .expect("spawn esdev start");
 
-        let profile = dir.join("browser-profile");
+        let profile =
+            std::env::temp_dir().join(format!("esdev-hot-{name}-{}-profile", std::process::id()));
+        let _ = std::fs::remove_dir_all(&profile);
         let debug_port = port + 1;
         let browser = Command::new(browser)
             .args([
@@ -193,6 +200,7 @@ impl Fixture {
         Some(Fixture {
             dir,
             log,
+            profile,
             esdev: Some(esdev),
             browser: Some(browser),
             port,
@@ -222,14 +230,11 @@ impl Page {
     /// Opens the page and waits for it to have run its bundle.
     async fn open(fixture: &Fixture) -> Page {
         let debug_port = fixture.port + 1;
-        let target = http_json(debug_port, "/json/list").await;
-        let url = target
-            .split("\"webSocketDebuggerUrl\": \"")
-            .nth(1)
-            .or_else(|| target.split("\"webSocketDebuggerUrl\":\"").nth(1))
-            .and_then(|rest| rest.split('"').next())
-            .unwrap_or_else(|| panic!("no debuggable page in {target}"))
-            .to_string();
+        // The list holds every target the browser has, and a page is only one
+        // kind: Chrome lists its own UI (the omnibox popup) and its extensions'
+        // service workers too, and in no promised order — so the first entry
+        // is not the page.
+        let url = page_target(debug_port).await;
 
         let stream = TcpStream::connect(format!("127.0.0.1:{debug_port}"))
             .await
@@ -319,6 +324,31 @@ impl Page {
     }
 }
 
+/// The debugger URL of the browser's page, waiting for it to have one.
+async fn page_target(port: u16) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last = String::new();
+    while Instant::now() < deadline {
+        last = http_json(port, "/json/list").await;
+        let targets: Vec<serde_json::Value> = serde_json::from_str(&last).unwrap_or_default();
+        if let Some(url) = targets
+            .iter()
+            .find(|t| t["type"] == "page")
+            .and_then(|t| t["webSocketDebuggerUrl"].as_str())
+        {
+            return url.to_string();
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("no page among the browser's targets: {last}");
+}
+
+/// The body of a GET to the browser's HTTP endpoint, read to its
+/// `Content-Length`.
+///
+/// Read until the whole answer is *there*, rather than until the socket
+/// closes: the browser holds the connection open regardless of what was
+/// asked, so waiting for the end is waiting for ever.
 async fn http_json(port: u16, path: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -327,24 +357,17 @@ async fn http_json(port: u16, path: &str) -> String {
             let request =
                 format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
             if stream.write_all(request.as_bytes()).await.is_ok() {
-                // Read until the answer is *there*, rather than until the socket
-                // closes. The browser holds the connection open regardless of
-                // what was asked, so waiting for the end is waiting for ever —
-                // and a read that is merely bounded returns nothing useful,
-                // because the buffer belongs to the future that was cancelled.
-                let mut body = String::new();
+                let mut raw = Vec::new();
                 let mut chunk = [0_u8; 4096];
                 let until = Instant::now() + Duration::from_secs(5);
                 while Instant::now() < until {
                     match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut chunk))
                         .await
                     {
-                        Ok(Ok(0)) => break,
-                        Ok(Ok(n)) => body.push_str(&String::from_utf8_lossy(&chunk[..n])),
-                        Ok(Err(_)) => break,
-                        Err(_) => break,
+                        Ok(Ok(n)) if n > 0 => raw.extend_from_slice(&chunk[..n]),
+                        _ => break,
                     }
-                    if body.contains("webSocketDebuggerUrl") {
+                    if let Some(body) = complete_body(&raw) {
                         return body;
                     }
                 }
@@ -353,6 +376,19 @@ async fn http_json(port: u16, path: &str) -> String {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     panic!("the browser never served {path}");
+}
+
+/// The body of `raw`, once it holds the whole of a response.
+fn complete_body(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    let length: usize = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse().ok())
+            .flatten()
+    })?;
+    (body.len() >= length).then(|| body[..length].to_string())
 }
 
 /// The marker that only a page load can destroy.

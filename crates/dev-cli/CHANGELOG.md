@@ -89,6 +89,15 @@ is the point, since none of the three has any business in a deployment.
 - The `docs` starter's root layout uses the theme's `afwd-shell` classes, so
   the navbar, page and footer stack as the theme lays them out.
 
+### Testing / CI
+
+- The hot-replacement tests attach to the browser's page rather than to the
+  first target its debugger lists. Newer Chrome lists its own UI and its
+  extensions' service workers first, so every test waited on a page that was
+  not there and failed on the Ubuntu 26.04 runner. The browser's profile is
+  now kept outside the watched project, where each write the browser made to
+  it was a rebuild and a reload the test had not asked for.
+
 ## [0.23.0] - 2026-10-27
 
 ### Fixed
