@@ -68,6 +68,7 @@ mod jsx;
 mod module_mocks;
 mod module_url;
 mod plugins;
+mod policy;
 mod preview;
 mod prompt;
 mod proxy;
@@ -1219,6 +1220,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         config: BuildConfig {
             jsx: settings.source.jsx.clone(),
             tsconfig: settings.source.tsconfig.clone(),
+            import_policy: settings.source.import_policy.clone(),
             source,
             out,
             out_dir: None,

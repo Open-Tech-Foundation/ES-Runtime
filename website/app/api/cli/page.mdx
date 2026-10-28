@@ -279,6 +279,11 @@ governs what is there. **Deny wins over allow.** Omitting `"allow"` permits ever
 shape for a policy that only excludes a few packages; an empty `"allow": []` is
 an error rather than a run that can load nothing, and so is an unknown key.
 
+A scope entry, `"@acme/*"`, names every package in the scope; it is the only
+pattern. `"unlisted"` says what happens to a module `"allow"` does not name:
+`"error"` (the default) refuses it, `"warn"` loads it and reports it once per
+package. A denied module is refused in every mode.
+
 Paths resolve relative to the **policy file**, not the working directory — a
 policy is committed next to the project it governs and means the same thing
 wherever the run is invoked from. Matching runs on the resolved, canonicalized
@@ -297,8 +302,11 @@ read before a loader exists, and you named it.
 <Callout type="warning" title="A policy names packages, not content">
   `"express"` says the loader may resolve that package. It says nothing about
   which version, or whether the bytes are the ones you audited. Lockfiles remain
-  the install-time counterpart; content pinning is future work.
+  the install-time counterpart; content pinning is the next phase of D193.
 </Callout>
+
+`esdev build` applies the same file to what a build ships — see
+[Import policy in builds](/esdev/build#import-policy).
 
 ### Strict by design
 

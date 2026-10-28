@@ -4012,3 +4012,34 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **No default (returning `undefined`).** Every caller would write its own default, and some would write `"development"`.
 
 **Consequences:** `runtime:process` gains `environment()`. Frameworks such as AFW keep `NODE_ENV` for their compile-time development diagnostics and read `environment()` (or `RUNTIME_ENV ?? NODE_ENV` elsewhere) for deployment decisions.
+
+### D193 — The import policy governs what a build ships, with three modes for what it does not list · *Accepted (2026-10-28)* · *extends D39*
+
+**Context:** D39's import policy is applied by the runtime loader as it resolves each module. A deployed application is built, and `esdev build` bundles every npm package into the output, so the loader of a deployed build never resolves `aws-sdk` or `left-pad`: it sees `./server.js` and its chunks. And `esdev build` did not read a policy at all. An organisation that wrote "deny `aws-sdk`" or "only these packages" into a policy therefore had it applied to nothing that shipped — a policy that reads as a restriction and is not one, the failure D39 warns about. Organisations do govern dependencies, mostly at install and in CI (a private registry or proxy that decides what can be installed, lockfile checks, `npm audit signatures`); what no runtime or bundler does is hold the code a build actually ships to an approved list. For payment software that list is a requirement: PCI DSS v4.0 6.4.3 asks that every script on a payment page be authorized, integrity-checked and inventoried with a justification, effective 31 March 2025. Node removed its runtime integrity policy in 22.2.0 (nodejs/node#52575) because loaded JavaScript could tamper with the JavaScript loader checking it; esrun's loader and policy run in Rust, before any source reaches V8, so that objection does not apply here.
+
+**Decision (maintainer, 2026-10-28):** keep D39's file and extend it, so one policy governs both the build and the run.
+
+- **The policy judges what ships, not what is installed.** At build time every module the bundler puts into an output is judged — every target, browser and server, and the dev loop's builds, so a refusal shows on a developer's machine before CI. Build tools that run but do not ship — Tailwind, PostCSS, TypeScript, esdev plugins — are never judged, because none of their code is in the output. The project names its policy in `esdev.json` (`build.importPolicy`), so it travels with the repository rather than with a CI script's flags; `esrun --import-policy` stays as it is for the run.
+- **Three modes for a package the policy does not list**, written in the file and printed by the build:
+  - **deny-only** — no `allow`: everything not denied (D39's shape, unchanged);
+  - **report** — `allow` with `"unlisted": "warn"`: the build succeeds and lists every unlisted package it shipped, the way to roll a policy out;
+  - **strict** — `allow` with `"unlisted": "error"`, the default once `allow` is present: anything not approved fails.
+- **What never bends:** a denied package always fails, in every mode; a check that only warns about a block list is not a block list. The mode lives in the reviewed file and nothing on a command line loosens it.
+- **Scope entries:** `"@acme/*"` names every package in a scope, so an organisation's own packages are one line.
+- **A build reports every refusal at once**, by package (or by project path for the project's own files), rather than the first, and points at `npm explain` / `pnpm why` for what brought a package in. What is judged is the bundle's **module graph** — every module parsed into it, recorded by a bundler plugin — not the modules an output chunk lists: the bundler drops a module it folds away entirely (a package exporting a constant is inlined into its importer), and judging the rendered list let a denied package through that way.
+
+**Phases:**
+1. Build-time enforcement, the `unlisted` modes and scope entries (this change); the runtime loader honours `"unlisted": "warn"` the same way.
+2. Versioned entries — `{ "package": "zod", "version": "3.23.8", "reason": "…" }` — and package integrity: one tree hash per package, Go's `h1:` dirhash (`golang.org/x/mod/sumdb/dirhash`, SHA-256 over a sorted summary of each file's SHA-256 and name) over the package directory named `name@version/`, nested `node_modules` excluded. npm's lockfile `integrity` cannot serve: it hashes the tarball, not the installed files.
+3. `esdev build --inventory`, which writes the shipped dependency graph as a draft policy (version, hash, an empty `reason` each) for a security team to review once and then see change as diffs; and SRI `integrity` attributes on the `<script>` and `<link>` tags esdev writes, the browser half of 6.4.3.
+4. Runtime integrity for build output: `esdev build` writes a policy pinning every file it emitted (SRI, per file) and the external packages a server bundle loads at run time (`h1:`, per package); with an `integrity` map the set is closed — only pinned files load, the entry file included, and `-e` code is refused. A later `esdev pin` extends this to unbundled runs.
+
+**Rejected:**
+- **Applying the runtime policy only.** It sees nothing a build inlined, which is everything.
+- **Strict-only.** A team with hundreds of dependencies cannot adopt a policy that must be complete on the first day; report mode is how a strict one gets written.
+- **A warn mode for `deny`.** It would make the list advisory.
+- **A command-line override of the mode.** A CI job could relax the security team's policy without changing the reviewed file.
+- **Judging installed or build-time packages.** It would force approving build tools whose code never ships, and turn the list into noise.
+- **Per-file hashes for npm packages.** Hundreds of entries per package, where a tree hash is one line and pins the same bytes.
+
+**Consequences:** `esdev.json` gains `build.importPolicy`; a policy gains `unlisted` and scope entries. A build with a policy can now fail on a dependency change, which is the point.

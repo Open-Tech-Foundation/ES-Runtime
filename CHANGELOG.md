@@ -23,6 +23,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- Import policies gain `"unlisted": "error" | "warn"` and scope entries
+  (`"@acme/*"`) (D193). With `"warn"`, a module the allow list does not name
+  loads and is reported once per package — how an allow list is rolled out; a
+  denied module is refused in every mode.
 - `environment()` in `runtime:process`: the deployment environment, read at
   run time — `RUNTIME_ENV`, else `NODE_ENV`, else `"production"` (D192).
   `RUNTIME_ENV` is proposed as one name for every runtime and language, for

@@ -1221,6 +1221,63 @@ fn an_import_policy_allow_list_admits_named_packages_and_paths() {
     assert!(s.contains("package refused"), "{s}");
 }
 
+/// Report mode (D193): an unlisted module loads and is reported, once per
+/// package; a denied one is still refused.
+#[test]
+fn an_import_policy_in_report_mode_loads_what_it_does_not_list_and_says_so() {
+    let root = import_project("policy_report");
+    let out = run_with_policy(
+        &root,
+        r#"{ "allow": ["./src", "good"], "deny": ["evil"], "unlisted": "warn" }"#,
+        &["--allow-imports"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("loaded 1 good"), "{s}");
+    assert!(s.contains("NO THROW"), "{s}"); // ./vendor is unlisted: reported, loaded
+    assert!(s.contains("package refused"), "{s}"); // evil is denied in every mode
+    let e = stderr(&out);
+    assert!(
+        e.contains("module \"./vendor/x.mjs\" is not in the import policy's allow list"),
+        "{e}"
+    );
+}
+
+/// A scope entry names every package in the scope (D193).
+#[test]
+fn an_import_policy_scope_entry_admits_the_whole_scope() {
+    let root = import_project("policy_scope");
+    let scoped = root.join("node_modules/@acme/ui");
+    std::fs::create_dir_all(&scoped).unwrap();
+    std::fs::write(
+        scoped.join("package.json"),
+        r#"{"name":"@acme/ui","type":"module","main":"index.js"}"#,
+    )
+    .unwrap();
+    std::fs::write(scoped.join("index.js"), "export const b = 'acme';").unwrap();
+    std::fs::write(
+        root.join("scoped.mjs"),
+        "import { b } from '@acme/ui'; console.log(b); \
+         try { await import('good'); } catch { console.log('good refused'); }",
+    )
+    .unwrap();
+    std::fs::write(root.join("policy.json"), r#"{ "allow": ["@acme/*"] }"#).unwrap();
+    let out = esrun()
+        .current_dir(&root)
+        .args([
+            "--allow-imports",
+            "--import-policy=policy.json",
+            "scoped.mjs",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).lines().collect::<Vec<_>>(),
+        ["acme", "good refused"]
+    );
+}
+
 #[test]
 fn an_import_policy_without_an_allow_list_only_denies() {
     // The shape for excluding a handful of packages without enumerating the

@@ -516,6 +516,8 @@ impl Job {
             host.as_ref().map(|host| host.jsx()).unwrap_or_default(),
             source.jsx.clone(),
             source.tsconfig.clone(),
+            // A test page is not shipped (D193).
+            None,
             &passes,
         )
         .await?;

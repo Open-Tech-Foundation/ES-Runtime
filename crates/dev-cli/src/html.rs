@@ -663,6 +663,7 @@ pub async fn build(
     jsx: crate::contract::Jsx,
     jsx_settings: crate::transform::JsxSettings,
     tsconfig: Option<std::path::PathBuf>,
+    import_policy: Option<&Path>,
 ) -> Result<(String, Vec<crate::contract::Output>), String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -837,6 +838,7 @@ pub async fn build(
             },
             jsx_settings.clone(),
             tsconfig.clone(),
+            import_policy,
             plugins,
         )
         .await?

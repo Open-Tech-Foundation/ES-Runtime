@@ -24,6 +24,16 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- `esdev build` applies the import policy `esdev.json` names as
+  `build.importPolicy` to what every build ships (D193): each module read into
+  a bundle, for every target and the dev loop's builds. A deployed bundle
+  inlines its packages, so the runtime loader never saw them and a policy
+  governed nothing that shipped. A refusal lists every refused package and
+  writes nothing; `"unlisted": "warn"` reports instead; build tools whose code
+  does not ship are never judged.
+
 ### Changed
 
 - The programs esdev runs get `RUNTIME_ENV` when the shell has not set it

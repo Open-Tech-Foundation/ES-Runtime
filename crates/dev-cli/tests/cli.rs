@@ -20368,3 +20368,157 @@ fn esdev_sets_runtime_env_for_what_it_runs_unless_the_shell_did() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// A project whose server and browser builds import three packages: `left-pad`
+/// (unlisted), `@acme/ui` (a scope) and `aws-sdk`, whose one export is a
+/// constant the bundler folds into its importer — so the module is gone from
+/// every output chunk, and only the graph still shows it was read (D193).
+fn policy_project(name: &str, policy: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    for (pkg, code) in [
+        ("left-pad", "export default (s) => ' ' + s;"),
+        ("aws-sdk", "export const S3 = 1;"),
+        ("@acme/ui", "export const button = 'b';"),
+    ] {
+        let pkg_dir = dir.join("node_modules").join(pkg);
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            format!(r#"{{"name":"{pkg}","version":"1.0.0","type":"module","main":"index.js"}}"#),
+        )
+        .unwrap();
+        std::fs::write(pkg_dir.join("index.js"), code).unwrap();
+    }
+    std::fs::write(
+        dir.join("src/server.js"),
+        "import pad from 'left-pad';\nimport { button } from '@acme/ui';\nimport { S3 } from 'aws-sdk';\nconsole.log(pad(button), S3);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/page.js"),
+        "import { button } from '@acme/ui';\nimport { S3 } from 'aws-sdk';\ndocument.title = button + S3;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><html><head><script type=\"module\" src=\"./src/page.js\"></script></head><body></body></html>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("esdev.json"),
+        r#"{"build":{"importPolicy":"./import-policy.json","targets":{
+            "server":{"entry":"src/server.js","out":"dist/server.js"},
+            "web":{"entry":"index.html","outdir":"dist/web"}}}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("import-policy.json"), policy).unwrap();
+    dir
+}
+
+fn build_in(dir: &Path, target: &str) -> std::process::Output {
+    esdev_in(dir)
+        .args(["build", &format!("--target={target}")])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn a_strict_import_policy_refuses_every_unapproved_package_a_build_ships() {
+    let dir = policy_project(
+        "policy_strict",
+        r#"{ "allow": ["./src", "@acme/*"], "deny": ["aws-sdk"] }"#,
+    );
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("the import policy (./import-policy.json) refuses what this build ships"),
+        "{err}"
+    );
+    // Every refusal at once; `aws-sdk` was folded away and is still caught.
+    assert!(err.contains("denied: aws-sdk"), "{err}");
+    assert!(err.contains("not in the allow list: left-pad"), "{err}");
+    assert!(
+        !err.contains("@acme"),
+        "a scope entry approves its packages: {err}"
+    );
+    assert!(!dir.join("dist/server.js").exists(), "nothing is written");
+
+    // A browser target ships code too, and is judged the same way.
+    let out = build_in(&dir, "web");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("denied: aws-sdk"), "{err}");
+}
+
+#[test]
+fn a_report_mode_policy_ships_and_lists_what_it_does_not_name_but_never_a_denied_package() {
+    let dir = policy_project(
+        "policy_report_build",
+        r#"{ "allow": ["./src", "@acme/*"], "unlisted": "warn" }"#,
+    );
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("left-pad is not in the import policy's allow list"),
+        "{err}"
+    );
+    assert!(
+        err.contains("aws-sdk is not in the import policy's allow list"),
+        "{err}"
+    );
+    assert!(dir.join("dist/server.js").exists());
+
+    std::fs::write(
+        dir.join("import-policy.json"),
+        r#"{ "allow": ["./src", "@acme/*"], "deny": ["aws-sdk"], "unlisted": "warn" }"#,
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a deny never only warns");
+    assert!(err.contains("denied: aws-sdk"), "{err}");
+}
+
+#[test]
+fn a_policy_that_approves_everything_shipped_builds_and_a_bad_one_is_an_error() {
+    let dir = policy_project(
+        "policy_approved",
+        r#"{ "allow": ["./src", "@acme/*", "left-pad", "aws-sdk"] }"#,
+    );
+    let out = build_in(&dir, "server");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    std::fs::write(
+        dir.join("import-policy.json"),
+        r#"{ "allow": ["x"], "unlisted": "maybe" }"#,
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("\"unlisted\" is \"error\" or \"warn\""),
+        "{err}"
+    );
+
+    std::fs::write(
+        dir.join("esdev.json"),
+        r#"{"build":{"importPolicy":true,"targets":{"server":{"entry":"src/server.js","out":"dist/server.js"}}}}"#,
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("`build.importPolicy` is the path of an import policy file"),
+        "{err}"
+    );
+}

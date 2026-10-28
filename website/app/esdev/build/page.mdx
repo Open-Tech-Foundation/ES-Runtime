@@ -108,6 +108,37 @@ import it could not resolve: the bundle keeps it as an import and the build
 succeeds, but the program fails where it is deployed, so the warning names the
 file and the line.
 
+## Import policy
+
+A build inlines every package it imports, so the runtime's
+[import policy](/docs/security/imports) never sees them where the bundle is
+deployed. Name the policy in `esdev.json` and every build applies it to what it
+ships:
+
+```json
+{
+  "build": {
+    "importPolicy": "./import-policy.json",
+    "targets": { "server": { "entry": "src/server.js", "out": "dist/server.js" } }
+  }
+}
+```
+
+Every module read into each bundle is judged — every target, browser and
+server, and the builds `esdev start` makes. A strict policy fails the build
+and names every refused package at once, and nothing is written:
+
+```text
+error: target "server": the import policy (./import-policy.json) refuses what this build ships:
+  denied: aws-sdk
+  not in the allow list: left-pad
+```
+
+With `"unlisted": "warn"` the build succeeds and lists what the allow list does
+not name; a denied package still fails it. Build tools whose code does not ship
+— Tailwind, PostCSS, TypeScript, plugins — are not judged, and neither is a
+module a plugin generates.
+
 ## Source maps
 
 ```sh

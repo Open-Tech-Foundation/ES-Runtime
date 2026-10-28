@@ -77,7 +77,7 @@ pub use console::{NullConsole, TracingConsole};
 pub use driver::{DriveFailure, Driver};
 pub use entropy::OsEntropy;
 pub use host_allowlist::HostAllowlist;
-pub use import_policy::ImportPolicy;
+pub use import_policy::{ImportPolicy, Unlisted, Verdict, package_of};
 pub use jail::Jail;
 pub use modules::{DenyModuleLoader, FsModuleLoader};
 pub use net::ReqwestTransport;

@@ -57,6 +57,9 @@ pub struct Project {
     pub dir: PathBuf,
     /// How JSX compiles, for every command that compiles any.
     pub jsx: crate::transform::JsxSettings,
+    /// The import policy file every build applies to what it ships
+    /// (`build.importPolicy`, D193).
+    pub import_policy: Option<PathBuf>,
     /// The build targets, in name order.
     ///
     /// Sorted rather than left in the order they were written, because a JSON
@@ -418,7 +421,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// the day somebody runs the other command.
 const NORMALIZED_DEV_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
 
-const BUILD_KEYS: &[&str] = &["targets"];
+const BUILD_KEYS: &[&str] = &["targets", "importPolicy"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
 const DEV_KEYS: &[&str] = &["run", "watch", "serve", "app", "server", "outDir"];
 const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
@@ -647,7 +650,19 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     let alias = aliases(alias_value, name, &dir)?;
     let test = read_test(root.get("test"), name)?;
     let jsx = read_jsx(root.get("jsx"), name)?;
+    // The policy file a build applies to what it ships (D193). Relative to
+    // this file, like every path in it.
+    let import_policy = match build.and_then(|build| build.get("importPolicy")) {
+        None => None,
+        Some(Value::String(path)) if !path.is_empty() => Some(dir.join(path)),
+        Some(_) => {
+            return Err(format!(
+                "{name}: `build.importPolicy` is the path of an import policy file"
+            ));
+        }
+    };
     Ok(Some(Project {
+        import_policy,
         dir,
         targets,
         start,

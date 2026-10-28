@@ -22,6 +22,17 @@
 //! *either* list names it, so a path entry that happens to point inside a
 //! `node_modules` tree governs what is there like any other path entry.
 //!
+//! **A scope entry, `@acme/*`, names every package in the scope**, so an
+//! organisation's own packages are one line (D193). It is the only pattern:
+//! `*` anywhere else is refused rather than read literally.
+//!
+//! **What a policy does with a package it does not list** is written in the
+//! file (D193): with no `allow`, everything not denied loads; with `allow`,
+//! `"unlisted": "error"` (the default) refuses it and `"unlisted": "warn"` lets
+//! it load and says so, the way a policy is rolled out. A denied module is
+//! refused in every mode. `esdev build` applies the same file to what a build
+//! ships, through [`ImportPolicy::judge`].
+//!
 //! **Matching runs on the resolved, canonicalized module**, after the sandbox
 //! root has been enforced: judging the specifier would let
 //! `./src/link-to-node_modules/evil/index.js` through, and resolving first is
@@ -29,7 +40,9 @@
 //! is a symlink into a content store — the real path still ends in
 //! `…/node_modules/lodash/…`, so the package is recoverable from the path.
 
+use std::collections::HashSet;
 use std::path::{Component, Path};
+use std::sync::Mutex;
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::ProviderError;
@@ -42,6 +55,8 @@ use crate::path_allowlist::PathAllowlist;
 struct Rules {
     /// Package names as written in a bare specifier (`lodash`, `@scope/pkg`).
     packages: Vec<String>,
+    /// Scopes from `@scope/*` entries, as `@scope`.
+    scopes: Vec<String>,
     /// Path entries, canonicalized — the same matching `--allow-read` uses.
     paths: PathAllowlist,
 }
@@ -53,6 +68,7 @@ impl Rules {
         S: AsRef<str>,
     {
         let mut packages = Vec::new();
+        let mut scopes = Vec::new();
         let mut paths = Vec::new();
         for entry in entries {
             let entry = entry.as_ref();
@@ -61,18 +77,29 @@ impl Rules {
             }
             if entry.starts_with('.') || entry.starts_with('/') || entry.starts_with("file:") {
                 paths.push(entry.to_string());
+            } else if let Some(scope) = entry.strip_suffix("/*")
+                && scope.starts_with('@')
+                && scope.len() > 1
+                && !scope[1..].contains(['/', '*'])
+            {
+                scopes.push(scope.to_string());
+            } else if entry.contains('*') {
+                return Err(format!(
+                    "{entry:?}: the only pattern is a whole scope, \"@scope/*\""
+                ));
             } else {
                 packages.push(entry.trim_end_matches('/').to_string());
             }
         }
         Ok(Rules {
             packages,
+            scopes,
             paths: PathAllowlist::parse(paths, base)?,
         })
     }
 
     fn is_empty(&self) -> bool {
-        self.packages.is_empty() && self.paths.is_empty()
+        self.packages.is_empty() && self.scopes.is_empty() && self.paths.is_empty()
     }
 
     /// Whether the module at `real` is named by these rules — by either list.
@@ -86,7 +113,11 @@ impl Rules {
     /// restriction and is not one.
     fn matches(&self, real: &Path) -> bool {
         if let Some(name) = package_of(real)
-            && self.packages.contains(&name)
+            && (self.packages.contains(&name)
+                || self.scopes.iter().any(|scope| {
+                    name.strip_prefix(scope.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+                }))
         {
             return true;
         }
@@ -94,9 +125,31 @@ impl Rules {
     }
 }
 
+/// What a policy does with a module its `allow` list does not name (D193).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Unlisted {
+    /// Refuse it: the strict mode, and the default once `allow` is present.
+    #[default]
+    Error,
+    /// Let it load and report it: how a policy is rolled out.
+    Warn,
+}
+
+/// What a policy says about one module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// Named by `allow`, or there is no `allow` and `deny` does not name it.
+    Allowed,
+    /// Named by `deny`. Refused in every mode.
+    Denied,
+    /// Not named by `allow`: refused or reported, by the policy's
+    /// [`Unlisted`] mode.
+    Unlisted,
+}
+
 /// What a run may load. The default permits everything — a policy applies only
 /// when one is supplied.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ImportPolicy {
     /// The allow list. `None` when the file omits `"allow"`, which means
     /// "everything not denied" — the shape for a policy that only wants to
@@ -105,6 +158,22 @@ pub struct ImportPolicy {
     /// The deny list. Always applies, and **wins over allow** (see
     /// [`permits`](Self::permits)).
     deny: Rules,
+    /// What happens to a module `allow` does not name.
+    unlisted: Unlisted,
+    /// The packages a run has already reported under `"unlisted": "warn"`, so
+    /// each is reported once rather than per module.
+    reported: Mutex<HashSet<String>>,
+}
+
+impl Clone for ImportPolicy {
+    fn clone(&self) -> Self {
+        ImportPolicy {
+            allow: self.allow.clone(),
+            deny: self.deny.clone(),
+            unlisted: self.unlisted,
+            reported: Mutex::new(HashSet::new()),
+        }
+    }
 }
 
 impl ImportPolicy {
@@ -132,9 +201,9 @@ impl ImportPolicy {
             .as_object()
             .ok_or_else(|| "the policy must be a JSON object".to_string())?;
         for key in object.keys() {
-            if key != "allow" && key != "deny" {
+            if !matches!(key.as_str(), "allow" | "deny" | "unlisted") {
                 return Err(format!(
-                    "unknown key {key:?} (expected \"allow\" and/or \"deny\")"
+                    "unknown key {key:?} (expected \"allow\", \"deny\" and \"unlisted\")"
                 ));
             }
         }
@@ -156,7 +225,44 @@ impl ImportPolicy {
                     .to_string(),
             );
         }
-        Ok(ImportPolicy { allow, deny })
+        let unlisted = match object.get("unlisted") {
+            None => Unlisted::Error,
+            Some(Value::String(mode)) if mode == "error" => Unlisted::Error,
+            Some(Value::String(mode)) if mode == "warn" => Unlisted::Warn,
+            Some(_) => return Err("\"unlisted\" is \"error\" or \"warn\"".to_string()),
+        };
+        // Without `allow` nothing is unlisted, so a mode for it would be a
+        // setting that does nothing — which reads as one that does.
+        if allow.is_none() && object.contains_key("unlisted") {
+            return Err(
+                "\"unlisted\" says what happens to a package \"allow\" does not name, \
+                 and there is no \"allow\""
+                    .to_string(),
+            );
+        }
+        Ok(ImportPolicy {
+            allow,
+            deny,
+            unlisted,
+            reported: Mutex::new(HashSet::new()),
+        })
+    }
+
+    /// What this policy does with a module `allow` does not name.
+    pub fn unlisted(&self) -> Unlisted {
+        self.unlisted
+    }
+
+    /// What the policy says about the module at `real` (resolved and
+    /// canonicalized), before its mode is applied.
+    pub fn judge(&self, real: &Path) -> Verdict {
+        if self.deny.matches(real) {
+            return Verdict::Denied;
+        }
+        match &self.allow {
+            Some(allow) if !allow.matches(real) => Verdict::Unlisted,
+            _ => Verdict::Allowed,
+        }
     }
 
     /// Whether the module at `real` (resolved and canonicalized) may load.
@@ -165,13 +271,12 @@ impl ImportPolicy {
     /// there is one rule to remember; the alternative — "the more specific
     /// entry wins" — makes the answer depend on comparing two entries, which is
     /// exactly the precedence reasoning D38 removed from the flags.
+    #[cfg(test)]
     pub(crate) fn permits(&self, real: &Path) -> bool {
-        if self.deny.matches(real) {
-            return false;
-        }
-        match &self.allow {
-            Some(allow) => allow.matches(real),
-            None => true,
+        match self.judge(real) {
+            Verdict::Allowed => true,
+            Verdict::Denied => false,
+            Verdict::Unlisted => self.unlisted == Unlisted::Warn,
         }
     }
 
@@ -181,14 +286,32 @@ impl ImportPolicy {
     /// What is named is the package, or else the `specifier` the program wrote
     /// — never `real`, which is canonical (D141).
     pub(crate) fn check(&self, real: &Path, specifier: &str) -> Result<(), ProviderError> {
-        if self.permits(real) {
-            return Ok(());
-        }
+        let verdict = self.judge(real);
         let what = match package_of(real) {
             Some(name) => format!("package {name}"),
             None => format!("module {specifier:?}"),
         };
-        let why = if self.deny.matches(real) {
+        match verdict {
+            Verdict::Allowed => return Ok(()),
+            Verdict::Unlisted if self.unlisted == Unlisted::Warn => {
+                // Reported once per package (or module), not per file it loads.
+                let first = self
+                    .reported
+                    .lock()
+                    .map(|mut seen| seen.insert(what.clone()))
+                    .unwrap_or(false);
+                if first {
+                    tracing::warn!(
+                        target: "import-policy",
+                        "{what} is not in the import policy's allow list \
+                         (loaded: the policy's \"unlisted\" is \"warn\")"
+                    );
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        let why = if verdict == Verdict::Denied {
             "denied by the import policy"
         } else {
             "not in the import policy's allow list"
@@ -220,7 +343,7 @@ fn string_list(key: &str, value: &Value) -> Result<Vec<String>, String> {
 /// tree: the one or two components after the **last** `node_modules`, so a
 /// scoped package (`@scope/pkg`) keeps its scope and a nested dependency is
 /// named as itself rather than as its parent.
-fn package_of(real: &Path) -> Option<String> {
+pub fn package_of(real: &Path) -> Option<String> {
     let components: Vec<&std::ffi::OsStr> = real
         .components()
         .filter_map(|c| match c {
@@ -430,5 +553,74 @@ mod tests {
             .to_string();
         assert!(refused.contains("\"../lib/secret.js\""), "{refused}");
         assert!(!refused.contains(root.to_str().unwrap()), "{refused}");
+    }
+
+    #[test]
+    fn a_scope_entry_names_every_package_in_the_scope_and_nothing_else() {
+        let root = temp_dir("scope");
+        let p = policy(r#"{ "allow": ["@acme/*"] }"#, &root);
+        assert!(p.permits(Path::new("/proj/node_modules/@acme/ui/index.js")));
+        assert!(p.permits(Path::new("/proj/node_modules/@acme/payments/lib/a.js")));
+        assert!(!p.permits(Path::new("/proj/node_modules/@acmeco/ui/index.js")));
+        assert!(!p.permits(Path::new("/proj/node_modules/acme/index.js")));
+        let p = policy(r#"{ "deny": ["@evil/*"] }"#, &root);
+        assert_eq!(
+            p.judge(Path::new("/proj/node_modules/@evil/x/i.js")),
+            Verdict::Denied
+        );
+        assert_eq!(
+            p.judge(Path::new("/proj/node_modules/ok/i.js")),
+            Verdict::Allowed
+        );
+    }
+
+    #[test]
+    fn the_only_pattern_is_a_whole_scope() {
+        let root = temp_dir("patterns");
+        for bad in [
+            r#"{ "allow": ["lod*"] }"#,
+            r#"{ "allow": ["@acme/ui-*"] }"#,
+            r#"{ "allow": ["*"] }"#,
+            r#"{ "allow": ["@/*"] }"#,
+        ] {
+            let err = ImportPolicy::from_json(bad, &root).unwrap_err();
+            assert!(err.contains("the only pattern"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn unlisted_decides_what_allow_does_not_name_and_deny_always_refuses() {
+        let root = temp_dir("unlisted");
+        let strict = policy(r#"{ "allow": ["zod"], "deny": ["aws-sdk"] }"#, &root);
+        let report = policy(
+            r#"{ "allow": ["zod"], "deny": ["aws-sdk"], "unlisted": "warn" }"#,
+            &root,
+        );
+        let explicit = policy(r#"{ "allow": ["zod"], "unlisted": "error" }"#, &root);
+        let zod = Path::new("/proj/node_modules/zod/index.js");
+        let tailwind = Path::new("/proj/node_modules/left-pad/index.js");
+        let denied = Path::new("/proj/node_modules/aws-sdk/index.js");
+        assert_eq!(strict.unlisted(), Unlisted::Error);
+        assert_eq!(report.unlisted(), Unlisted::Warn);
+        assert_eq!(explicit.unlisted(), Unlisted::Error);
+        assert_eq!(strict.judge(tailwind), Verdict::Unlisted);
+        assert!(strict.permits(zod) && !strict.permits(tailwind) && !strict.permits(denied));
+        assert!(report.permits(zod) && report.permits(tailwind) && !report.permits(denied));
+        assert!(report.check(tailwind, "left-pad").is_ok());
+        assert!(report.check(denied, "aws-sdk").is_err());
+    }
+
+    #[test]
+    fn unlisted_needs_an_allow_list_and_a_known_mode() {
+        let root = temp_dir("unlisted-errors");
+        let err =
+            ImportPolicy::from_json(r#"{ "deny": ["x"], "unlisted": "warn" }"#, &root).unwrap_err();
+        assert!(err.contains("there is no \"allow\""), "{err}");
+        let err = ImportPolicy::from_json(r#"{ "allow": ["x"], "unlisted": "ignore" }"#, &root)
+            .unwrap_err();
+        assert!(err.contains("\"error\" or \"warn\""), "{err}");
+        let err =
+            ImportPolicy::from_json(r#"{ "allow": ["x"], "unlisted": true }"#, &root).unwrap_err();
+        assert!(err.contains("\"error\" or \"warn\""), "{err}");
     }
 }

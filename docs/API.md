@@ -1131,6 +1131,13 @@ esrun --allow-imports --allow-net=db.internal:5432 \
   territories: a module matches if *either* kind names it, so a path entry
   pointing inside `node_modules` governs what is there like any other.
 - **Deny wins over allow.** A module named by both is refused.
+- **A scope entry, `"@acme/*"`, names every package in the scope** (D193). It is
+  the only pattern: `*` anywhere else is an error.
+- **`"unlisted"` says what happens to a module `"allow"` does not name**
+  (D193): `"error"`, the default, refuses it; `"warn"` loads it and reports it
+  once per package — how a policy is rolled out. A denied module is refused in
+  every mode. Without `"allow"` there is nothing unlisted, and `"unlisted"` is
+  an error.
 - **Omitting `"allow"`** permits everything not denied — the shape for a policy
   that only wants to exclude a few packages. An empty `"allow": []` is an error
   rather than a run that can load nothing; `"deny": []` is fine.
@@ -1148,16 +1155,25 @@ esrun --allow-imports --allow-net=db.internal:5432 \
   named it.
 - **Never auto-discovered.** The file is read only when `--import-policy` names
   it, exactly as `--env-file` works (D30).
+- **A build applies the same file to what it ships** (D193). A deployed bundle
+  inlines its packages, so the loader never resolves them; `esdev build` judges
+  every module read into each bundle — every target, browser and server, and
+  the dev loop's builds — against the file `esdev.json` names as
+  `build.importPolicy`. A refusal fails the build, names every refused package
+  at once, and writes nothing. Build tools whose code does not ship (Tailwind,
+  PostCSS, plugins) are not judged, and neither is a plugin's generated module.
 
 The two layers do not substitute for each other: the `imports` capability
 decides whether the loader runs at all, the policy decides what it may resolve.
 A policy is therefore **not a way around a missing `imports` grant** — without
 `--allow-imports`, an allow entry still loads nothing.
 
-> **Known gap: no integrity.** A policy names packages and paths, not content.
+> **Not yet: content pinning.** A policy names packages and paths, not content.
 > `"express"` says the loader may resolve that package; it says nothing about
-> *which* version, or whether the bytes are the ones you audited. Lockfiles
-> remain the install-time counterpart, and content pinning is future work.
+> *which* version, or whether the bytes are the ones you audited. Versioned
+> entries and package hashes, an inventory command, SRI on emitted scripts and
+> integrity for build output are the next phases of D193. Lockfiles remain the
+> install-time counterpart.
 
 **The parser is strict, and its grammar is two rules for every flag** — not just
 the permission ones:

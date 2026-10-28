@@ -238,6 +238,8 @@ pub struct BuildConfig {
     /// The project's `jsconfig.json`, when it has one and no `tsconfig.json`
     /// ([`crate::settings::Source::tsconfig`]).
     pub tsconfig: Option<PathBuf>,
+    /// The import policy file applied to what this build ships (D193).
+    pub import_policy: Option<PathBuf>,
 }
 
 /// A bundler failure, in the shape a person reads.
@@ -1337,9 +1339,13 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                 std::sync::Arc::new(crate::assets::Assets::new(assets.clone()))
             },
         ]);
+        // What the import policy judges: every module read into this bundle.
+        let graph = crate::policy::Graph::default();
+        let mut plugins = installed(own_plugins, &config.plugins);
+        plugins.push(graph.plugin());
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(translated)
-            .with_plugins(installed(own_plugins, &config.plugins))
+            .with_plugins(plugins)
             .build()
             .map_err(reported!())?;
         // Which pass failed, when there is more than one. The two write the
@@ -1371,11 +1377,17 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                     format.name()
                 )
             })
-            .map(|output| {
+            .and_then(|output| {
                 crate::print_warnings!(output);
                 let files = crate::adapter::produced(&output.assets);
+                if let Some(policy) = &config.import_policy {
+                    for warning in crate::policy::check(policy, &graph, &cwd)? {
+                        crate::bundler::warn(warning);
+                    }
+                }
                 let files = remove_stylesheet_stubs(files, &stubs, &cwd.join(&out_dir));
                 produced.extend(files);
+                Ok(())
             })?;
     }
 
@@ -1579,6 +1591,7 @@ pub async fn bundle_browser_entries(
     jsx: crate::contract::Jsx,
     jsx_settings: crate::transform::JsxSettings,
     tsconfig: Option<PathBuf>,
+    import_policy: Option<&Path>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<BrowserBundle, String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
@@ -1663,12 +1676,13 @@ pub async fn bundle_browser_entries(
     // it. Which is why the collector is the bundler's rather than the caller's:
     // a held plugin keeps the handle it was constructed with, so a caller that
     // made a fresh one each build would be reading an empty one.
-    let (styles, assets, produced) = if dev {
+    let (styles, assets, produced, graph) = if dev {
         let held = warm().lock().await;
         build_warm(held, &key, root, out_dir, &options, minify, plugins).await?
     } else {
         let styles = crate::cssmodules::Collected::new();
         let assets = crate::assets::Emitted::new();
+        let graph = crate::policy::Graph::default();
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(crate::bundler::translate(
                 &options,
@@ -1682,6 +1696,7 @@ pub async fn bundle_browser_entries(
                 minify,
                 &options.jsx_settings,
                 plugins,
+                &graph,
             ))
             .build()
             .map_err(reported!())?;
@@ -1690,8 +1705,13 @@ pub async fn bundle_browser_entries(
         let output = written.map_err(reported!())?;
         let produced = crate::adapter::produced(&output.assets);
         crate::print_warnings!(output);
-        (styles.take(), assets, produced)
+        (styles.take(), assets, produced, graph)
     };
+    if let Some(policy) = import_policy {
+        for warning in crate::policy::check(policy, &graph, root)? {
+            crate::bundler::warn(warning);
+        }
+    }
     // Into the same directory the bundle and its chunks go: a document's build
     // writes everything hashed under one `assets/`, and an imported file is one
     // more hashed thing.
@@ -1755,6 +1775,7 @@ fn browser_plugins(
     minify: bool,
     jsx_settings: &crate::transform::JsxSettings,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
+    graph: &crate::policy::Graph,
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
     let mut own: Vec<std::sync::Arc<dyn crate::contract::Pass>> = Vec::new();
     if jsx_settings.react_compiler {
@@ -1771,7 +1792,9 @@ fn browser_plugins(
         std::sync::Arc::new(crate::assets::Assets::new(assets.clone())),
         std::sync::Arc::new(crate::module_url::ModuleUrl::new()),
     ]);
-    installed(own, configured)
+    let mut plugins = installed(own, configured);
+    plugins.push(graph.plugin());
+    plugins
 }
 
 /// This toolchain's own pass, then the project's, through one adapter each.
@@ -1896,6 +1919,9 @@ fn warm() -> &'static tokio::sync::Mutex<Option<Warm>> {
 
 /// A held bundler, and what it was built for.
 struct Warm {
+    /// Every module read into this bundler's graph, for the import policy
+    /// (D193). Accumulates across rebuilds, as the bundler's own cache does.
+    modules: crate::policy::Graph,
     /// The HMR session: what has been shipped to the page, when each module was
     /// last rendered, and the counter that names the next patch file.
     ///
@@ -2107,12 +2133,14 @@ async fn build_warm(
         Vec<crate::cssmodules::Sheet>,
         crate::assets::Emitted,
         Vec<crate::contract::Output>,
+        crate::policy::Graph,
     ),
     String,
 > {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
         let styles = crate::cssmodules::Collected::new();
         let assets = crate::assets::Emitted::new();
+        let modules = crate::policy::Graph::default();
         let bundler = rolldown::BundlerBuilder::default()
             .with_options(crate::bundler::translate(
                 options,
@@ -2126,10 +2154,12 @@ async fn build_warm(
                 minify,
                 &options.jsx_settings,
                 plugins,
+                &modules,
             ))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {
+            modules,
             key: key.to_string(),
             bundler,
             styles,
@@ -2157,7 +2187,12 @@ async fn build_warm(
     // Drained, not read: the same collector serves every rebuild, and sheets
     // left in it would be emitted again next time. The assets collector is the
     // other way round — see [`Warm::assets`].
-    Ok((warm.styles.take(), warm.assets.clone(), produced))
+    Ok((
+        warm.styles.take(),
+        warm.assets.clone(),
+        produced,
+        warm.modules.clone(),
+    ))
 }
 
 /// Copies a target's `assets` into its output directory, and reports how many.
@@ -2493,6 +2528,7 @@ async fn build_targets(
                 host.as_ref().map(|host| host.jsx()).unwrap_or_default(),
                 settings.source.jsx.clone(),
                 settings.source.tsconfig.clone(),
+                settings.source.import_policy.as_deref(),
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
@@ -2536,6 +2572,7 @@ async fn build_targets(
         let built = build(BuildConfig {
             jsx: settings.source.jsx.clone(),
             tsconfig: settings.source.tsconfig.clone(),
+            import_policy: settings.source.import_policy.clone(),
             source: target.entry.clone(),
             out,
             out_dir,
@@ -2979,6 +3016,7 @@ mod tests {
         let config = BuildConfig {
             jsx: crate::transform::JsxSettings::default(),
             tsconfig: None,
+            import_policy: None,
             source: "index.html".to_string(),
             out: None,
             out_dir: None,

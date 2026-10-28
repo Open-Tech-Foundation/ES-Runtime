@@ -59,6 +59,8 @@ pub struct Source {
     /// the root, when there is no `tsconfig.json` beside it. `None` is the
     /// resolver's own search for the `tsconfig.json` that owns each file.
     pub tsconfig: Option<PathBuf>,
+    /// The import policy each build applies to what it ships (D193).
+    pub import_policy: Option<PathBuf>,
 }
 
 /// A root `jsconfig.json` with no `tsconfig.json` beside it: what TypeScript's
@@ -109,6 +111,7 @@ impl Settings {
             has_project: true,
             source: Source {
                 tsconfig: jsconfig(&project.dir),
+                import_policy: project.import_policy,
                 root: project.dir.clone(),
                 jsx: project.jsx,
                 alias: project.alias,

@@ -31,6 +31,34 @@ everything not denied; an empty `"allow": []` and unknown keys are errors.
 Paths resolve relative to the policy file, so a committed policy means the same
 thing wherever the process is invoked from.
 
+## Three modes
+
+What a policy does with a package it does not list is written in the file:
+
+| Mode | Policy | For |
+| --- | --- | --- |
+| Deny-only | `{ "deny": ["aws-sdk"] }` | Blocking known-bad packages, allowing the rest |
+| Report | `{ "allow": [...], "unlisted": "warn" }` | Rolling a policy out: unlisted packages load and are reported |
+| Strict | `{ "allow": [...] }` (`"unlisted": "error"` is the default) | Approved code only, as payment software needs |
+
+A denied package is refused in every mode, and nothing on a command line
+changes the mode. `"@acme/*"` approves every package in a scope.
+
+## In builds
+
+A deployed application is built, and a build inlines its packages, so the
+runtime loader never resolves them. Name the policy in `esdev.json` and every
+build judges what it ships against it:
+
+```json
+{ "build": { "importPolicy": "./import-policy.json", "targets": { ... } } }
+```
+
+Every module read into each bundle is judged, browser and server alike. A
+refusal fails the build and lists every refused package at once; nothing is
+written. Build tools whose code does not ship, such as Tailwind or PostCSS, are
+never judged. See [`esdev build`](/esdev/build#import-policy).
+
 ## What it matches
 
 Matching uses the resolved, canonicalized module after the filesystem root jail.
@@ -48,11 +76,11 @@ located merely to learn its path.
   still loads nothing.
 </Callout>
 
-<Callout type="warning" title="Known gap: no integrity pinning">
+<Callout type="warning" title="Not yet: integrity pinning">
   A policy names packages and paths, not content. `"express"` says the loader
   may resolve that package; it does not prove which version or bytes were
-  audited. Lockfiles remain the install-time counterpart, and content pinning is
-  future work.
+  audited. Versioned entries, package hashes and SRI on emitted scripts are the
+  next phases of DECISIONS D193. Lockfiles remain the install-time counterpart.
 </Callout>
 
 For the capability that permits importing in the first place, see
