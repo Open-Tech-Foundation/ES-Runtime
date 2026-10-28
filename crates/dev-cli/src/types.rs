@@ -216,7 +216,7 @@ impl PackageManager {
 /// holds it. It is also the form the package's own `index.d.ts` documents, so
 /// there is one answer rather than two.
 fn wire_tsconfig() -> Result<String, String> {
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     let path = Path::new("tsconfig.json");
     let manual = format!("  add to compilerOptions:\n    \"types\": [\"{PACKAGE}\"]");
@@ -238,55 +238,136 @@ fn wire_tsconfig() -> Result<String, String> {
     }
 
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    // A tsconfig is very often JSONC — comments and trailing commas — which
-    // cannot be re-emitted from a JSON value. Rewriting it would silently delete
-    // the comments, so an unparseable file is left exactly as it is and the two
-    // lines to add are printed instead.
-    let Ok(mut config) = serde_json::from_str::<Value>(&text) else {
-        return Ok(format!(
-            "tsconfig.json looks like JSONC (comments/trailing commas) — left it untouched.\n{manual}"
-        ));
-    };
-    let Some(root) = config.as_object_mut() else {
-        return Ok(format!(
-            "tsconfig.json is not a JSON object — left it untouched.\n{manual}"
-        ));
-    };
-    let options = root.entry("compilerOptions").or_insert_with(|| json!({}));
-    let Some(options) = options.as_object_mut() else {
-        return Ok(format!(
-            "tsconfig.json compilerOptions is not an object — left it untouched.\n{manual}"
-        ));
-    };
-    let added = add_type_entry(options);
-    let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(path, format!("{text}\n")).map_err(|e| e.to_string())?;
-    Ok(if added {
-        "Updated tsconfig.json (compilerOptions.types).".into()
-    } else {
-        "tsconfig.json already loads the types.".into()
-    })
+    match add_types_entry(&text) {
+        Ok(Some(updated)) => {
+            std::fs::write(path, updated).map_err(|e| e.to_string())?;
+            Ok("Updated tsconfig.json (compilerOptions.types).".into())
+        }
+        Ok(None) => Ok("tsconfig.json already loads the types.".into()),
+        Err(why) => Ok(format!(
+            "tsconfig.json {why} — left it untouched.\n{manual}"
+        )),
+    }
 }
 
-/// Appends the package to `compilerOptions.types`, keeping whatever is there.
+/// `text`, a tsconfig, with the package appended to `compilerOptions.types`;
+/// `None` when it is there already, and why not when the file cannot take it.
 ///
-/// Returns whether anything changed, so re-running says "already" rather than
-/// claiming an edit it did not make. Existing entries are preserved: `types` is
-/// an allowlist, so dropping one would remove another package's globals.
-fn add_type_entry(options: &mut serde_json::Map<String, serde_json::Value>) -> bool {
-    use serde_json::Value;
+/// A tsconfig is JSONC — comments and trailing commas — so it is read as JSONC
+/// and changed by an edit of its text (D191), which keeps every comment and
+/// the file's layout. Existing entries are kept: `types` is an allowlist, so
+/// dropping one would remove another package's globals.
+fn add_types_entry(text: &str) -> Result<Option<String>, String> {
+    use es_runtime_json::{Dialect, Segment, edit, plan};
 
-    let entries = options
-        .entry("types")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Value::Array(entries) = entries else {
-        return false;
+    let config = read_jsonc(text).map_err(|e| format!("is not valid JSONC ({e})"))?;
+    let Some(root) = config.as_object() else {
+        return Err("is not a JSON object".into());
     };
-    if entries.iter().any(|entry| entry.as_str() == Some(PACKAGE)) {
-        return false;
+    let options = match root.get("compilerOptions") {
+        None => None,
+        Some(serde_json::Value::Object(options)) => Some(options),
+        Some(_) => return Err("compilerOptions is not an object".into()),
+    };
+    let key = |k: &'static str| Segment::Key(k.into());
+    let (path, value) = match options.and_then(|o| o.get("types")) {
+        Some(serde_json::Value::Array(entries)) => {
+            if entries.iter().any(|entry| entry.as_str() == Some(PACKAGE)) {
+                return Ok(None);
+            }
+            let path = vec![
+                key("compilerOptions"),
+                key("types"),
+                Segment::Index(entries.len()),
+            ];
+            (path, format!("\"{PACKAGE}\""))
+        }
+        Some(_) => return Err("compilerOptions.types is not an array".into()),
+        None => {
+            let path = vec![key("compilerOptions"), key("types")];
+            let plan = plan(text, Dialect::Jsonc, &path).map_err(|e| e.to_string())?;
+            let value = if plan.indent.is_empty() {
+                format!("[\"{PACKAGE}\"]")
+            } else {
+                let comma = if plan.trailing_commas { "," } else { "" };
+                format!("[\n{}\"{PACKAGE}\"{comma}\n]", plan.indent)
+            };
+            (path, value)
+        }
+    };
+    edit(text, Dialect::Jsonc, &path, Some(&value))
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// JSONC as a `serde_json` value, to look at, never to write back. A number
+/// JSON cannot hold (`1e400`) reads as `null`; a repeated key keeps its last
+/// value, as `JSON.parse` does.
+fn read_jsonc(text: &str) -> Result<serde_json::Value, String> {
+    use es_runtime_json::{Dialect, Failure, Sink, Text, parse};
+    use serde_json::{Map, Value};
+
+    #[derive(Default)]
+    struct Build {
+        stack: Vec<(Value, Option<String>)>,
+        root: Option<Value>,
     }
-    entries.push(Value::String(PACKAGE.to_string()));
-    true
+    impl Build {
+        fn put(&mut self, value: Value) -> Result<(), ()> {
+            match self.stack.last_mut() {
+                Some((Value::Array(items), _)) => items.push(value),
+                Some((Value::Object(members), key)) => {
+                    members.insert(key.take().unwrap_or_default(), value);
+                }
+                _ => self.root = Some(value),
+            }
+            Ok(())
+        }
+    }
+    impl Sink for Build {
+        type Abort = ();
+        fn null(&mut self) -> Result<(), ()> {
+            self.put(Value::Null)
+        }
+        fn bool(&mut self, b: bool) -> Result<(), ()> {
+            self.put(Value::Bool(b))
+        }
+        fn number(&mut self, n: f64) -> Result<(), ()> {
+            self.put(serde_json::Number::from_f64(n).map_or(Value::Null, Value::Number))
+        }
+        fn string(&mut self, t: Text<'_>) -> Result<(), ()> {
+            self.put(Value::String(t.to_string_lossy().into_owned()))
+        }
+        fn begin_array(&mut self) -> Result<(), ()> {
+            self.stack.push((Value::Array(Vec::new()), None));
+            Ok(())
+        }
+        fn begin_object(&mut self) -> Result<(), ()> {
+            self.stack.push((Value::Object(Map::new()), None));
+            Ok(())
+        }
+        fn key(&mut self, key: Text<'_>) -> Result<(), ()> {
+            if let Some((_, slot)) = self.stack.last_mut() {
+                *slot = Some(key.to_string_lossy().into_owned());
+            }
+            Ok(())
+        }
+        fn end_array(&mut self) -> Result<(), ()> {
+            let (value, _) = self.stack.pop().ok_or(())?;
+            self.put(value)
+        }
+        fn end_object(&mut self) -> Result<(), ()> {
+            let (value, _) = self.stack.pop().ok_or(())?;
+            self.put(value)
+        }
+    }
+
+    let mut build = Build::default();
+    match parse(text, Dialect::Jsonc, &mut build) {
+        Ok(()) => Ok(build.root.unwrap_or(Value::Null)),
+        Err(Failure::Error(e)) => Err(e.to_string()),
+        Err(Failure::Abort(())) => Err("unreadable".into()),
+    }
 }
 
 #[cfg(test)]
@@ -408,25 +489,51 @@ mod tests {
 
     #[test]
     fn the_types_entry_is_added_once_and_keeps_the_others() {
-        let mut options = serde_json::Map::new();
-        options.insert(
-            "types".into(),
-            serde_json::json!(["node", "@opentf/esrun-types"]),
-        );
-        assert!(!add_type_entry(&mut options), "it was already there");
+        let has = r#"{ "compilerOptions": { "types": ["node", "@opentf/esrun-types"] } }"#;
+        assert_eq!(add_types_entry(has), Ok(None), "it was already there");
 
-        let mut options = serde_json::Map::new();
-        options.insert("types".into(), serde_json::json!(["node"]));
-        assert!(add_type_entry(&mut options));
         assert_eq!(
-            options["types"],
-            serde_json::json!(["node", "@opentf/esrun-types"]),
+            add_types_entry(r#"{ "compilerOptions": { "types": ["node"] } }"#),
+            Ok(Some(
+                r#"{ "compilerOptions": { "types": ["node", "@opentf/esrun-types"] } }"#.into()
+            )),
             "another package's globals must survive"
         );
+        assert_eq!(
+            add_types_entry(r#"{"compilerOptions": {}}"#),
+            Ok(Some(
+                r#"{"compilerOptions": {"types": ["@opentf/esrun-types"]}}"#.into()
+            ))
+        );
+    }
 
-        let mut options = serde_json::Map::new();
-        assert!(add_type_entry(&mut options));
-        assert_eq!(options["types"], serde_json::json!(["@opentf/esrun-types"]));
+    #[test]
+    fn a_commented_tsconfig_keeps_its_comments_and_layout() {
+        let text = "{\n  // Visit https://aka.ms/tsconfig\n  \"compilerOptions\": {\n    \"strict\": true, // checked\n  },\n}\n";
+        assert_eq!(
+            add_types_entry(text).unwrap().unwrap(),
+            "{\n  // Visit https://aka.ms/tsconfig\n  \"compilerOptions\": {\n    \"strict\": true, // checked\n    \"types\": [\n      \"@opentf/esrun-types\",\n    ],\n  },\n}\n"
+        );
+        let text = "{\n    /* no options yet */\n    \"include\": [\"src\"]\n}\n";
+        assert_eq!(
+            add_types_entry(text).unwrap().unwrap(),
+            "{\n    /* no options yet */\n    \"include\": [\"src\"],\n    \"compilerOptions\": {\n        \"types\": [\n            \"@opentf/esrun-types\"\n        ]\n    }\n}\n"
+        );
+    }
+
+    #[test]
+    fn a_tsconfig_that_cannot_take_the_entry_is_left_alone() {
+        assert_eq!(add_types_entry("[]"), Err("is not a JSON object".into()));
+        assert_eq!(
+            add_types_entry(r#"{"compilerOptions": 1}"#),
+            Err("compilerOptions is not an object".into())
+        );
+        assert_eq!(
+            add_types_entry(r#"{"compilerOptions": {"types": "x"}}"#),
+            Err("compilerOptions.types is not an array".into())
+        );
+        let broken = add_types_entry("{ \"a\": }").unwrap_err();
+        assert!(broken.starts_with("is not valid JSONC ("), "{broken}");
     }
 
     /// Every declaration file must actually be published.

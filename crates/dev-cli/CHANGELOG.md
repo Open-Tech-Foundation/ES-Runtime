@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- `esdev --install-types` adds its `compilerOptions.types` entry to a
+  `tsconfig.json` with comments or trailing commas, keeping both and the
+  file's layout, where it used to leave such a file alone and print the lines
+  to add (D191). A file that is not valid JSONC is still left alone, and says
+  so.
 - The `spa`, `fullstack`, `docs` and `library` starters follow the framework's
   rename from OTF Web to [AFW](https://afw.opentechf.org): they depend on
   `@opentf/esdev-plugin-afw`, `@opentf/afw`, `@opentf/afw-docs`,

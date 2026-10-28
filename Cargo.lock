@@ -1575,6 +1575,7 @@ dependencies = [
  "es-runtime-cli-common",
  "es-runtime-common",
  "es-runtime-default-providers",
+ "es-runtime-json",
  "es-runtime-providers",
  "flate2",
  "futures-util",

@@ -17,6 +17,7 @@ path = "src/main.rs"
 # either binary, so nothing that shapes a run is reimplemented here.
 es-runtime-cli-common.workspace = true
 es-runtime-common.workspace = true
+es-runtime-json.workspace = true
 es-runtime-providers.workspace = true
 # The runtime's own `node_modules` resolution, so a package converted from
 # CommonJS imports its ES module dependencies by the same URL the runtime
