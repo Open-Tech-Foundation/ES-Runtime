@@ -293,6 +293,14 @@ impl TargetFlags {
     }
 }
 
+/// The `RUNTIME_ENV` esdev gives a program it runs, for when the environment
+/// sets none (D192): `"development"` for `esdev <file>` and the server
+/// `esdev start` runs, `"test"` for `esdev test`, as Jest sets `NODE_ENV`
+/// to `test` when it is unset. The shell or an `--env-file` always wins.
+pub fn runtime_env(mode: &str) -> Vec<(String, String)> {
+    vec![("RUNTIME_ENV".to_string(), mode.to_string())]
+}
+
 /// A module run, before the project's settings are applied to it: what the
 /// caller decides — what runs, under what grant — as opposed to what the
 /// project decides, which is how its source is read.

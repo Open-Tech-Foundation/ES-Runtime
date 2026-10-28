@@ -373,3 +373,64 @@ stderr.write("on stderr");
     assert_eq!(stdout(&out), "one|two|three|tty=false|cols=undefined");
     assert!(stderr(&out).contains("on stderr"), "{}", stderr(&out));
 }
+
+/// `environment()` (D192): `RUNTIME_ENV`, else `NODE_ENV`, else "production",
+/// with an empty value counting as unset.
+#[test]
+fn environment_reads_runtime_env_then_node_env_then_defaults_to_production() {
+    let app = write(
+        "environment.mjs",
+        "import { environment } from \"runtime:process\";\nconsole.log(environment());\n",
+    );
+    let run = |vars: &[(&str, &str)]| {
+        let mut command = esrun();
+        command.env_remove("RUNTIME_ENV").env_remove("NODE_ENV");
+        for (k, v) in vars {
+            command.env(k, v);
+        }
+        let out = command.arg(&app).output().unwrap();
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        stdout(&out).trim().to_string()
+    };
+    assert_eq!(run(&[]), "production");
+    assert_eq!(run(&[("NODE_ENV", "development")]), "development");
+    assert_eq!(
+        run(&[("RUNTIME_ENV", "staging"), ("NODE_ENV", "production")]),
+        "staging"
+    );
+    assert_eq!(run(&[("RUNTIME_ENV", ""), ("NODE_ENV", "qa")]), "qa");
+    // esrun gives a deployment nothing of its own: no default of its own either.
+    assert_eq!(run(&[("RUNTIME_ENV", "")]), "production");
+}
+
+/// The two names are all `environment()` needs, and it needs them: it reads
+/// through `env`, so the capability decides, as for any other variable.
+#[test]
+fn environment_is_gated_like_any_env_read() {
+    let app = write(
+        "environment_gate.mjs",
+        "import { environment } from \"runtime:process\";\nconsole.log(environment());\n",
+    );
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
+        .arg("--allow-env=RUNTIME_ENV,NODE_ENV")
+        .env("RUNTIME_ENV", "staging")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "staging");
+
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
+        .env("RUNTIME_ENV", "staging")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("capability denied: Env"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}

@@ -662,7 +662,10 @@ fn parse_args() -> Result<Command, String> {
         }
     }
 
-    let mut options = RunOptions::default();
+    let mut options = RunOptions {
+        env_defaults: settings::runtime_env("development"),
+        ..RunOptions::default()
+    };
     let mut permissions = Permissions::new(Baseline::Everything);
     let mut watching = false;
     let mut inspect: Option<InspectConfig> = None;
@@ -2851,6 +2854,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             permissive,
             options: RunOptions {
                 track_pending_work: config.run.detect_leaks,
+                env_defaults: settings::runtime_env("test"),
                 ..RunOptions::default()
             },
             stripper,
@@ -3056,7 +3060,10 @@ pub(crate) async fn run_tests_unisolated(
             capabilities,
             scopes,
             permissive,
-            options: RunOptions::default(),
+            options: RunOptions {
+                env_defaults: settings::runtime_env("test"),
+                ..RunOptions::default()
+            },
             stripper: TypeStripper::new(),
             extensions: guest::test_extensions(config.run.dom),
             observer: None,

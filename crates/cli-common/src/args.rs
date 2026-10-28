@@ -29,6 +29,11 @@ pub struct RunOptions {
     pub import_policy: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     pub env_override: bool,
+    /// Environment variables given to the program when neither the OS nor an
+    /// `--env-file` sets them: esdev's `RUNTIME_ENV` for the command it runs
+    /// (D192). Never set by esrun, whose programs see their deployment's
+    /// environment and nothing else.
+    pub env_defaults: Vec<(String, String)>,
     /// How long in-flight HTTP requests get to finish after an interrupt, via
     /// `--shutdown-grace` (see [`DEFAULT_SHUTDOWN_GRACE`]).
     pub shutdown_grace: Duration,
@@ -68,6 +73,7 @@ impl Default for RunOptions {
             env_file: None,
             import_policy: None,
             env_override: false,
+            env_defaults: Vec::new(),
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
             max_heap_bytes: None,
             otel_endpoint: None,

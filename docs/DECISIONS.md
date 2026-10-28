@@ -3992,3 +3992,23 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **Hjson and JSON text sequences (RFC 7464).** Little use; added when asked for.
 
 **Consequences:** `runtime:serialization` gains two namespaces and the engine two builtins. esdev can add its types entry to a commented `tsconfig.json`. A reader-facing page on the formats replaces the landing page's "JSON" tile, which pointed at `JSONL`.
+
+### D192 — `RUNTIME_ENV` names the deployment environment, read at run time, with `NODE_ENV` as the fallback · *Accepted (2026-10-28)*
+
+**Context:** "Which environment is this?" is two questions that `NODE_ENV` has been made to answer at once. One is **what kind of build the code is**: React, AFW (`packages/afw/core/dev.js`) and most npm packages branch on `process.env.NODE_ENV` so a release bundle drops their development-only code, and that only works if the value is a constant folded in at bundle time — esdev defines it from the command (`start` development, `build` production; D59). The other is **where the program is deployed** — staging, production, a review app — which picks a database, a log level, feature flags, and must come from the container at run time, because one artifact is promoted through every stage. With only `NODE_ENV`, teams either bake the stage into the bundle (a rebuild per environment) or set `NODE_ENV=staging` and silently get React's development build. Next.js and Vite document the same split (Vite: "`NODE_ENV` and modes are two different concepts"); Rails reads `RAILS_ENV`; there is no runtime-neutral name.
+
+**Decision (maintainer, 2026-10-28):**
+
+- **`RUNTIME_ENV` is the deployment environment**, a name promoted for every runtime, not only this one: code on Node, Bun or Deno reads `process.env.RUNTIME_ENV ?? process.env.NODE_ENV` and means the same thing. Its value is the operator's (`production`, `staging`, `test`, anything).
+- **`NODE_ENV` is the fallback**, so a deployment that sets only `NODE_ENV`, as most do today, is still read correctly. An empty value counts as unset in both, since container templates often write `RUNTIME_ENV=`.
+- **`runtime:process` exports `environment()`**: `RUNTIME_ENV`, else `NODE_ENV`, else `"production"`. The default is production because the unconfigured case is a deployment that forgot to say, and production is the behaviour that must not be weakened by omission. It reads through `env`, so it needs `Env` like any other read: `--allow-env=RUNTIME_ENV,NODE_ENV` grants exactly this and nothing else.
+- **esdev sets the default for the programs it runs**, only when `RUNTIME_ENV` is not already set: `development` for `esdev <file>` and `esdev start`, `test` for `esdev test` (as Jest sets `NODE_ENV` to `test` when it is unset). The shell or an `--env-file` always wins, and `--allow-env` still decides whether the program can see it.
+- **The build mode stays a constant.** `process.env.NODE_ENV` is still defined by the command and only by it, for the packages that read it; `esdev build` never defines `RUNTIME_ENV` or folds `environment()` into a bundle, because the point of the value is that the bundle does not know it.
+
+**Rejected:**
+- **Reading the shell's `NODE_ENV` to choose what `esdev build` folds in.** A production bundle would then depend on the build machine's environment, and `NODE_ENV=staging` would ship React's development build.
+- **Defining `process.env.RUNTIME_ENV` at build time.** It would bake the stage into the artifact, which is the problem this solves.
+- **A namespaced name (`ESRUN_ENV`).** The aim is one convention that Node, Bun and Deno programs can share; a runtime-specific name cannot become that.
+- **No default (returning `undefined`).** Every caller would write its own default, and some would write `"development"`.
+
+**Consequences:** `runtime:process` gains `environment()`. Frameworks such as AFW keep `NODE_ENV` for their compile-time development diagnostics and read `environment()` (or `RUNTIME_ENV ?? NODE_ENV` elsewhere) for deployment decisions.

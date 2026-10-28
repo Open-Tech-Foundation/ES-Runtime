@@ -81,7 +81,7 @@ Naming an entry builds that one, with the project's `jsx`, `resolve.alias` and
 | --- | --- |
 | **`runtime:*` stays external** | It is served by the runtime and has no file behind it. |
 | **ESM output** | The runtime has no other module system. |
-| **`process.env.NODE_ENV` is defined** | Packages branch on it before doing anything, and there is no ambient `process` global. |
+| **`process.env.NODE_ENV` is defined** | Packages branch on it before doing anything, and there is no ambient `process` global. It describes the build; where the bundle runs is [`RUNTIME_ENV`](/docs/deployment/runtime-env), read at run time and never defined here. |
 | **The `worker` condition is asserted** | Packages can select their Web-API build. |
 
 `--conditions` adds rather than replaces, so asking for one more cannot silently

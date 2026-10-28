@@ -803,8 +803,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // Read before `config` is taken apart below, and used for every agent this
     // process builds: the main one here, and each worker through `spec.limits`.
     let max_heap_bytes = options.max_heap_bytes;
-    let mut system_process =
-        SystemProcess::new(config.args).with_env(env_overlay, options.env_override);
+    let mut system_process = SystemProcess::new(config.args)
+        .with_env(env_overlay, options.env_override)
+        .with_env_defaults(options.env_defaults.clone());
     if let Some(names) = config.scopes.get(&Capability::Env) {
         system_process = system_process.with_env_allowlist(names.clone());
     }

@@ -192,6 +192,7 @@ const NAV = [
     items: [
       { title: "Overview", path: "/docs/deployment" },
       { title: "Containers", path: "/docs/deployment/containers" },
+      { title: "The RUNTIME_ENV convention", path: "/docs/deployment/runtime-env" },
       { title: "Docker Compose", path: "/docs/deployment/compose" },
       { title: "Linux server (systemd)", path: "/docs/deployment/systemd" },
       { title: "Reverse proxy and TLS", path: "/docs/deployment/proxy-and-tls" },

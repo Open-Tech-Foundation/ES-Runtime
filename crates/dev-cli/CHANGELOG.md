@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- The programs esdev runs get `RUNTIME_ENV` when the shell has not set it
+  (D192): `development` for `esdev <file>` and the server `esdev start` runs,
+  `test` under `esdev test`, so `environment()` in `runtime:process` says
+  where code is running. `esdev build` still defines only
+  `process.env.NODE_ENV`, which describes the build.
 - `esdev --install-types` adds its `compilerOptions.types` entry to a
   `tsconfig.json` with comments or trailing commas, keeping both and the
   file's layout, where it used to leave such a file alone and print the lines

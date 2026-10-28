@@ -15,6 +15,9 @@ esdev test math               # ...whose path contains "math"
 esdev test --file=x.test.ts   # exactly one file
 ```
 
+Each test runs with `RUNTIME_ENV=test` unless your shell sets one, as Jest sets
+`NODE_ENV`; see [The RUNTIME_ENV convention](/docs/deployment/runtime-env).
+
 ## JSX in tests
 
 A test file may be `.jsx` or `.tsx`. Which JSX it is comes from the project's

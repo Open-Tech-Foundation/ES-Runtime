@@ -15,6 +15,10 @@ release build in four ways and no more: `process.env.NODE_ENV` is
 a module can be replaced in place — and it is written under the dev
 directory (`.dev` by default) rather than where `esdev build` deploys.
 
+The server it runs gets `RUNTIME_ENV=development` unless your shell sets one,
+so [`environment()`](/api/process#environment-where-the-program-is-deployed)
+reports where it runs; see [The RUNTIME_ENV convention](/docs/deployment/runtime-env).
+
 On a change: rebuild, restart the server if its bundle moved, and patch the
 page — or reload it if nothing accepted the change. A change that leaves the
 build's output as it was, such as a new file nothing imports, leaves the page

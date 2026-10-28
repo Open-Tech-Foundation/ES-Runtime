@@ -23,6 +23,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `environment()` in `runtime:process`: the deployment environment, read at
+  run time — `RUNTIME_ENV`, else `NODE_ENV`, else `"production"` (D192).
+  `RUNTIME_ENV` is proposed as one name for every runtime and language, for
+  the question `NODE_ENV` has been made to answer alongside the kind of
+  build; it needs `--allow-env=RUNTIME_ENV,NODE_ENV` and nothing more.
+  `process.env.NODE_ENV` in bundles is unchanged.
 - `JSONC` and `JSON5` in `runtime:serialization` (D191), each mirroring the
   global `JSON` with `parse(text, reviver?)`, `stringify(value, replacer?,
   space?)` and `validate(text, opts?)`. `JSONC` reads JSON with comments and

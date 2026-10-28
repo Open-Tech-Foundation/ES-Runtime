@@ -30,6 +30,18 @@ declare module "runtime:process" {
   export const env: Record<string, string | Secret>;
 
   /**
+   * The deployment environment (D192): `RUNTIME_ENV`, else `NODE_ENV`, else
+   * `"production"`. An empty value counts as unset.
+   *
+   * Read at run time through {@link env}, so it needs the `env` capability —
+   * `--allow-env=RUNTIME_ENV,NODE_ENV` is enough. esdev sets `RUNTIME_ENV` to
+   * `"development"` for the programs it runs, and `"test"` under `esdev test`,
+   * unless the shell already set it. Unrelated to the `process.env.NODE_ENV` a
+   * bundler folds in, which describes the kind of build, not where it runs.
+   */
+  export function environment(): string;
+
+  /**
    * Reveal the real value of a {@link Secret}. A plain `string` is returned
    * unchanged, so `unmask(env.ANY_KEY)` is always safe.
    */
@@ -388,6 +400,7 @@ declare module "runtime:process" {
 
   const process: {
     env: typeof env;
+    environment: typeof environment;
     args: typeof args;
     parseArgs: typeof parseArgs;
     platform: typeof platform;

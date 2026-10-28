@@ -33,6 +33,12 @@ pub struct SystemProcess {
     /// When `true`, overlay entries override OS environment variables of the
     /// same name; when `false` (default), the OS value wins.
     env_override: bool,
+    /// Values for variables that neither the OS environment nor the overlay
+    /// sets, such as the `RUNTIME_ENV` esdev gives the programs it runs (D192).
+    /// Empty unless [`with_env_defaults`] is used.
+    ///
+    /// [`with_env_defaults`]: SystemProcess::with_env_defaults
+    env_defaults: Vec<(String, String)>,
     /// Variables [`Process::env`] may report. `None` ⇒ all of them. Set by
     /// [`with_env_allowlist`], which backs `esrun --allow-env=<names>`.
     ///
@@ -55,6 +61,7 @@ impl SystemProcess {
             args,
             env_overlay: Vec::new(),
             env_override: false,
+            env_defaults: Vec::new(),
             env_allow: None,
             exit: Arc::new(ExitCell::default()),
         }
@@ -68,6 +75,15 @@ impl SystemProcess {
     pub fn with_env(mut self, overlay: Vec<(String, String)>, override_os: bool) -> Self {
         self.env_overlay = overlay;
         self.env_override = override_os;
+        self
+    }
+
+    /// Fills in each of `defaults` that neither the OS environment nor the
+    /// overlay sets (or sets empty). Anything already there wins, so a shell or
+    /// an `--env-file` always decides; the allowlist still applies afterwards.
+    #[must_use]
+    pub fn with_env_defaults(mut self, defaults: Vec<(String, String)>) -> Self {
+        self.env_defaults = defaults;
         self
     }
 
@@ -112,6 +128,13 @@ impl Process for SystemProcess {
                 map.insert(k.to_string(), v.to_string());
             } else {
                 map.entry(k.to_string()).or_insert_with(|| v.to_string());
+            }
+        }
+        // An empty value counts as unset (D192): container templates write
+        // `RUNTIME_ENV=` as often as they leave it out.
+        for (k, v) in &self.env_defaults {
+            if map.get(k).is_none_or(String::is_empty) {
+                map.insert(k.clone(), v.clone());
             }
         }
         // Last, so neither the OS environment nor an --env-file overlay can
@@ -259,6 +282,44 @@ mod tests {
         let key = "ESRUN_TEST_OVERLAY_ONLY_KEY";
         let p = SystemProcess::new(vec![]).with_env(vec![(key.into(), "v1".into())], false);
         assert_eq!(get(&p.env(), key), Some("v1"));
+    }
+
+    #[test]
+    fn a_default_fills_only_what_nothing_else_sets() {
+        // Unset anywhere: the default appears. Set by the overlay: the overlay
+        // wins. Set empty: empty counts as unset (D192), so the default wins.
+        // Set by the OS: `PATH` is in every test environment, and stays.
+        let unset = "ESRUN_TEST_DEFAULT_UNSET_KEY";
+        let overlaid = "ESRUN_TEST_DEFAULT_OVERLAID_KEY";
+        let empty = "ESRUN_TEST_DEFAULT_EMPTY_KEY";
+        let p = SystemProcess::new(vec![])
+            .with_env(
+                vec![
+                    (overlaid.into(), "file".into()),
+                    (empty.into(), String::new()),
+                ],
+                false,
+            )
+            .with_env_defaults(vec![
+                (unset.into(), "default".into()),
+                (overlaid.into(), "default".into()),
+                (empty.into(), "default".into()),
+                ("PATH".into(), "default".into()),
+            ]);
+        let env = p.env();
+        assert_eq!(get(&env, unset), Some("default"));
+        assert_eq!(get(&env, overlaid), Some("file"));
+        assert_eq!(get(&env, empty), Some("default"));
+        assert_ne!(get(&env, "PATH"), Some("default"));
+    }
+
+    #[test]
+    fn the_allowlist_applies_to_defaults_too() {
+        let key = "ESRUN_TEST_DEFAULT_HIDDEN_KEY";
+        let p = SystemProcess::new(vec![])
+            .with_env_defaults(vec![(key.into(), "default".into())])
+            .with_env_allowlist(["PATH"]);
+        assert_eq!(get(&p.env(), key), None);
     }
 
     // OS-vs-overlay precedence (default OS-wins; --env-override flips it) is

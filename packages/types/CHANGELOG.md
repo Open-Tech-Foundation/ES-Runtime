@@ -15,6 +15,7 @@ itself.
 
 ### Added
 
+- `environment()` in `runtime:process` (D192).
 - `JSONC` and `JSON5` in `runtime:serialization`: `parse`, `stringify`,
   `validate` and `edit`, with `JSONPath`, `JSONReviver`, `JSONReplacer` and
   `JSON5StringifyOptions`.

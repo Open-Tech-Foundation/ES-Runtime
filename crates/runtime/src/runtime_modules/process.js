@@ -170,6 +170,23 @@ const args = seeded([], (target) => {
   Object.freeze(target);
 });
 
+// `environment()`: the deployment environment (DECISIONS D192) — `RUNTIME_ENV`,
+// else `NODE_ENV`, else "production". Read at run time through `env`, so it
+// needs `Env` like any read (`--allow-env=RUNTIME_ENV,NODE_ENV` is enough), and
+// a program that sets `env.RUNTIME_ENV` sees its own value. Empty counts as
+// unset: container templates write `RUNTIME_ENV=` as often as they omit it.
+// The default is production because the unconfigured case is a deployment that
+// forgot to say, and production is what must not be weakened by omission.
+// Unrelated to the `process.env.NODE_ENV` a bundler folds in: that is the kind
+// of build, and this is where it runs.
+function environment() {
+  for (const name of ["RUNTIME_ENV", "NODE_ENV"]) {
+    const value = env[name];
+    if (value !== undefined && value !== "") return unmask(value);
+  }
+  return "production";
+}
+
 // `platform`: the host OS — std::env::consts::OS values ("linux"/"macos"/...).
 const platform = ops.process_platform();
 
@@ -819,6 +836,7 @@ function parseArgs(config = {}) {
 
 export {
   env,
+  environment,
   args,
   parseArgs,
   stdin,
@@ -842,6 +860,7 @@ export {
 };
 export default {
   env,
+  environment,
   args,
   parseArgs,
   stdin,

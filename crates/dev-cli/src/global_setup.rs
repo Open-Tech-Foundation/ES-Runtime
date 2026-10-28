@@ -165,7 +165,10 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             capabilities,
             scopes,
             permissive,
-            options: RunOptions::default(),
+            options: RunOptions {
+                env_defaults: crate::settings::runtime_env("test"),
+                ..RunOptions::default()
+            },
             stripper: TypeStripper::new(),
             extensions: crate::guest::test_extensions(false),
             observer: None,

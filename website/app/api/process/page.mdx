@@ -28,6 +28,7 @@ import process from "runtime:process";
 
 | Export | Type | Description |
 | --- | --- | --- |
+| `environment()` | `() => string` | The deployment environment (D192): `RUNTIME_ENV`, else `NODE_ENV`, else `"production"`; an empty value counts as unset. Read at run time through `env`, so it needs `Env` — `--allow-env=RUNTIME_ENV,NODE_ENV` is enough. esdev sets `RUNTIME_ENV` to `"development"` for what it runs and `"test"` under `esdev test` when the shell has not. Unrelated to the `process.env.NODE_ENV` a bundler folds in, which describes the build. |
 | `env` | `Record<string, string \| Secret>` | Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Assigned values are coerced to strings (`env.PORT = 8080` stores `"8080"`; a symbol throws). Secret-keyed values are `Secret` wrappers (see below). |
 | `args` | `readonly string[]` | Program arguments after the runtime binary and the script (or `-e` snippet). Frozen. Excludes the executable and script path. |
 | `parseArgs(config?)` | `(config?) => { values, positionals, tokens? }` | Parse `args` against declared options — Node's `util.parseArgs`. **No capability.** |
@@ -58,6 +59,22 @@ console.log(env.HOME);      // read
 env.FEATURE_FLAG = "on";    // write (in-process only)
 delete env.SECRET;          // delete (in-process only)
 ```
+
+## environment — where the program is deployed
+
+```js
+import { environment } from "runtime:process";
+
+if (environment() === "production") {
+  // ...
+}
+```
+
+`RUNTIME_ENV` names the deployment environment, read when the program runs,
+so one build is promoted through every stage unchanged. `NODE_ENV` is read
+when `RUNTIME_ENV` is not set, and `"production"` when neither is. Grant just
+the two names with `--allow-env=RUNTIME_ENV,NODE_ENV`. See
+[The RUNTIME_ENV convention](/docs/deployment/runtime-env) for why.
 
 ## args — program arguments
 

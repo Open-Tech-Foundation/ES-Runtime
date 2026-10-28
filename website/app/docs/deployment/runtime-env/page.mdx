@@ -1,0 +1,172 @@
+---
+title: The RUNTIME_ENV convention
+description: A proposal for every runtime and language — one environment variable that names where a program is deployed, read at run time, with each stack's own variable as the fallback.
+---
+
+import { Callout } from "@opentf/afw-docs";
+
+# The RUNTIME_ENV convention
+
+Every program in a deployment has to know one thing about where it runs:
+production, staging, a review app, a developer's machine. Every stack asks for
+it under a different name, and most of them mix it up with a second, unrelated
+question. This page proposes one name for it, for any runtime and any
+language: **`RUNTIME_ENV`**.
+
+<Callout type="info" title="A proposal">
+  esrun implements it (`environment()` in
+  [`runtime:process`](/api/process#environment-where-the-program-is-deployed)), but
+  nothing here is specific to esrun. A program on Node.js, Bun, Deno, Ruby,
+  Python, Elixir, Go or .NET can follow it today with one line.
+</Callout>
+
+## One question, many names
+
+| Stack | Variable | What it decides |
+| --- | --- | --- |
+| Node.js ecosystem | `NODE_ENV` | Both what kind of build the code is and where it runs |
+| Ruby on Rails | `RAILS_ENV` | "the Rails environment (production, development, test, and so on) that Rails will run under" |
+| Elixir (Mix) | `MIX_ENV` | The build: compile-time configuration, `dev` by default |
+| ASP.NET Core | `DOTNET_ENVIRONMENT`, `ASPNETCORE_ENVIRONMENT` | The hosting environment, `Production` when neither is set |
+| Spring Boot | `spring.profiles.active` | The active profiles |
+| Flask | `FLASK_ENV` | Deprecated in 2.2 and removed in 2.3 |
+
+A platform that runs services in more than one language sets several of these
+to say one thing, and a team that adds a service in a new language learns one
+more name. A container image, a Helm chart or a Compose file cannot set "the
+environment" once and have every service read it.
+
+## Two questions, not one
+
+The names above answer two different questions, and the trouble starts where
+one variable answers both.
+
+- **What kind of build is this?** Development builds keep warnings, assertions
+  and debug helpers; release builds drop them. This is decided when the code is
+  built, and it is how React and most npm packages use `NODE_ENV`: a bundler
+  replaces `process.env.NODE_ENV` with `"production"` and the development code
+  is removed. Elixir draws the same line: `MIX_ENV` belongs to the build tool,
+  and Mix's documentation warns that `Mix.env/0` "should not be used at runtime
+  in application code", pointing to `config/runtime.exs`, which runs every time
+  a release starts. Vite says it outright: "`NODE_ENV`
+  (`process.env.NODE_ENV`) and modes are two different concepts."
+- **Where is it running?** Which database, which log level, which feature flags,
+  which error reporter. This has to be read when the program starts, because the
+  point of a build artifact is that the same one is promoted from staging to
+  production unchanged.
+
+When one variable answers both, both go wrong. Setting `NODE_ENV=staging` on a
+staging deployment gives React's development build, slower and noisier than the
+production one under test. Baking the stage into the build means rebuilding for
+every environment, and testing in staging a different artifact from the one
+that ships.
+
+## The proposal
+
+**`RUNTIME_ENV` names the environment a program is deployed in.**
+
+1. **It is read at run time**, from the process environment, when the program
+   starts. A build never writes it into an artifact.
+2. **Its value is the operator's.** Any string; `production`, `staging`,
+   `development` and `test` are the common ones. Lowercase is recommended, so
+   one comparison works everywhere.
+3. **Unset or empty means "ask the stack's own variable"**: `NODE_ENV`,
+   `RAILS_ENV`, `DOTNET_ENVIRONMENT`, whichever the program already reads.
+   Existing deployments keep working while they adopt the new name. An empty
+   value counts as unset, because deployment templates write `RUNTIME_ENV=` as
+   often as they leave it out.
+4. **With neither, it is `production`.** The case nobody configured is a
+   deployment that forgot to say, and production is the behaviour that must not
+   be weakened by an omission. ASP.NET Core defaults the same way.
+5. **Tools that start a program locally may set it, but only when it is
+   unset.** A dev server sets `development`; a test runner sets `test`, as Jest
+   sets `NODE_ENV` to `test` "if it's not already set to something else". Whatever the developer exported wins.
+6. **It is not for the build.** Keep `NODE_ENV`, `MIX_ENV` or a build flag for
+   deciding what code a build contains.
+
+## Reading it
+
+Each of these reads `RUNTIME_ENV`, then the stack's own variable where it has
+one, then defaults to `production`.
+
+```js
+// Node.js, Bun, Deno (with --allow-env)
+const runtimeEnv = process.env.RUNTIME_ENV || process.env.NODE_ENV || "production";
+```
+
+```js
+// esrun (--allow-env=RUNTIME_ENV,NODE_ENV)
+import { environment } from "runtime:process";
+const runtimeEnv = environment();
+```
+
+```python
+# Python
+import os
+runtime_env = os.environ.get("RUNTIME_ENV") or "production"
+```
+
+```go
+// Go
+runtimeEnv := os.Getenv("RUNTIME_ENV")
+if runtimeEnv == "" {
+	runtimeEnv = "production"
+}
+```
+
+```elixir
+# Elixir: config/runtime.exs, which runs each time a release starts
+import Config
+
+runtime_env =
+  case System.get_env("RUNTIME_ENV") do
+    value when value in [nil, ""] -> "production"
+    value -> value
+  end
+
+config :my_app, runtime_env: runtime_env
+```
+
+Elixir has no run-time fallback to read: `MIX_ENV` is the build's.
+
+A framework that already has its own variable, such as Rails or ASP.NET Core,
+can take `RUNTIME_ENV` as the primary input to it at startup rather than adding
+a second concept.
+
+## Setting it
+
+Set it where the deployment is described, once, for every service:
+
+```yaml
+# docker-compose.yml
+services:
+  api:
+    image: example/api
+    environment:
+      RUNTIME_ENV: staging
+```
+
+```sh
+docker run -e RUNTIME_ENV=staging example/api
+```
+
+## What it is not
+
+- **Not a secret, and not configuration.** It picks which configuration applies;
+  database URLs and keys stay in their own variables.
+- **Not a build switch.** A program that changes what code it contains based on
+  `RUNTIME_ENV` has made it a build input again. Use the build's own mode for
+  that.
+
+## In esrun and esdev
+
+- `environment()` in `runtime:process` returns `RUNTIME_ENV`, else `NODE_ENV`,
+  else `"production"`. It reads through `env`, so a deployment grants exactly
+  `--allow-env=RUNTIME_ENV,NODE_ENV`.
+- `esdev <file>` and the server `esdev start` runs get `RUNTIME_ENV=development`,
+  and `esdev test` gets `test`, unless the shell already set it.
+- `esdev build` still defines `process.env.NODE_ENV` for the packages that read
+  it, and never defines `RUNTIME_ENV`.
+
+The decision and what was rejected are in
+[DECISIONS D192](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).

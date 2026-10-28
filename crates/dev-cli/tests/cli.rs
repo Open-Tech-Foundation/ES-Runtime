@@ -20321,3 +20321,50 @@ export default {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// esdev gives the programs it runs a `RUNTIME_ENV` (D192): `development` for
+/// a run, `test` for `esdev test`, and never over one the shell set.
+#[test]
+fn esdev_sets_runtime_env_for_what_it_runs_unless_the_shell_did() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("runtime_env_default");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("env.js"),
+        "import { environment } from \"runtime:process\";\nconsole.log(environment());\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("env.test.js"),
+        "import { environment } from \"runtime:process\";\nimport { test, assertEquals } from \"runtime:test\";\n\
+         test(\"environment\", () => assertEquals(environment(), \"test\"));\n",
+    )
+    .unwrap();
+    let run = |runtime_env: Option<&str>| {
+        let mut command = esdev_in(&dir);
+        command.env_remove("RUNTIME_ENV").env_remove("NODE_ENV");
+        if let Some(value) = runtime_env {
+            command.env("RUNTIME_ENV", value);
+        }
+        let out = command.arg("env.js").output().unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(run(None), "development");
+    assert_eq!(run(Some("staging")), "staging");
+
+    let out = esdev_in(&dir)
+        .env_remove("RUNTIME_ENV")
+        .args(["test", "--file=env.test.js"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
