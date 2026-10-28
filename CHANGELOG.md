@@ -26,7 +26,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - Import policies gain `"unlisted": "error" | "warn"` and scope entries
   (`"@acme/*"`) (D193). With `"warn"`, a module the allow list does not name
   loads and is reported once per package — how an allow list is rolled out; a
-  denied module is refused in every mode.
+  denied module is refused in every mode. `allow` entries may also be objects
+  (`{ "package", "version", "integrity", "reason" }`); esrun matches them by
+  name, and `esdev build` checks the version and hash.
 - `environment()` in `runtime:process`: the deployment environment, read at
   run time — `RUNTIME_ENV`, else `NODE_ENV`, else `"production"` (D192).
   `RUNTIME_ENV` is proposed as one name for every runtime and language, for

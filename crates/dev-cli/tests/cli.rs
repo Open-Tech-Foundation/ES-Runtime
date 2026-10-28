@@ -20522,3 +20522,51 @@ fn a_policy_that_approves_everything_shipped_builds_and_a_bad_one_is_an_error() 
         "{err}"
     );
 }
+
+#[test]
+fn a_pinned_package_must_be_the_approved_version_and_files_in_every_mode() {
+    let base = r#""./src", "@acme/*", "aws-sdk""#;
+    let dir = policy_project(
+        "policy_pinned",
+        &format!(
+            r#"{{ "allow": [{base}, {{ "package": "left-pad", "version": "1.0.0", "reason": "padding" }}] }}"#
+        ),
+    );
+    let out = build_in(&dir, "server");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Another version is not the one approved, even in report mode.
+    std::fs::write(
+        dir.join("import-policy.json"),
+        format!(r#"{{ "allow": [{base}, {{ "package": "left-pad", "version": "2.0.0" }}], "unlisted": "warn" }}"#),
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("not the approved copy: left-pad@1.0.0 (approved: 2.0.0)"),
+        "{err}"
+    );
+
+    // The right version with other files is not the approved copy either.
+    std::fs::write(
+        dir.join("import-policy.json"),
+        format!(
+            r#"{{ "allow": [{base}, {{ "package": "left-pad", "version": "1.0.0",
+                "integrity": "h1:MqlKs+Ul5e3twLZxAsDHxdUENULXjG0nDnnk4B/VuZA=" }}] }}"#
+        ),
+    )
+    .unwrap();
+    let out = build_in(&dir, "server");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("left-pad@1.0.0 (its files do not match the approved integrity)"),
+        "{err}"
+    );
+}

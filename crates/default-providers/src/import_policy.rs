@@ -135,6 +135,22 @@ pub enum Unlisted {
     Warn,
 }
 
+/// An `allow` entry written as an object (D193): a package approved at a
+/// version, and optionally with the hash of its installed files.
+///
+/// Matching by name is all the runtime does with it; the version and the
+/// hash are checked by `esdev build`, where a package is chosen into a
+/// bundle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pin {
+    /// The package, as a bare specifier names it.
+    pub package: String,
+    /// The `version` its installed `package.json` must carry.
+    pub version: Option<String>,
+    /// Go's `h1:` tree hash of its installed directory.
+    pub integrity: Option<String>,
+}
+
 /// What a policy says about one module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -160,6 +176,8 @@ pub struct ImportPolicy {
     deny: Rules,
     /// What happens to a module `allow` does not name.
     unlisted: Unlisted,
+    /// The `allow` entries written as objects, in file order.
+    pins: Vec<Pin>,
     /// The packages a run has already reported under `"unlisted": "warn"`, so
     /// each is reported once rather than per module.
     reported: Mutex<HashSet<String>>,
@@ -171,6 +189,7 @@ impl Clone for ImportPolicy {
             allow: self.allow.clone(),
             deny: self.deny.clone(),
             unlisted: self.unlisted,
+            pins: self.pins.clone(),
             reported: Mutex::new(HashSet::new()),
         }
     }
@@ -207,8 +226,9 @@ impl ImportPolicy {
                 ));
             }
         }
+        let mut pins = Vec::new();
         let allow = match object.get("allow") {
-            Some(value) => Some(Rules::parse(string_list("allow", value)?, base)?),
+            Some(value) => Some(Rules::parse(allow_entries(value, &mut pins)?, base)?),
             None => None,
         };
         let deny = match object.get("deny") {
@@ -244,8 +264,19 @@ impl ImportPolicy {
             allow,
             deny,
             unlisted,
+            pins,
             reported: Mutex::new(HashSet::new()),
         })
+    }
+
+    /// The object entries approving `package`: one per approved copy, since an
+    /// install can hold two versions of a package. Empty when the package is
+    /// approved by name alone, or not at all.
+    pub fn pins(&self, package: &str) -> Vec<&Pin> {
+        self.pins
+            .iter()
+            .filter(|pin| pin.package == package)
+            .collect()
     }
 
     /// What this policy does with a module `allow` does not name.
@@ -321,6 +352,91 @@ impl ImportPolicy {
             message: format!("{what} is {why}"),
         })
     }
+}
+
+/// The `allow` list: strings, and objects approving a package at a version
+/// (D193), whose names join the strings and whose pins are collected.
+fn allow_entries(value: &Value, pins: &mut Vec<Pin>) -> Result<Vec<String>, String> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| "\"allow\" must be an array".to_string())?;
+    let mut names = Vec::new();
+    for entry in array {
+        match entry {
+            Value::String(name) => names.push(name.clone()),
+            Value::Object(fields) => {
+                let pin = pin(fields)?;
+                names.push(pin.package.clone());
+                pins.push(pin);
+            }
+            _ => {
+                return Err(
+                    "\"allow\" must contain only strings and { \"package\", … } objects"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(names)
+}
+
+fn pin(fields: &serde_json::Map<String, Value>) -> Result<Pin, String> {
+    for key in fields.keys() {
+        if !matches!(key.as_str(), "package" | "version" | "integrity" | "reason") {
+            return Err(format!(
+                "unknown key {key:?} in an \"allow\" entry \
+                 (expected \"package\", \"version\", \"integrity\" and \"reason\")"
+            ));
+        }
+    }
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match fields.get(key) {
+            None => Ok(None),
+            Some(Value::String(value)) if !value.is_empty() => Ok(Some(value.clone())),
+            Some(_) => Err(format!(
+                "an \"allow\" entry's {key:?} must be a non-empty string"
+            )),
+        }
+    };
+    let package =
+        text("package")?.ok_or_else(|| "an \"allow\" entry needs a \"package\"".to_string())?;
+    if package.starts_with('.') || package.starts_with('/') || package.contains('*') {
+        return Err(format!(
+            "an \"allow\" entry's \"package\" is one package name, not {package:?}"
+        ));
+    }
+    let integrity = text("integrity")?;
+    if let Some(hash) = &integrity
+        && !is_h1(hash)
+    {
+        return Err(format!(
+            "{package}'s \"integrity\" is not an h1: hash (\"h1:\" and 44 base64 characters): {hash:?}"
+        ));
+    }
+    // A reason is for the people reviewing the file, and need not be there;
+    // it must be text when it is.
+    if let Some(reason) = fields.get("reason")
+        && !reason.is_string()
+    {
+        return Err(format!("{package}'s \"reason\" must be a string"));
+    }
+    Ok(Pin {
+        package,
+        version: text("version")?,
+        integrity,
+    })
+}
+
+/// Whether `hash` has the shape of Go's `h1:` hash: a SHA-256 in standard
+/// base64, 43 characters and one `=`.
+fn is_h1(hash: &str) -> bool {
+    hash.strip_prefix("h1:").is_some_and(|b64| {
+        b64.len() == 44
+            && b64.ends_with('=')
+            && b64[..43]
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+    })
 }
 
 /// Reads a JSON array of strings, naming the key when it is anything else.
@@ -622,5 +738,74 @@ mod tests {
         let err =
             ImportPolicy::from_json(r#"{ "allow": ["x"], "unlisted": true }"#, &root).unwrap_err();
         assert!(err.contains("\"error\" or \"warn\""), "{err}");
+    }
+
+    const HASH: &str = "h1:MqlKs+Ul5e3twLZxAsDHxdUENULXjG0nDnnk4B/VuZA=";
+
+    #[test]
+    fn an_object_entry_approves_its_package_and_carries_its_pin() {
+        let root = temp_dir("pins");
+        let json = format!(
+            r#"{{ "allow": ["./src", {{ "package": "zod", "version": "3.23.8", "integrity": "{HASH}", "reason": "validation" }},
+                {{ "package": "zod", "version": "3.22.4" }}, {{ "package": "@acme/ui" }}] }}"#
+        );
+        let p = policy(&json, &root);
+        assert_eq!(
+            p.judge(Path::new("/proj/node_modules/zod/index.js")),
+            Verdict::Allowed
+        );
+        assert_eq!(
+            p.judge(Path::new("/proj/node_modules/@acme/ui/index.js")),
+            Verdict::Allowed
+        );
+        let pins = p.pins("zod");
+        assert_eq!(pins.len(), 2, "one entry per approved copy");
+        assert_eq!(pins[0].version.as_deref(), Some("3.23.8"));
+        assert_eq!(pins[0].integrity.as_deref(), Some(HASH));
+        assert_eq!(pins[1].integrity, None);
+        assert!(p.pins("left-pad").is_empty());
+    }
+
+    #[test]
+    fn a_malformed_object_entry_is_an_error() {
+        let root = temp_dir("pin-errors");
+        for (json, says) in [
+            (
+                r#"{ "allow": [{ "version": "1.0.0" }] }"#,
+                "needs a \"package\"",
+            ),
+            (
+                r#"{ "allow": [{ "package": "zod", "versoin": "1" }] }"#,
+                "unknown key \"versoin\"",
+            ),
+            (
+                r#"{ "allow": [{ "package": "zod", "integrity": "sha256-abc" }] }"#,
+                "not an h1: hash",
+            ),
+            (
+                r#"{ "allow": [{ "package": "zod", "version": 3 }] }"#,
+                "must be a non-empty string",
+            ),
+            (
+                r#"{ "allow": [{ "package": "zod", "reason": 1 }] }"#,
+                "\"reason\" must be a string",
+            ),
+            (
+                r#"{ "allow": [{ "package": "@acme/*" }] }"#,
+                "one package name",
+            ),
+            (
+                r#"{ "allow": [{ "package": "./src" }] }"#,
+                "one package name",
+            ),
+            (r#"{ "allow": [true] }"#, "only strings and"),
+            (
+                r#"{ "deny": [{ "package": "zod" }] }"#,
+                "must contain only strings",
+            ),
+        ] {
+            let err = ImportPolicy::from_json(json, &root).unwrap_err();
+            assert!(err.contains(says), "{json}: {err}");
+        }
     }
 }

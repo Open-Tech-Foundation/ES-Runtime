@@ -33,6 +33,11 @@ is the point, since none of the three has any business in a deployment.
   governed nothing that shipped. A refusal lists every refused package and
   writes nothing; `"unlisted": "warn"` reports instead; build tools whose code
   does not ship are never judged.
+- An import policy's `allow` entries can pin a package:
+  `{ "package": "zod", "version": "3.23.8", "integrity": "h1:…", "reason": "…" }`.
+  `esdev build` checks each shipped copy's installed version and, where
+  `integrity` is given, Go's `h1:` hash of its installed files; a mismatch
+  fails the build in every mode (D193).
 
 ### Changed
 
