@@ -91,6 +91,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - The benchmark's comparison dependencies move to Hono 4.13 and
   puppeteer-core 25.16, past advisories in Hono's `serveStatic` and in the zod
   that puppeteer pulls in; `pnpm audit` is clean. Nothing in them ships.
+- The fuzz build turns on `std` for `branches`, which turso_core brings in
+  without it. On nightly that crate then calls `core::intrinsics::abort`,
+  which nightly removed on 2026-10-27, so every fuzz run had failed to build.
 
 ## [0.44.0] - 2026-10-27
 

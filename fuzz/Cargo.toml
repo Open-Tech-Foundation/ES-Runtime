@@ -31,6 +31,17 @@ path = "../crates/json"
 path = "../crates/default-providers"
 features = ["fuzzing"]
 
+# Not used here. turso_core takes `branches` without `std`, and on a nightly
+# compiler that makes its `abort()` call `core::intrinsics::abort`, which
+# nightly removed (2026-10-27) — so every fuzz build failed before fuzzing.
+# Turning `std` on here makes it call `std::process::abort()` instead. Only
+# this crate builds on nightly; the shipped binaries build on stable, where
+# `branches` never reaches for the intrinsic.
+[dependencies.branches]
+version = "0.4"
+default-features = false
+features = ["std"]
+
 # Fuzzing is pointless without optimization, and a panic must abort so libFuzzer
 # sees it as a crash rather than an unwind that the harness swallows.
 [profile.release]
