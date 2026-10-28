@@ -1,6 +1,6 @@
 ---
 title: runtime:serialization
-description: Native parsers for JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, and Protobuf — running directly in Rust.
+description: Native parsers for JSONL, JSONC, JSON5, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, and Protobuf — running directly in Rust.
 ---
 
 import { Callout } from "@opentf/afw-docs";
@@ -10,7 +10,7 @@ import { Callout } from "@opentf/afw-docs";
 XML, YAML, TOML, CSV, MessagePack, CBOR and JSONL parse in Rust — the text or
 bytes cross the op boundary once and a JavaScript value comes back. BSON is
 encoded and decoded by the engine itself, straight from and into JavaScript
-objects. Protobuf is
+objects, and JSONC and JSON5 are parsed the same way. Protobuf is
 the exception: it is a reflective pure-JavaScript implementation, because a
 `.proto` is compiled at run time rather than by a build step.
 
@@ -22,7 +22,7 @@ the exception: it is a reflective pure-JavaScript implementation, because a
 
 ```js
 import {
-  JSONL, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, Protobuf
+  JSONL, JSONC, JSON5, XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, Protobuf
 } from "runtime:serialization";
 ```
 
@@ -38,6 +38,27 @@ optimized for large file handling natively over streams.
 | --- | --- | --- | --- |
 | `new JSONL.DecoderStream(options?)` | `TransformStream` | Parses streaming JSONL byte chunks into JS objects incrementally. Option `skipInvalid?` (boolean, default `false`): skip invalid JSON lines instead of destroying the stream; skipped lines are emitted to `decoder.onError(err)`. | `stream.pipeThrough(new JSONL.DecoderStream({ skipInvalid: true }))` |
 | `new JSONL.EncoderStream()` | `TransformStream` | Serializes a stream of JS objects into JSONL byte chunks. No options are currently supported. | `stream.pipeThrough(new JSONL.EncoderStream())` |
+
+## JSONC and JSON5
+
+JSON with comments and JSON5 (D191). Both mirror the global `JSON`.
+
+| Export | Description |
+| --- | --- |
+| `JSONC.parse(text, reviver?)` | Parses JSON with `//` and `/* */` comments and one trailing comma in an object or array; a leading byte order mark is ignored. Returns what `JSON.parse` builds from the same JSON, and runs `reviver` as it does. |
+| `JSONC.stringify(value, replacer?, space?)` | Standard JSON, exactly as `JSON.stringify` writes it: a comment cannot come from a value. |
+| `JSONC.validate(text, opts?)` | Checks the text without building a value; agrees with `parse`. `opts.detailed` returns `{ valid, error? }`. |
+| `JSON5.parse(text, reviver?)` | Parses JSON5 1.0.0: identifier keys, single-quoted and multi-line strings, hex, `Infinity`, `NaN`, leading `+`, leading and trailing decimal points, comments and trailing commas. For the JSON it shares, the value is what `JSON.parse` builds. |
+| `JSON5.stringify(value, replacer?, space?)` | Writes JSON5: ASCII identifier keys unquoted, `Infinity` and `NaN` kept, each string in whichever quote needs fewer escapes (single on a tie), and a trailing comma after each member when indenting. A value's `toJSON5()` is used before its `toJSON()`. Also takes `(value, { replacer, space, quote })`, where `quote` is `"'"` or `'"'`. |
+| `JSON5.validate(text, opts?)` | As `JSONC.validate`. |
+
+Values follow `JSON.parse`: a `__proto__` key is an own property and never sets
+the prototype, a repeated key keeps its first place and its last value, and a
+`\u` escape may spell a lone surrogate. Text that is not in the dialect is a
+`SyntaxError` whose message names it and ends `at line L column C`; nesting past
+256 levels is a `RangeError`. `JSON5.stringify` skips and refuses what
+`JSON.stringify` does: `undefined`, functions and symbols are skipped (`null` in
+an array), and a `BigInt` or a circular value is a `TypeError`.
 
 ## XML
 
@@ -293,6 +314,6 @@ value-names, and `Uint8Array` for bytes.
 
 | Error | When |
 | --- | --- |
-| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, CSV, CBOR or BSON input (an unterminated quote, a duplicate column name, a ragged row under `header`, a CBOR tag or trailing byte). |
+| `SyntaxError` | Parsing fails due to malformed XML, YAML, TOML, CSV, JSONC, JSON5, CBOR or BSON input (an unterminated quote, a duplicate column name, a ragged row under `header`, a CBOR tag or trailing byte). |
 | `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
 | `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap, YAML alias expansion). |

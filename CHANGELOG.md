@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `JSONC` and `JSON5` in `runtime:serialization` (D191), each mirroring the
+  global `JSON` with `parse(text, reviver?)`, `stringify(value, replacer?,
+  space?)` and `validate(text, opts?)`. `JSONC` reads JSON with comments and
+  trailing commas, as `tsconfig.json` and VS Code's settings are written;
+  `JSON5` reads JSON5 1.0.0. Both give back exactly what `JSON.parse` builds
+  for the JSON they share, built by the engine straight from the text.
+  `JSONC.stringify` is `JSON.stringify`; `JSON5.stringify` writes JSON5 as the
+  `json5` package does, with `toJSON5()` and a `quote` option. Errors name the
+  dialect and end `at line L column C`.
 - `es-runtime-json`, the reader behind the coming `JSONC` and `JSON5` in
   `runtime:serialization` (D191). JSONC is JSON with `//` and `/* */`
   comments and one trailing comma; JSON5 is JSON5 1.0.0 in full. One lexer

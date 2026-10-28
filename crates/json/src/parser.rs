@@ -1,6 +1,7 @@
-//! The grammar over the lexer's tokens, reported to a [`Sink`].
+//! The grammar, reported to a [`Sink`]. Punctuation is read here a byte at a
+//! time; the lexer scans scalars.
 
-use crate::lexer::{Kind, Lexer, Token};
+use crate::lexer::Lexer;
 use crate::{Dialect, Error, ErrorKind, Failure, MAX_DEPTH, Sink, Text};
 
 /// Reads `text` as `dialect` and reports each value to `sink`.
@@ -10,13 +11,12 @@ pub fn parse<S: Sink>(text: &str, dialect: Dialect, sink: &mut S) -> Result<(), 
         text,
         dialect,
     };
-    let first = parser.lexer.next()?;
-    parser.value(first, sink, 0)?;
-    let after = parser.lexer.next()?;
-    if after.kind != Kind::End {
+    parser.value(sink, 0)?;
+    if parser.lexer.peek()?.is_some() {
+        let at = parser.lexer.pos();
         return Err(parser
             .lexer
-            .error("unexpected text after the value", after.start)
+            .error("unexpected text after the value", at)
             .into());
     }
     Ok(())
@@ -26,7 +26,7 @@ pub fn parse<S: Sink>(text: &str, dialect: Dialect, sink: &mut S) -> Result<(), 
 pub fn validate(text: &str, dialect: Dialect) -> Result<(), Error> {
     match parse(text, dialect, &mut Discard) {
         Ok(()) => Ok(()),
-        Err(Failure::Error(error)) => Err(error),
+        Err(Failure::Error(error)) => Err(*error),
         Err(Failure::Abort(never)) => match never {},
     }
 }
@@ -39,43 +39,57 @@ struct Parser<'a> {
 
 type Parsed<A> = Result<(), Failure<A>>;
 
+/// Whether `b` can start a bare word: a JSONC literal, or a JSON5 identifier.
+fn starts_word(b: u8, json5: bool) -> bool {
+    b.is_ascii_alphabetic() || (json5 && matches!(b, b'$' | b'_' | b'\\' | 0x80..))
+}
+
 impl<'a> Parser<'a> {
-    fn value<S: Sink>(&mut self, token: Token<'a>, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
+    fn value<S: Sink>(&mut self, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
         let abort = Failure::Abort;
-        match token.kind {
-            Kind::BeginObject => self.object(token.start, sink, depth + 1),
-            Kind::BeginArray => self.array(token.start, sink, depth + 1),
-            Kind::String(text) => sink.string(text).map_err(abort),
-            Kind::Number(n) => sink.number(n).map_err(abort),
-            Kind::Name {
-                text: Text::Str(word),
-                escaped: false,
-            } => match &*word {
-                "true" => sink.bool(true).map_err(abort),
-                "false" => sink.bool(false).map_err(abort),
-                "null" => sink.null().map_err(abort),
-                "Infinity" if self.dialect == Dialect::Json5 => {
-                    sink.number(f64::INFINITY).map_err(abort)
+        let json5 = self.lexer.json5();
+        let b = self.next_byte("a value")?;
+        let at = self.lexer.pos();
+        match b {
+            b'{' => self.object(sink, depth + 1),
+            b'[' => self.array(sink, depth + 1),
+            b'"' => {
+                let text = self.lexer.string(b'"')?;
+                sink.string(text).map_err(abort)
+            }
+            b'\'' if json5 => {
+                let text = self.lexer.string(b'\'')?;
+                sink.string(text).map_err(abort)
+            }
+            b'-' | b'0'..=b'9' => {
+                let n = self.lexer.number()?;
+                sink.number(n).map_err(abort)
+            }
+            b'+' | b'.' if json5 => {
+                let n = self.lexer.number()?;
+                sink.number(n).map_err(abort)
+            }
+            _ if starts_word(b, json5) => {
+                let (word, escaped) = self.lexer.word()?;
+                match (&word, escaped) {
+                    (Text::Str(word), false) => match &**word {
+                        "true" => sink.bool(true).map_err(abort),
+                        "false" => sink.bool(false).map_err(abort),
+                        "null" => sink.null().map_err(abort),
+                        "Infinity" if json5 => sink.number(f64::INFINITY).map_err(abort),
+                        "NaN" if json5 => sink.number(f64::NAN).map_err(abort),
+                        _ => Err(self.expected("a value", at)),
+                    },
+                    _ => Err(self.expected("a value", at)),
                 }
-                "NaN" if self.dialect == Dialect::Json5 => sink.number(f64::NAN).map_err(abort),
-                _ => Err(self.expected("a value", token.start)),
-            },
-            Kind::End => Err(self
-                .lexer
-                .error("unexpected end of the text", token.start)
-                .into()),
-            _ => Err(self.expected("a value", token.start)),
+            }
+            _ => Err(self.expected("a value", at)),
         }
     }
 
     fn expected<A>(&self, what: &str, at: usize) -> Failure<A> {
         let found = match self.text[at..].chars().next() {
-            None => {
-                return self
-                    .lexer
-                    .error(format!("expected {what}, found the end of the text"), at)
-                    .into();
-            }
+            None => "the end of the text".to_owned(),
             Some(c) if c.is_control() => format!("U+{:04X}", u32::from(c)),
             Some(c) => format!("'{}'", self.token_text(at, c)),
         };
@@ -95,13 +109,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn enter<A>(&self, depth: usize, at: usize) -> Result<(), Failure<A>> {
+    fn enter<A>(&self, depth: usize) -> Result<(), Failure<A>> {
         if depth > MAX_DEPTH {
             return Err(Error::new(
                 ErrorKind::Depth,
                 format!("the text nests more than {MAX_DEPTH} levels deep"),
                 self.text,
-                at,
+                self.lexer.pos(),
                 self.dialect,
             )
             .into());
@@ -109,68 +123,88 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn object<S: Sink>(&mut self, start: usize, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
-        self.enter(depth, start)?;
+    /// The byte the next token starts with; at the end of the text, an error
+    /// naming what was expected there.
+    #[inline]
+    fn next_byte<A>(&mut self, what: &str) -> Result<u8, Failure<A>> {
+        match self.lexer.peek()? {
+            Some(b) => Ok(b),
+            None if what == "a value" => {
+                let at = self.lexer.pos();
+                Err(self.lexer.error("unexpected end of the text", at).into())
+            }
+            None => Err(self.expected(what, self.lexer.pos())),
+        }
+    }
+
+    fn object<S: Sink>(&mut self, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
+        self.enter(depth)?;
+        self.lexer.bump();
         sink.begin_object().map_err(Failure::Abort)?;
-        let mut token = self.lexer.next()?;
-        if token.kind == Kind::EndObject {
+        if self.lexer.peek()? == Some(b'}') {
+            self.lexer.bump();
             return sink.end_object().map_err(Failure::Abort);
         }
+        let json5 = self.lexer.json5();
         loop {
-            let key = match token.kind {
-                Kind::String(text) => text,
-                Kind::Name { text, .. } if self.dialect == Dialect::Json5 => text,
-                Kind::Name { .. } => {
+            let b = self.next_byte("a property name")?;
+            let at = self.lexer.pos();
+            let key = match b {
+                b'"' => self.lexer.string(b'"')?,
+                b'\'' if json5 => self.lexer.string(b'\'')?,
+                _ if json5 && starts_word(b, true) => self.lexer.word()?.0,
+                _ if b.is_ascii_alphabetic() => {
                     return Err(self
                         .lexer
-                        .error(
-                            "a property name must be a double-quoted string",
-                            token.start,
-                        )
+                        .error("a property name must be a double-quoted string", at)
                         .into());
                 }
-                _ => return Err(self.expected("a property name", token.start)),
+                _ => return Err(self.expected("a property name", at)),
             };
             sink.key(key).map_err(Failure::Abort)?;
-            let colon = self.lexer.next()?;
-            if colon.kind != Kind::Colon {
-                return Err(self.expected("':' after the property name", colon.start));
+            if self.next_byte("':' after the property name")? != b':' {
+                return Err(self.expected("':' after the property name", self.lexer.pos()));
             }
-            let value = self.lexer.next()?;
-            self.value(value, sink, depth)?;
-            let after = self.lexer.next()?;
-            match after.kind {
-                Kind::EndObject => break,
-                Kind::Comma => {}
-                _ => return Err(self.expected("',' or '}'", after.start)),
+            self.lexer.bump();
+            self.value(sink, depth)?;
+            match self.next_byte("',' or '}'")? {
+                b'}' => {
+                    self.lexer.bump();
+                    break;
+                }
+                b',' => self.lexer.bump(),
+                _ => return Err(self.expected("',' or '}'", self.lexer.pos())),
             }
             // One trailing comma may close the object.
-            token = self.lexer.next()?;
-            if token.kind == Kind::EndObject {
+            if self.lexer.peek()? == Some(b'}') {
+                self.lexer.bump();
                 break;
             }
         }
         sink.end_object().map_err(Failure::Abort)
     }
 
-    fn array<S: Sink>(&mut self, start: usize, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
-        self.enter(depth, start)?;
+    fn array<S: Sink>(&mut self, sink: &mut S, depth: usize) -> Parsed<S::Abort> {
+        self.enter(depth)?;
+        self.lexer.bump();
         sink.begin_array().map_err(Failure::Abort)?;
-        let mut token = self.lexer.next()?;
-        if token.kind == Kind::EndArray {
+        if self.lexer.peek()? == Some(b']') {
+            self.lexer.bump();
             return sink.end_array().map_err(Failure::Abort);
         }
         loop {
-            self.value(token, sink, depth)?;
-            let after = self.lexer.next()?;
-            match after.kind {
-                Kind::EndArray => break,
-                Kind::Comma => {}
-                _ => return Err(self.expected("',' or ']'", after.start)),
+            self.value(sink, depth)?;
+            match self.next_byte("',' or ']'")? {
+                b']' => {
+                    self.lexer.bump();
+                    break;
+                }
+                b',' => self.lexer.bump(),
+                _ => return Err(self.expected("',' or ']'", self.lexer.pos())),
             }
             // One trailing comma may close the array.
-            token = self.lexer.next()?;
-            if token.kind == Kind::EndArray {
+            if self.lexer.peek()? == Some(b']') {
+                self.lexer.bump();
                 break;
             }
         }

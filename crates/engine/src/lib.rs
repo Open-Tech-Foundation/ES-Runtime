@@ -38,6 +38,7 @@ pub mod diagnostics;
 mod engine;
 pub mod error;
 pub mod inspector;
+mod json;
 mod module;
 pub mod op;
 mod serialize;

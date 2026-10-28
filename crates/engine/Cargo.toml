@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-bson.workspace = true
+es-runtime-json.workspace = true
 v8.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

@@ -800,6 +800,7 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     });
     refs.extend(crate::text::external_references());
     refs.extend(crate::bson::external_references());
+    refs.extend(crate::json::external_references());
     std::borrow::Cow::Owned(refs)
 }
 

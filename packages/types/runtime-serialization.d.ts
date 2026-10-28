@@ -397,6 +397,66 @@ declare module "runtime:serialization" {
     }
   }
 
+  /** What `JSON.parse` takes as a reviver: called on each value after its children; `undefined` removes the value. */
+  export type JSONReviver = (this: any, key: string, value: any) => any;
+
+  /** What `JSON.stringify` takes as a replacer: a function, or the property names to keep. */
+  export type JSONReplacer = ((this: any, key: string, value: any) => any) | readonly (string | number)[] | null;
+
+  /**
+   * JSON with comments (D191): RFC 8259 JSON plus line (`//`) and block comments and
+   * one trailing comma in an object or array, as `tsconfig.json` and VS Code's
+   * settings are written. A leading byte order mark is ignored.
+   */
+  export namespace JSONC {
+    /**
+     * Parses JSONC into the value `JSON.parse` would build from the same JSON.
+     * @throws {SyntaxError} the text is not JSONC; the message ends `at line L column C`.
+     * @throws {RangeError} the text nests more than 256 levels deep.
+     */
+    export function parse(text: string, reviver?: JSONReviver): any;
+
+    /** Writes standard JSON, exactly as `JSON.stringify` does: a comment cannot come from a value. */
+    export function stringify(value: unknown, replacer?: JSONReplacer, space?: string | number | null): string;
+
+    /** Checks the text without building a value; agrees with `parse`. */
+    export function validate(text: string, options?: ValidationOptions): boolean | ValidationDetailedResult;
+  }
+
+  export interface JSON5StringifyOptions {
+    replacer?: JSONReplacer;
+    space?: string | number | null;
+    /** The quote for every string. By default each string takes whichever needs fewer escapes, single on a tie. */
+    quote?: "'" | '"';
+  }
+
+  /**
+   * JSON5 1.0.0 (D191): unquoted keys, single-quoted and multi-line strings,
+   * hex, `Infinity` and `NaN`, leading and trailing decimal points, comments
+   * and trailing commas.
+   */
+  export namespace JSON5 {
+    /**
+     * Parses JSON5. For the JSON it shares, the value is what `JSON.parse` builds.
+     * @throws {SyntaxError} the text is not JSON5; the message ends `at line L column C`.
+     * @throws {RangeError} the text nests more than 256 levels deep.
+     */
+    export function parse(text: string, reviver?: JSONReviver): any;
+
+    /**
+     * Writes JSON5, as the `json5` package does: ASCII identifier keys unquoted,
+     * `Infinity` and `NaN` kept, and a trailing comma after each member when
+     * indenting. A value's `toJSON5()` is preferred to its `toJSON()`.
+     * Returns `undefined` for a value `JSON.stringify` would skip.
+     * @throws {TypeError} a `BigInt`, or a circular value.
+     */
+    export function stringify(value: unknown, replacer?: JSONReplacer, space?: string | number | null): string;
+    export function stringify(value: unknown, options: JSON5StringifyOptions): string;
+
+    /** Checks the text without building a value; agrees with `parse`. */
+    export function validate(text: string, options?: ValidationOptions): boolean | ValidationDetailedResult;
+  }
+
   export interface ProtobufSchemaOptions {
     /** Entry filename when the schema is given as a file map. */
     entry?: string;

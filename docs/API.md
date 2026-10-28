@@ -2939,13 +2939,13 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:serialization`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, MessagePack, CBOR, BSON, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, CSV, JSONL, JSONC, JSON5, MessagePack, CBOR, BSON, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, CSV, MessagePack, CBOR, BSON, Protobuf } from "runtime:serialization";
+import { XML, YAML, TOML, CSV, JSONC, JSON5, MessagePack, CBOR, BSON, Protobuf } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
@@ -3235,6 +3235,26 @@ For JSONL, it provides transform streams under the `JSONL` namespace:
 | `new JSONL.DecoderStream()` | A `TransformStream` that parses lines of JSON. |
 | `new JSONL.EncoderStream()` | A `TransformStream` that stringifies objects to JSON lines. |
 
+For JSON with comments and JSON5 (D191), `JSONC` and `JSON5` mirror the global
+`JSON`:
+
+| Export | Description |
+| --- | --- |
+| `JSONC.parse(text, reviver?)` | Parses JSON with `//` and `/* */` comments and one trailing comma in an object or array; a leading byte order mark is ignored. Returns what `JSON.parse` builds from the same JSON, and runs `reviver` as it does. |
+| `JSONC.stringify(value, replacer?, space?)` | Standard JSON, exactly as `JSON.stringify` writes it: a comment cannot come from a value. |
+| `JSONC.validate(text, opts?)` | Checks the text without building a value; agrees with `parse`. `opts.detailed` returns `{ valid, error? }`. |
+| `JSON5.parse(text, reviver?)` | Parses JSON5 1.0.0: identifier keys, single-quoted and multi-line strings, hex, `Infinity`, `NaN`, leading `+`, leading and trailing decimal points, comments and trailing commas. For the JSON it shares, the value is what `JSON.parse` builds. |
+| `JSON5.stringify(value, replacer?, space?)` | Writes JSON5: ASCII identifier keys unquoted, `Infinity` and `NaN` kept, each string in whichever quote needs fewer escapes (single on a tie), and a trailing comma after each member when indenting. A value's `toJSON5()` is used before its `toJSON()`. Also takes `(value, { replacer, space, quote })`, where `quote` is `"'"` or `'"'`. |
+| `JSON5.validate(text, opts?)` | As `JSONC.validate`. |
+
+Values follow `JSON.parse`: a `__proto__` key is an own property and never sets
+the prototype, a repeated key keeps its first place and its last value, and a
+`\u` escape may spell a lone surrogate. Text that is not in the dialect is a
+`SyntaxError` whose message names it and ends `at line L column C`; nesting past
+256 levels is a `RangeError`. `JSON5.stringify` skips and refuses what
+`JSON.stringify` does: `undefined`, functions and symbols are skipped (`null` in
+an array), and a `BigInt` or a circular value is a `TypeError`.
+
 For XML, it also provides a `DecoderStream`:
 
 | Export | Description |
@@ -3245,7 +3265,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 
 | Export | Description |
 | --- | --- |
-| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `MessagePack`, `CBOR`, `BSON`, `Protobuf`), as every other `runtime:` module provides. |
+| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `CSV`, `JSONL`, `JSONC`, `JSON5`, `MessagePack`, `CBOR`, `BSON`, `Protobuf`), as every other `runtime:` module provides. |
 
 For Protobuf, schemas are compiled from `.proto` source at runtime:
 

@@ -889,6 +889,9 @@ impl V8Engine {
             // `__bson_encode`/`__bson_decode`: BSON from and to live values,
             // which an op's marshaled arguments could not reach.
             crate::bson::install(scope, context)?;
+            // `__json_parse`/`__json_validate`: JSONC and JSON5 straight to
+            // live values, as `JSON.parse` builds them.
+            crate::json::install(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is

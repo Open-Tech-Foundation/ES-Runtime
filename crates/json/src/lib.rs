@@ -90,14 +90,15 @@ pub trait Sink {
 /// Why a parse stopped.
 #[derive(Debug)]
 pub enum Failure<A> {
-    /// The text is not in the dialect, or nests too deep.
-    Error(Error),
+    /// The text is not in the dialect, or nests too deep. Boxed, so the
+    /// results the parser returns for every token stay small.
+    Error(Box<Error>),
     /// The sink stopped it.
     Abort(A),
 }
 
-impl<A> From<Error> for Failure<A> {
-    fn from(error: Error) -> Self {
+impl<A> From<Box<Error>> for Failure<A> {
+    fn from(error: Box<Error>) -> Self {
         Failure::Error(error)
     }
 }
@@ -133,15 +134,15 @@ impl Error {
         text: &str,
         offset: usize,
         dialect: Dialect,
-    ) -> Error {
+    ) -> Box<Error> {
         let (line, column) = position(text, offset, dialect);
-        Error {
+        Box::new(Error {
             kind,
             message: message.into(),
             offset,
             line,
             column,
-        }
+        })
     }
 }
 

@@ -78,7 +78,7 @@ fn read(text: &str, dialect: Dialect) -> Result<V, Error> {
     let mut sink = Collect::default();
     match parse(text, dialect, &mut sink) {
         Ok(()) => Ok(sink.root.unwrap()),
-        Err(Failure::Error(e)) => Err(e),
+        Err(Failure::Error(e)) => Err(*e),
         Err(Failure::Abort(())) => unreachable!(),
     }
 }

@@ -135,6 +135,8 @@
     "__utf8_decode",
     "__bson_encode",
     "__bson_decode",
+    "__json_parse",
+    "__json_validate",
   ]) {
     const d = Object.getOwnPropertyDescriptor(globalThis, name);
     if (d !== undefined && d.enumerable && d.configurable) {

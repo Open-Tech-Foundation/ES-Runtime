@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `JSONC` and `JSON5` in `runtime:serialization`: `parse`, `stringify` and
+  `validate`, with `JSONReviver`, `JSONReplacer` and `JSON5StringifyOptions`.
+
 ### Changed
 
 - The `resolve()` example in `runtime:build` names `@opentf/afw`, the package

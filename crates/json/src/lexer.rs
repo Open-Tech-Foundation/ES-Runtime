@@ -1,38 +1,12 @@
-//! Tokens of JSONC and JSON5, each with the byte offset it starts at.
-//!
-//! Whitespace and comments are skipped between tokens.
+//! The scanners of JSONC and JSON5: whitespace and comments, strings,
+//! numbers and names. The parser looks at punctuation itself, one byte at a
+//! time, and calls a scanner only where a scalar starts; there is no token
+//! value in between, which is what a parser pays for on every `{`, `,` and
+//! `:` when it has one.
 
 use std::borrow::Cow;
 
 use crate::{Dialect, Error, ErrorKind, Text};
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum Kind<'a> {
-    BeginObject,
-    EndObject,
-    BeginArray,
-    EndArray,
-    Colon,
-    Comma,
-    String(Text<'a>),
-    Number(f64),
-    /// A bare word: `true`, `false` and `null` in both dialects, and in JSON5
-    /// any identifier name, which is a value only as one of those three or as
-    /// `Infinity` or `NaN`.
-    /// `escaped` says a `\u` escape spelled part of it, which keeps it a name:
-    /// `true` is the key `true`, never the value.
-    Name {
-        text: Text<'a>,
-        escaped: bool,
-    },
-    End,
-}
-
-#[derive(Debug)]
-pub(crate) struct Token<'a> {
-    pub kind: Kind<'a>,
-    pub start: usize,
-}
 
 pub(crate) struct Lexer<'a> {
     text: &'a str,
@@ -41,7 +15,7 @@ pub(crate) struct Lexer<'a> {
     dialect: Dialect,
 }
 
-type Lexed<T> = Result<T, Error>;
+pub(crate) type Lexed<T> = Result<T, Box<Error>>;
 
 impl<'a> Lexer<'a> {
     pub fn new(text: &'a str, dialect: Dialect) -> Lexer<'a> {
@@ -56,12 +30,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn error(&self, message: impl Into<String>, offset: usize) -> Error {
+    pub fn error(&self, message: impl Into<String>, offset: usize) -> Box<Error> {
         Error::new(ErrorKind::Syntax, message, self.text, offset, self.dialect)
-    }
-
-    fn json5(&self) -> bool {
-        self.dialect == Dialect::Json5
     }
 
     fn peek_char(&self) -> Option<char> {
@@ -83,7 +53,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn unexpected(&self, at: usize) -> Error {
+    pub fn unexpected(&self, at: usize) -> Box<Error> {
         if at >= self.bytes.len() {
             self.error("unexpected end of the text", at)
         } else {
@@ -132,45 +102,42 @@ impl<'a> Lexer<'a> {
         matches!(c, '\n' | '\r') || (self.json5() && matches!(c, '\u{2028}' | '\u{2029}'))
     }
 
-    pub fn next(&mut self) -> Lexed<Token<'a>> {
+    /// The byte the next token starts with, after whitespace and comments,
+    /// without consuming it; `None` at the end of the text. A `/` that does
+    /// not start a comment is refused here.
+    #[inline]
+    pub fn peek(&mut self) -> Lexed<Option<u8>> {
         self.skip_trivia()?;
-        let start = self.pos;
-        let Some(&b) = self.bytes.get(start) else {
-            return Ok(Token {
-                kind: Kind::End,
-                start,
-            });
-        };
-        let kind = match b {
-            b'{' => self.punct(Kind::BeginObject),
-            b'}' => self.punct(Kind::EndObject),
-            b'[' => self.punct(Kind::BeginArray),
-            b']' => self.punct(Kind::EndArray),
-            b':' => self.punct(Kind::Colon),
-            b',' => self.punct(Kind::Comma),
-            b'"' => Kind::String(self.string(b'"')?),
-            b'\'' if self.json5() => Kind::String(self.string(b'\'')?),
-            b'-' | b'0'..=b'9' => Kind::Number(self.number()?),
-            b'+' | b'.' if self.json5() => Kind::Number(self.number()?),
-            b'/' => return Err(self.unexpected(start)),
-            // A bare `Infinity` or `NaN` is a name here, since either may be a
-            // key; the parser reads it as a number where a value is expected.
-            _ if self.json5() => self.identifier()?,
-            b'a'..=b'z' | b'A'..=b'Z' => self.word(),
-            _ => return Err(self.unexpected(start)),
-        };
-        Ok(Token { kind, start })
+        match self.bytes.get(self.pos) {
+            Some(b'/') => Err(self.unexpected(self.pos)),
+            next => Ok(next.copied()),
+        }
     }
 
-    fn punct(&mut self, kind: Kind<'a>) -> Kind<'a> {
+    /// Where the next token starts, after a [`peek`](Self::peek).
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Consumes the one-byte token [`peek`](Self::peek) returned.
+    #[inline]
+    pub fn bump(&mut self) {
         self.pos += 1;
-        kind
     }
 
-    /// A JSONC word. Only `true`, `false` and `null` mean anything; the parser
-    /// names what was expected for any other, which reads better than an
-    /// error at its first letter.
-    fn word(&mut self) -> Kind<'a> {
+    pub fn json5(&self) -> bool {
+        self.dialect == Dialect::Json5
+    }
+
+    /// A bare word: in JSONC an ASCII word, of which only `true`, `false` and
+    /// `null` mean anything (the parser names what was expected for any other,
+    /// which reads better than an error at its first letter); in JSON5 an
+    /// identifier name. `escaped` says a `\u` escape spelled part of it, which
+    /// keeps it a name: `\u0074rue` is the key `true`, never the value.
+    pub fn word(&mut self) -> Lexed<(Text<'a>, bool)> {
+        if self.json5() {
+            return self.identifier();
+        }
         let start = self.pos;
         while self
             .bytes
@@ -179,20 +146,19 @@ impl<'a> Lexer<'a> {
         {
             self.pos += 1;
         }
-        Kind::Name {
-            text: Text::Str(Cow::Borrowed(&self.text[start..self.pos])),
-            escaped: false,
-        }
+        Ok((Text::Str(Cow::Borrowed(&self.text[start..self.pos])), false))
     }
 
     // ---- strings ------------------------------------------------------------
 
-    fn string(&mut self, quote: u8) -> Lexed<Text<'a>> {
+    /// A string starting at its opening quote, `quote`.
+    pub fn string(&mut self, quote: u8) -> Lexed<Text<'a>> {
         let start = self.pos;
         self.pos += 1;
         let body = self.pos;
         // The common case, no escape, borrows the input.
         loop {
+            self.skip_plain(quote);
             let Some(&b) = self.bytes.get(self.pos) else {
                 return Err(self.error("a string is not closed", start));
             };
@@ -208,6 +174,13 @@ impl<'a> Lexer<'a> {
         }
         let mut out = Builder::new(&self.text[body..self.pos]);
         loop {
+            let from = self.pos;
+            self.skip_plain(quote);
+            // Only a non-empty run: an empty one would end a high surrogate
+            // escape that a low one is about to complete.
+            if self.pos > from {
+                out.push_str(&self.text[from..self.pos]);
+            }
             let Some(&b) = self.bytes.get(self.pos) else {
                 return Err(self.error("a string is not closed", start));
             };
@@ -223,6 +196,18 @@ impl<'a> Lexer<'a> {
             self.string_char(b)?;
             out.push_str(&self.text[from..self.pos]);
         }
+    }
+
+    /// Steps over the run of bytes that need no attention: anything but the
+    /// quote, a backslash or a control character. A multi-byte character is
+    /// stepped over a byte at a time, since none of its bytes is ASCII.
+    fn skip_plain(&mut self, quote: u8) {
+        let rest = &self.bytes[self.pos..];
+        let run = rest
+            .iter()
+            .position(|&b| b == quote || b == b'\\' || b < 0x20)
+            .unwrap_or(rest.len());
+        self.pos += run;
     }
 
     /// Steps over one unescaped character of a string, refusing what the
@@ -309,7 +294,7 @@ impl<'a> Lexer<'a> {
 
     // ---- numbers ------------------------------------------------------------
 
-    fn number(&mut self) -> Lexed<f64> {
+    pub fn number(&mut self) -> Lexed<f64> {
         let start = self.pos;
         let value = if self.json5() {
             self.json5_number(start)?
@@ -425,7 +410,7 @@ impl<'a> Lexer<'a> {
     // ---- identifiers --------------------------------------------------------
 
     /// An ECMAScript `IdentifierName`, with `\uXXXX` escapes.
-    fn identifier(&mut self) -> Lexed<Kind<'a>> {
+    fn identifier(&mut self) -> Lexed<(Text<'a>, bool)> {
         let start = self.pos;
         let mut escaped = false;
         let mut out: Option<Builder> = None;
@@ -463,11 +448,23 @@ impl<'a> Lexer<'a> {
             Some(out) => out.finish(),
             None => Text::Str(Cow::Borrowed(&self.text[start..self.pos])),
         };
-        Ok(Kind::Name { text, escaped })
+        Ok((text, escaped))
     }
 }
 
 fn parse_decimal(text: &str) -> f64 {
+    // An integer of up to 15 digits is exact in a double, and by far the most
+    // common number; the general parser is several times slower.
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if digits.len() <= 15 && digits.bytes().all(|b| b.is_ascii_digit()) {
+        let value = digits
+            .bytes()
+            .fold(0u64, |n, b| n * 10 + u64::from(b - b'0')) as f64;
+        return if negative { -value } else { value };
+    }
     text.parse()
         .expect("the lexer passes only ECMAScript decimal literals")
 }
