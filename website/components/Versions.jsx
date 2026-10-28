@@ -2,7 +2,7 @@
 // scripts/site-versions.mjs out of the crates' Cargo.toml, so a page cannot go
 // on naming a version that was released three tags ago.
 //
-// `esrun` also has the navbar badge (otfw.config.js reads the same module).
+// `esrun` also has the navbar badge (afw.config.js reads the same module).
 // `esdev` has no such slot and is released on its own tag at its own pace, so
 // anywhere the docs pin or name a version, they need to name esdev's too.
 //

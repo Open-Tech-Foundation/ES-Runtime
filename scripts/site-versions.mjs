@@ -3,7 +3,7 @@
 //
 // There are two, released independently: `esrun` carries the workspace version
 // (crates/runtime-cli sets `version.workspace = true`), and `esdev` sets its own
-// in crates/dev-cli. Both are read here rather than in otfw.config.js because a
+// in crates/dev-cli. Both are read here rather than in afw.config.js because a
 // component that renders a version also ships to the browser, where there is no
 // filesystem to read a Cargo.toml from — the same reason src/benchmarks.js is a
 // generated module rather than a lookup.

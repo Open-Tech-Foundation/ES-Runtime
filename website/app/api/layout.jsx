@@ -1,6 +1,6 @@
-import { DocsLayout } from "@opentf/web-docs";
+import { DocsLayout } from "@opentf/afw-docs";
 
-import config from "../../otfw.config.js";
+import config from "../../afw.config.js";
 
 // Explicit sidebar tree for the /api section (mirrors the original ApiShell). A
 // single "Reference" group; passing `nav` keeps the curated order + group label.

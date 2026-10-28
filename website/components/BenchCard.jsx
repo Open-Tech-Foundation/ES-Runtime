@@ -2,7 +2,7 @@
 // horizontal split for performance and memory footprint with brand colors.
 // Used by BenchRoller for the home-page marquee.
 //
-// NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+// NOTE: the @opentf/afw compiler rewrites `.map()` into a reactive list helper,
 // so dynamic styles must be objects (a style string becomes Object.assign).
 import bench from "../src/benchmarks.js";
 import { betterLabel, winnerOf } from "../src/metric-direction.js";

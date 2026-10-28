@@ -3,7 +3,7 @@ title: Hot module replacement
 description: Keep a running page alive while esdev patches accepted modules.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # Hot module replacement
 
@@ -86,14 +86,14 @@ project's other plugins:
 
 ```json
 {
-  "plugins": ["./plugins/otfw-refresh.mjs"],
+  "plugins": ["./plugins/afw-refresh.mjs"],
   "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }
 }
 ```
 
 ```js
 export default {
-  name: "otfw-refresh",
+  name: "afw-refresh",
   jsx: { refresh: true },
   transform: {
     filter: { id: /\.[jt]sx$/ },

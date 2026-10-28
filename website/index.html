@@ -4,84 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ES Runtime — a secure, standards-based server runtime</title>
-    <meta
-      name="description"
-      content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
-    />
-    <link rel="canonical" href="https://esrun.opentechf.org/" />
+    <!-- Description, canonical, Open Graph, Twitter and JSON-LD are per page:
+         the prerender writes them from each route's `metadata` (site defaults
+         in app/layout.jsx, the homepage's own in app/page.jsx). A copy here
+         would repeat on every page and contradict the page's own. -->
     <meta name="theme-color" content="#ff7a00" />
     <link rel="icon" type="image/svg+xml" href="/img/otf-logo.svg" />
     <link rel="alternate icon" href="/img/otf-logo.svg" />
-
-    <!-- Open Graph (link unfurls: Slack, Discord, iMessage, LinkedIn, Facebook).
-         These read the served HTML head and do NOT run JavaScript, so they must
-         live here. og:image must be an absolute URL to a ~1200x630 PNG — add the
-         asset at website/public/og.png (referenced below) before relying on it. -->
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="ES-Runtime" />
-    <meta property="og:title" content="ES Runtime — a secure, standards-based server runtime" />
-    <meta
-      property="og:description"
-      content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
-    />
-    <meta property="og:url" content="https://esrun.opentechf.org/" />
-    <meta property="og:locale" content="en_US" />
-    <meta property="og:image" content="https://esrun.opentechf.org/og.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ES-Runtime — a secure, standards-based server runtime" />
-
-    <!-- Twitter / X card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="ES Runtime — a secure, standards-based server runtime" />
-    <meta
-      name="twitter:description"
-      content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
-    />
-    <meta name="twitter:image" content="https://esrun.opentechf.org/og.png" />
-
-    <!-- Structured data (schema.org). Static in the head, so search and AI
-         crawlers that don't execute JS still get a machine-readable summary. -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@graph": [
-          {
-            "@type": "WebSite",
-            "@id": "https://esrun.opentechf.org/#website",
-            "name": "ES-Runtime",
-            "url": "https://esrun.opentechf.org/",
-            "description": "V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust.",
-            "inLanguage": "en",
-            "publisher": { "@id": "https://opentechf.org/#org" }
-          },
-          {
-            "@type": "SoftwareApplication",
-            "@id": "https://esrun.opentechf.org/#software",
-            "name": "ES-Runtime",
-            "alternateName": "esrun",
-            "applicationCategory": "DeveloperApplication",
-            "operatingSystem": "Linux, macOS",
-            "url": "https://esrun.opentechf.org/",
-            "downloadUrl": "https://esrun.opentechf.org/docs/install",
-            "softwareHelp": "https://esrun.opentechf.org/docs",
-            "codeRepository": "https://github.com/Open-Tech-Foundation/ES-Runtime",
-            "programmingLanguage": ["Rust", "JavaScript"],
-            "license": "https://www.apache.org/licenses/LICENSE-2.0",
-            "description": "A secure, standards-based JavaScript runtime: V8-based, WinterTC-compliant Web APIs, ESM-only, built on Rust. Host features are exposed as asynchronous runtime: modules.",
-            "author": { "@id": "https://opentechf.org/#org" },
-            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-          },
-          {
-            "@type": "Organization",
-            "@id": "https://opentechf.org/#org",
-            "name": "Open Tech Foundation",
-            "url": "https://opentechf.org",
-            "sameAs": ["https://github.com/Open-Tech-Foundation"]
-          }
-        ]
-      }
-    </script>
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
@@ -92,7 +21,7 @@
       rel="stylesheet"
     />
     <!-- Apply the saved/system theme before first paint to avoid a flash
-         (the web-docs theme keys dark mode off `data-theme` on <html>). -->
+         (the afw-docs theme keys dark mode off `data-theme` on <html>). -->
     <script>
       (function () {
         try {
@@ -103,7 +32,7 @@
         } catch (e) {}
       })();
     </script>
-    <link rel="stylesheet" href="/app/global.css" />
+    <link rel="stylesheet" href="./app/global.css" />
   </head>
   <body>
     <div id="app"></div>
@@ -167,5 +96,6 @@
         </ul>
       </main>
     </noscript>
+    <script type="module" src="./entry.js"></script>
   </body>
 </html>

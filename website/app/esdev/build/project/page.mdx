@@ -3,7 +3,7 @@ title: Project builds
 description: Describe server, browser and prerender targets in esdev.json.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # Project builds
 
@@ -206,7 +206,7 @@ Plugins are declared once, at the top level, and every command loads them:
 {
   "plugins": [
     "./plugins/mdx.js",
-    { "module": "@otfw/compiler", "options": { "mode": "ssr" } }
+    { "module": "@opentf/esdev-plugin-afw", "options": { "mode": "ssr" } }
   ],
   "build": {
     "targets": {

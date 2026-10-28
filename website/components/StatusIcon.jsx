@@ -2,7 +2,7 @@
 // a white check), "no" (red circle with a white cross), "partial" (amber warning
 // triangle with a white "!").
 //
-// Compiler quirks to respect (@opentf/web emits SVG attributes verbatim and only
+// Compiler quirks to respect (@opentf/afw emits SVG attributes verbatim and only
 // auto-unwraps prop signals when they're read inside JSX, not in body `if`s):
 //   - branch on `status` via JSX conditionals, NOT a body `if (status === ...)`
 //     — a body read leaves `status` as the raw signal, so `=== "yes"` is always

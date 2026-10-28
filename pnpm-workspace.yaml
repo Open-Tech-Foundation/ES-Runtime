@@ -2,16 +2,13 @@ packages:
   - packages/*
   - crates/runtime/js
   - crates/dev-cli/js
-  - website
   - bench
 
-# These packages install platform binaries used by the benchmark, serialization
-# build, or website. pnpm otherwise declines lifecycle scripts until each
+# These packages install platform binaries used by the benchmark or the
+# serialization build. pnpm otherwise declines lifecycle scripts until each
 # required dependency is named here.
 allowBuilds:
   '@bufbuild/buf': true
-  '@opentf/web-compiler': true
   cbor-extract: true
   esbuild: true
   msgpackr-extract: true
-  workerd: true

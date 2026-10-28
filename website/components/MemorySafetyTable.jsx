@@ -7,7 +7,7 @@
 // a say, which in a server is the difference between one failed request and a
 // dropped process.
 //
-// NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+// NOTE: the @opentf/afw compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops.
 import bench from "../src/benchmarks.js";
 import { LABELS, ORDER } from "../src/runtimes.js";

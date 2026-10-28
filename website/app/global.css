@@ -1,13 +1,13 @@
 /* Single stylesheet entry for the site (linked from index.html).
  *
  * `@import "tailwindcss"` pulls in the framework so the CLI's Tailwind engine
- * compiles our utility classes; `@opentf/web-docs/theme` supplies the docs shell
+ * compiles our utility classes; `@opentf/afw-docs/theme` supplies the docs shell
  * (navbar, sidebar, TOC, callouts, code blocks, light/dark). Project base styles
  * and the OTF brand palette follow. */
 @import "tailwindcss";
-@import "@opentf/web-docs/theme";
+@import "@opentf/afw-docs/theme";
 
-/* Match the web-docs theme toggle (`documentElement[data-theme="dark"]`). */
+/* Match the afw-docs theme toggle (`documentElement[data-theme="dark"]`). */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* Open Tech Foundation brand: orange rgb(255, 122, 0) = #ff7a00. */
@@ -439,18 +439,18 @@ button:not(:disabled),
 }
 
 /* Footer org link (logo + name). */
-.otfw-footer {
+.afw-footer {
   background-color: #09090b;
   border-top: 1px solid #27272a;
   color: #a1a1aa;
 }
-.otfw-footer-org {
+.afw-footer-org {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
 }
-.otfw-footer-org-link {
+.afw-footer-org-link {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
@@ -458,26 +458,26 @@ button:not(:disabled),
   text-decoration: none;
   transition: color 0.2s ease;
 }
-.otfw-footer-org-link:hover {
+.afw-footer-org-link:hover {
   color: #f4f4f5;
 }
-.otfw-footer-org-link:focus-visible {
-  outline: 2px solid var(--otfw-accent);
+.afw-footer-org-link:focus-visible {
+  outline: 2px solid var(--afw-accent);
   outline-offset: 3px;
   border-radius: 0.375rem;
 }
-.otfw-footer-org-logo {
+.afw-footer-org-logo {
   display: block;
   width: 1.5rem;
   height: 1.5rem;
   flex-shrink: 0;
 }
-.otfw-footer-license {
+.afw-footer-license {
   color: #71717a;
 }
 
-/* Footer "Built with OTF Web" badge (right side). */
-.otfw-footer-badge {
+/* Footer "Built with AFW" badge (right side). */
+.afw-footer-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
@@ -493,40 +493,40 @@ button:not(:disabled),
     box-shadow 0.2s ease,
     transform 0.2s ease;
 }
-.otfw-footer-badge:hover {
+.afw-footer-badge:hover {
   border-color: #d4d4d8;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transform: translateY(-1px);
 }
-.otfw-footer-badge:focus-visible {
-  outline: 2px solid var(--otfw-accent);
+.afw-footer-badge:focus-visible {
+  outline: 2px solid var(--afw-accent);
   outline-offset: 3px;
 }
-.otfw-footer-badge-mark {
+.afw-footer-badge-mark {
   display: block;
   flex-shrink: 0;
 }
-.otfw-footer-badge-copy {
+.afw-footer-badge-copy {
   display: flex;
   flex-direction: column;
   gap: 0.05rem;
   line-height: 1.1;
 }
-.otfw-footer-badge-muted {
+.afw-footer-badge-muted {
   font-size: 0.5625rem;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #52525b;
 }
-.otfw-footer-badge-brand {
+.afw-footer-badge-brand {
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: #000000;
 }
-.otfw-footer-badge-accent {
-  color: var(--otfw-accent, #ff7a00);
+.afw-footer-badge-accent {
+  color: var(--afw-accent, #ff7a00);
 }
 
 .web-status-icon {

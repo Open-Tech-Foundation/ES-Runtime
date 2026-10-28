@@ -1,7 +1,7 @@
 // Companion chart displaying side-by-side horizontal comparison of Throughput
 // and Memory footprint for HTTP servers (Hono / static file).
 //
-// NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+// NOTE: the @opentf/afw compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops, and dynamic styles must be
 // objects (a style string becomes Object.assign(..., str)).
 import bench from "../src/benchmarks.js";

@@ -3,7 +3,7 @@ title: Static files
 description: Ship a server's pages, stylesheets and images inside its bundle, and serve them with the same path in development and production.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # Static files
 
@@ -74,7 +74,7 @@ serve({ port: 8080 }, async (request) => {
 ```
 
 - **`Content-Type`** comes from the file's extension (`file(path).type`). Set
-  the header yourself for a type the [table](/api/fs#fsfile--the-filepath-handle)
+  the header yourself for a type the [table](/api/fs#fsfile-the-file-path-handle)
   does not know.
 - **`HEAD`** is answered by `serve`: the same headers, including
   `Content-Length`, and no body.

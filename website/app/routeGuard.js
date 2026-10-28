@@ -3,7 +3,7 @@
  * 
  * Use this to protect routes, redirect users, or handle global navigation logic.
  */
-// Pages that have moved. A docs URL that has been published is a promise: the
+// Pages that have moved (public/_redirects answers the same list at the edge). A docs URL that has been published is a promise: the
 // page can move, the link cannot break. Keep an entry here for as long as the
 // old address is likely to be in someone's bookmarks or another site's markup.
 const MOVED = {

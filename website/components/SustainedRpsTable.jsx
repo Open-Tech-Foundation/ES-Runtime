@@ -13,7 +13,7 @@
 // (higher req/s is better); the change column keeps its own directional
 // colouring, since the direction is the point there, not the ranking.
 //
- // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+ // NOTE: the @opentf/afw compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops.
 import bench from "../src/benchmarks.js";
 import { LABELS, ORDER } from "../src/runtimes.js";

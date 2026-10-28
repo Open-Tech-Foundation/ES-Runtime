@@ -3,7 +3,7 @@ title: runtime:build
 description: The bundler, callable from guest JS — with real plugin hooks running in the isolate. esdev only.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # runtime:build
 
@@ -96,7 +96,7 @@ module. Synchronous.
 import { resolve } from "runtime:build";
 
 const root = new URL("./", `file://${cwd()}/`);   // cwd from runtime:process
-resolve("@opentf/web", root);                      // the project's copy of the package
+resolve("@opentf/afw", root);                      // the project's copy of the package
 resolve("./app/page.jsx", root);                   // a file in the project
 ```
 

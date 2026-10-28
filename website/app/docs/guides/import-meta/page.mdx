@@ -3,7 +3,7 @@ title: import.meta across runtimes
 description: What the standard defines on import.meta, what Node, Deno, Bun and build tools add, what esrun and esdev provide, and how to write code that runs on all of them.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # import.meta across runtimes
 
@@ -119,7 +119,7 @@ serves neither that module nor the argument:
 import { resolve } from "runtime:build";              // esdev only
 
 const root = new URL("./", `file://${cwd()}/`);    // cwd from runtime:process
-resolve("@opentf/web", root);                       // the project's copy, not the tool's
+resolve("@opentf/afw", root);                       // the project's copy, not the tool's
 ```
 
 **At build time, in esdev only:**

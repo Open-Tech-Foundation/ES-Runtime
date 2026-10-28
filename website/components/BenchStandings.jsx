@@ -5,7 +5,7 @@
 // HTTP server or fs here) — that's shown, not hidden. Unbiased by construction:
 // it's just the measured numbers, sorted.
 //
-// NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
+// NOTE: the @opentf/afw compiler rewrites `.map()` into a reactive list helper,
 // so all of the tallying below uses plain loops; `.map` appears only in render.
 import bench from "../src/benchmarks.js";
 import { isHigherBetter } from "../src/metric-direction.js";

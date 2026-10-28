@@ -1,8 +1,8 @@
-import { DocsLayout } from "@opentf/web-docs";
+import { DocsLayout } from "@opentf/afw-docs";
 
-import config from "../../otfw.config.js";
+import config from "../../afw.config.js";
 
-// The docs sidebar is an explicit tree (not the folder-derived one). web-docs
+// The docs sidebar is an explicit tree (not the folder-derived one). afw-docs
 // generates its sidebar strictly from the folder structure, but several guide
 // pages live at flat URLs (/docs/glob, /docs/process, /docs/path, /docs/http,
 // /docs/urlpattern) rather than under /docs/guides/ — so folder-derived grouping

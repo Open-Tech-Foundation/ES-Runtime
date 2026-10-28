@@ -3,16 +3,20 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@12.4.1",
   "scripts": {
-    "build": "otfw build --ssg && cp ../install.sh dist/install.sh && cp ../install.ps1 dist/install.ps1"
+    "start": "esdev start",
+    "build": "esdev build --minify && cp ../install.sh dist/install.sh && cp ../install.ps1 dist/install.ps1",
+    "preview": "esdev preview"
   },
   "dependencies": {
-    "@opentf/web": "^0.28.0",
-    "@opentf/web-docs": "^0.26.0",
+    "@opentf/afw": "^0.32.0",
+    "@opentf/afw-docs": "^0.30.0",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
-    "@opentf/web-cli": "^1.26.0",
+    "@opentf/afw-cli": "^1.30.0",
+    "@opentf/esdev-plugin-afw": "^0.4.0",
     "wrangler": "^4.147.0"
   }
 }

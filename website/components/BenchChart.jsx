@@ -2,7 +2,7 @@
 // (website/src/benchmarks.js). Displays side-by-side horizontal split for
 // metric performance and memory footprint with brand colors per runtime.
 //
-// NOTE: the @opentf/web compiler rewrites every `.map()` into a reactive list
+// NOTE: the @opentf/afw compiler rewrites every `.map()` into a reactive list
 // helper, so non-render computations must use plain loops (never `.map`), and
 // dynamic styles must be objects (a style string becomes Object.assign(...,str)).
 import bench from "../src/benchmarks.js";

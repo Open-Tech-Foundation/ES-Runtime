@@ -7,6 +7,65 @@ import SandboxDiagram from "../components/SandboxDiagram.jsx";
 import StackIcon from "../components/StackIcon.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 
+// The homepage keeps its own title rather than the template's, and carries the
+// site's structured data: search and AI crawlers read it from the static HTML.
+export const metadata = {
+  title: { absolute: "ES Runtime — a secure, standards-based server runtime" },
+  description:
+    "V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust.",
+  jsonLd: {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://esrun.opentechf.org/#website",
+        "name": "ES-Runtime",
+        "url": "https://esrun.opentechf.org/",
+        "description": "V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust.",
+        "inLanguage": "en",
+        "publisher": {
+          "@id": "https://opentechf.org/#org"
+        }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://esrun.opentechf.org/#software",
+        "name": "ES-Runtime",
+        "alternateName": "esrun",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "url": "https://esrun.opentechf.org/",
+        "downloadUrl": "https://esrun.opentechf.org/docs/install",
+        "softwareHelp": "https://esrun.opentechf.org/docs",
+        "codeRepository": "https://github.com/Open-Tech-Foundation/ES-Runtime",
+        "programmingLanguage": [
+          "Rust",
+          "JavaScript"
+        ],
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "description": "A secure, standards-based JavaScript runtime: V8-based, WinterTC-compliant Web APIs, ESM-only, built on Rust. Host features are exposed as asynchronous runtime: modules.",
+        "author": {
+          "@id": "https://opentechf.org/#org"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://opentechf.org/#org",
+        "name": "Open Tech Foundation",
+        "url": "https://opentechf.org",
+        "sameAs": [
+          "https://github.com/Open-Tech-Foundation"
+        ]
+      }
+    ]
+  },
+};
+
 // The two binaries are names, not prose. A tinted chip keeps them readable as
 // identifiers without shouting — the site's <code> rule only sets a font, which
 // left them looking like ordinary words in a sentence.

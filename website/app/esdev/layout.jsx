@@ -1,6 +1,6 @@
-import { DocsLayout } from "@opentf/web-docs";
+import { DocsLayout } from "@opentf/afw-docs";
 
-import config from "../../otfw.config.js";
+import config from "../../afw.config.js";
 
 // Explicit sidebar tree for the /esdev section. The groups follow the order in
 // which a developer normally learns the tool: start a project, build it, run

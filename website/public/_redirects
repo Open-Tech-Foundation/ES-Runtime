@@ -1,0 +1,6 @@
+# Moved pages, answered at the edge with a permanent redirect so search engines
+# move the old URL's ranking to the new one. app/routeGuard.js keeps the same
+# list for in-app navigation; change both together.
+/docs/typescript /esdev/typescript 301
+/docs/esdev /esdev 301
+/docs/esdev/* /esdev/:splat 301

@@ -3,7 +3,7 @@ title: runtime:db MongoDB
 description: The built-in MongoDB driver — connection options, the client, databases, collections, cursors, results and errors.
 ---
 
-import { Callout } from "@opentf/web-docs";
+import { Callout } from "@opentf/afw-docs";
 
 # MongoDB
 
@@ -36,7 +36,7 @@ package re-exports the driver as `driver`, with the BSON classes and the types.
 or `mongodb+srv://[user[:password]@]host[/database][?options]`.
 The hosts are seeds: from any member the client discovers the rest of the
 replica set. With `mongodb+srv://`, DNS gives the seeds; see
-[`mongodb+srv://`](#mongodbsrv). Options passed
+[`mongodb+srv://`](#mongodb-srv). Options passed
 to `connect()` win over the URL's. An option not listed here is refused with
 `ERR_DB_UNSUPPORTED` rather than ignored.
 

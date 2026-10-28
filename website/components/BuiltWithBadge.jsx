@@ -1,6 +1,6 @@
-// Footer badge linking to OTF Web. Typography is HTML for crisp spacing; the SVG
-// is only the mark (public/built-with-otf-web.svg mirrors the full badge).
-const WEB_DOCS = "https://web.opentechf.org";
+// Footer badge linking to AFW. Typography is HTML for crisp spacing; the SVG
+// is only the mark (public/built-with-afw.svg mirrors the full badge).
+const WEB_DOCS = "https://afw.opentechf.org";
 
 function DocsMark() {
   return (
@@ -10,25 +10,25 @@ function DocsMark() {
       height="22"
       viewBox="0 0 22 22"
       aria-hidden="true"
-      className="otfw-footer-badge-mark"
+      className="afw-footer-badge-mark"
     >
       <rect
         width="22"
         height="22"
         rx="6"
-        fill="var(--otfw-accent-soft)"
+        fill="var(--afw-accent-soft)"
       />
       <path
         d="M6.5 6.5h3.75v9H6.5v-9zm5.25 0H15.5v9h-3.75v-9z"
         fill="none"
-        stroke="var(--otfw-accent)"
+        stroke="var(--afw-accent)"
         stroke-width="1.35"
         stroke-linejoin="round"
       />
       <path
         d="M10.25 6.5v9M6.5 9.25h3.75M11.75 9.25H15.5M6.5 12h3.75M11.75 12H15.5"
         fill="none"
-        stroke="var(--otfw-accent)"
+        stroke="var(--afw-accent)"
         stroke-width="1.1"
         stroke-linecap="round"
         opacity="0.55"
@@ -43,14 +43,14 @@ export default function BuiltWithBadge() {
       href={WEB_DOCS}
       target="_blank"
       rel="noreferrer"
-      className="otfw-footer-badge"
-      aria-label="Built with OTF Web"
+      className="afw-footer-badge"
+      aria-label="Built with AFW"
     >
       <DocsMark />
-      <span className="otfw-footer-badge-copy">
-        <span className="otfw-footer-badge-muted">Built with</span>
-        <span className="otfw-footer-badge-brand">
-          OTF <span className="otfw-footer-badge-accent">Web</span>
+      <span className="afw-footer-badge-copy">
+        <span className="afw-footer-badge-muted">Built with</span>
+        <span className="afw-footer-badge-brand">
+          <span className="afw-footer-badge-accent">AFW</span>
         </span>
       </span>
     </a>

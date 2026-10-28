@@ -4,6 +4,12 @@
   "compatibility_date": "2026-06-15",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application",
+    // Every route is prerendered to <path>/index.html and the sitemap and
+    // canonicals name it without a trailing slash: serve /api as it is listed,
+    // rather than redirecting it to /api/.
+    "html_handling": "drop-trailing-slash",
+    // An unknown URL answers 404 with dist/404.html, not a 200 copy of the
+    // homepage that search engines would index as a duplicate.
+    "not_found_handling": "404-page",
   },
 }
