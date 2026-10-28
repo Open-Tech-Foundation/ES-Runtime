@@ -1,7 +1,7 @@
 {
   "name": "{{name}}",
   "version": "0.1.0",
-  "description": "An OTF Web component library",
+  "description": "An AFW component library",
   "type": "module",
   "scripts": {
     "test": "esdev test --dom"
@@ -14,12 +14,12 @@
     "src"
   ],
   "peerDependencies": {
-    "@opentf/web": "{{registry:@opentf/web}}"
+    "@opentf/afw": "{{registry:@opentf/afw}}"
   },
   "devDependencies": {
-    "@opentf/web": "{{registry:@opentf/web}}",
-    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
-    "@opentf/web-test": "{{registry:@opentf/web-test}}",
+    "@opentf/afw": "{{registry:@opentf/afw}}",
+    "@opentf/esdev-plugin-afw": "{{registry:@opentf/esdev-plugin-afw}}",
+    "@opentf/afw-test": "{{registry:@opentf/afw-test}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   },
   "publishConfig": {

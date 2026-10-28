@@ -116,19 +116,19 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "spa",
-        "An OTF Web single-page app — browser-only UI, static deploy, no server",
+        "An AFW single-page app — browser-only UI, static deploy, no server",
     ),
     (
         "fullstack",
-        "An OTF Web fullstack app — loaders, API routes, SSR on demand",
+        "An AFW fullstack app — loaders, API routes, SSR on demand",
     ),
     (
         "docs",
-        "An OTF Web documentation site — MDX docs, sidebar, search, optional blog",
+        "An AFW documentation site — MDX docs, sidebar, search, optional blog",
     ),
     (
         "library",
-        "An OTF Web component library — publishable components, esdev-tested",
+        "An AFW component library — publishable components, esdev-tested",
     ),
 ];
 
@@ -798,11 +798,10 @@ fn describe_modes(template: &str) -> String {
     report
 }
 
-/// The templates that come from the OTF Web starter set rather than from this
-/// repository's own stack. They build with the OTF toolchain (`otfw`, itself
-/// an ES-runtime program) instead of `esdev build`, so they carry no
-/// `esdev.json` — and they take the axes `create-web` asks about, which the
-/// shared template → mode → install flow does not have.
+/// The templates that come from the AFW starter set rather than from this
+/// repository's own stack. They build through `@opentf/esdev-plugin-afw`
+/// named in their `esdev.json`, and they take the axes `create-web` asked
+/// about, which the shared template → mode → install flow does not have.
 const OTF_TEMPLATES: &[&str] = &["spa", "fullstack", "docs", "library"];
 
 fn is_otf(template: &str) -> bool {
@@ -1183,7 +1182,7 @@ fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
     entries.get(chosen).map(|entry| entry.name)
 }
 
-/// The extra answers an OTF Web template resolved to. `None` fields are axes
+/// The extra answers an AFW template resolved to. `None` fields are axes
 /// the template does not take.
 #[derive(Debug)]
 struct Otf {
@@ -1243,7 +1242,7 @@ fn apply_otf(template: &str, otf: &Otf, files: &[(String, &[u8])]) -> Vec<(Strin
             bytes = format!("{OTF_TAILWIND_IMPORT}{text}").into_bytes();
         }
         if template == "docs" && otf.blog == Some(true) {
-            if new_path == "otfw.config.js"
+            if new_path == "afw.config.js"
                 && let Ok(text) = std::str::from_utf8(&bytes)
             {
                 bytes = otf_patch_blog_config(text).into_bytes();
@@ -1405,7 +1404,7 @@ fn otf_patch_middleware_types(content: &str, basename: &str) -> String {
         return content.to_string();
     }
     format!(
-        "import type {{ MiddlewareContext, NextFn }} from \"@opentf/web/server\";\n\n{}",
+        "import type {{ MiddlewareContext, NextFn }} from \"@opentf/afw/server\";\n\n{}",
         content.replace(
             PARAMS,
             "export default async function middleware(\n  request: Request,\n  context: MiddlewareContext,\n  next: NextFn,\n) {"
@@ -1474,7 +1473,7 @@ fn otf_patch_typescript(content: &str) -> String {
 
 /// The compiler macros are build-time, not runtime: their declarations ship
 /// as a `.d.ts` beside the sources, exactly as `create-web` writes them.
-const OTF_ENV_DTS: &str = "/** OTF Web compiler macros — provided at build time, not runtime. */
+const OTF_ENV_DTS: &str = "/** AFW compiler macros — provided at build time, not runtime. */
 declare const $state: {
   <T>(initial: T): T;
   <T>(): T | undefined;
@@ -1486,13 +1485,13 @@ declare function $effect(fn: () => void | (() => void)): void;
 /// The `tsconfig.json` beside it, with the same per-template includes.
 fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
     let (env_path, include, allow_js): (&str, Vec<&str>, bool) = match template {
-        "spa" | "fullstack" => ("app/otfw-env.d.ts", vec!["app", "tests"], false),
+        "spa" | "fullstack" => ("app/afw-env.d.ts", vec!["app", "tests"], false),
         "library" => (
-            "otfw-env.d.ts",
-            vec!["src", "tests", "index.ts", "otfw-env.d.ts"],
+            "afw-env.d.ts",
+            vec!["src", "tests", "index.ts", "afw-env.d.ts"],
             false,
         ),
-        _ => ("app/otfw-env.d.ts", vec!["app", "otfw.config.js"], true),
+        _ => ("app/afw-env.d.ts", vec!["app", "afw.config.js"], true),
     };
     let mut compiler = serde_json::json!({
         "lib": ["ESNext", "DOM", "DOM.Iterable"],
@@ -1500,7 +1499,7 @@ fn otf_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
         "module": "ESNext",
         "moduleResolution": "bundler",
         "jsx": "preserve",
-        "jsxImportSource": "@opentf/web",
+        "jsxImportSource": "@opentf/afw",
         "strict": true,
         "skipLibCheck": true,
         "noEmit": true,
@@ -1536,7 +1535,7 @@ const OTF_TAILWIND_IMPORT: &str = "@import \"tailwindcss\";\n\n";
 /// The demo blog is files on disk plus two patches; this is what "yes" adds.
 const OTF_BLOG_NAV: &str = "nav: [\n      { label: \"Docs\", href: \"/docs\" },\n      { label: \"Blog\", href: \"/blog\" },\n    ],";
 const OTF_BLOG_CONFIG: &str = "\n  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.\n  blog: {\n    dir: \"blog\",\n    lastUpdated: true,\n  },";
-const OTF_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `otfw.config.js`, and the Blog nav entry\nif you only need docs.\n";
+const OTF_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `afw.config.js`, and the Blog nav entry\nif you only need docs.\n";
 
 fn otf_patch_blog_config(content: &str) -> String {
     let mut config = content.to_string();
@@ -1565,7 +1564,7 @@ fn otf_patch_blog_page(content: &str) -> String {
 /// the trailing comma that joins it to the entry after it. Withholding the
 /// blog is withholding the files plus this entry — a plugin indexing posts
 /// that do not exist would fail the release build instead.
-const OTF_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/web-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
+const OTF_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/afw-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
 
 fn otf_patch_docs_esdev(content: &str) -> String {
     content.replace(OTF_BLOG_PLUGIN_ENTRY, "")
@@ -1606,10 +1605,10 @@ const OTF_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
 
 /// The group entry that stands in for the four OTF starters in the first
 /// menu. A name no flag spells, so it never leaks into the scriptable path.
-const OTF_GROUP: &str = "OTF Web";
-const OTF_GROUP_DESCRIPTION: &str = "OTF Web starters — SPA, fullstack, docs or library";
+const OTF_GROUP: &str = "AFW";
+const OTF_GROUP_DESCRIPTION: &str = "AFW starters — SPA, fullstack, docs or library";
 
-/// The first menu: this repository's own templates, then the OTF Web group.
+/// The first menu: this repository's own templates, then the AFW group.
 /// Pure, so a test can read what somebody choosing sees.
 fn template_menu_top() -> Vec<(&'static str, &'static str)> {
     let mut menu: Vec<(&'static str, &'static str)> = TEMPLATES
@@ -1677,12 +1676,9 @@ fn ask_template() -> Option<String> {
                 disabled: false,
             })
             .collect();
-        if let Some(chosen) = crate::prompt::select(
-            "Which OTF Web Starter?",
-            &otf,
-            None,
-            crate::prompt::OnEsc::Back,
-        ) {
+        if let Some(chosen) =
+            crate::prompt::select("Which AFW Starter?", &otf, None, crate::prompt::OnEsc::Back)
+        {
             return Some(otf[chosen].name.to_string());
         }
     }
@@ -2416,11 +2412,11 @@ mod tests {
         assert_eq!(
             registry_packages(&docs).expect("valid placeholders"),
             BTreeSet::from([
-                "@opentf/esdev-plugin-web".to_string(),
+                "@opentf/esdev-plugin-afw".to_string(),
                 "@opentf/esrun-types".to_string(),
-                "@opentf/web".to_string(),
-                "@opentf/web-cli".to_string(),
-                "@opentf/web-docs".to_string(),
+                "@opentf/afw".to_string(),
+                "@opentf/afw-cli".to_string(),
+                "@opentf/afw-docs".to_string(),
                 "tailwindcss".to_string(),
                 "typescript".to_string(),
             ])
@@ -2550,7 +2546,7 @@ mod tests {
     /// itself with the project being created.
     #[test]
     fn documents_title_themselves_with_the_project() {
-        const BRANDS: &[&str] = &["My Docs", "My Project", "OTF Web App"];
+        const BRANDS: &[&str] = &["My Docs", "My Project", "AFW App"];
         let mut documents = 0;
         for (template, files) in TEMPLATES {
             for (path, contents) in *files {
@@ -2799,7 +2795,7 @@ mod tests {
             ("ts", "TS"),
             ("css", "CSS"),
             ("tailwind", "Tailwind"),
-            ("OTF Web", "OTF Web"),
+            ("AFW", "AFW"),
             ("npm", "npm"),
         ] {
             assert_eq!(display_name(flag), label, "{flag} displays wrong");
@@ -2828,7 +2824,7 @@ mod tests {
         assert_eq!(names, OTF_ORDER);
     }
 
-    /// The OTF Web starter set is embedded whole: apps, docs with its demo
+    /// The AFW starter set is embedded whole: apps, docs with its demo
     /// blog on disk, and the library without anything Bun-only.
     #[test]
     fn the_otf_templates_are_in_the_binary() {
@@ -2852,7 +2848,7 @@ mod tests {
         let docs = resolved("docs", None);
         for expected in [
             "package.json",
-            "otfw.config.js",
+            "afw.config.js",
             "app/docs/page.mdx",
             "app/docs/_meta.js",
             "app/blog/page.jsx",
@@ -3049,7 +3045,7 @@ mod tests {
         assert!(paths.contains(&"app/layout.tsx"));
         assert!(paths.contains(&"tests/counter.test.ts"));
         assert!(paths.contains(&"tsconfig.json"));
-        assert!(paths.contains(&"app/otfw-env.d.ts"));
+        assert!(paths.contains(&"app/afw-env.d.ts"));
         assert!(!paths.contains(&"app/page.jsx"));
         assert!(!paths.contains(&"tests/counter.test.js"));
         assert!(!paths.contains(&"jsconfig.json"));
@@ -3069,7 +3065,7 @@ mod tests {
             readme.contains("app/page.tsx"),
             "the README names the file that exists: {readme}"
         );
-        let env = otf_text(&files, "app/otfw-env.d.ts");
+        let env = otf_text(&files, "app/afw-env.d.ts");
         assert!(
             env.contains("declare const $state"),
             "macros declared: {env}"
@@ -3097,14 +3093,14 @@ mod tests {
             serde_json::from_str(&otf_text(&docs, "tsconfig.json")).expect("valid JSON");
         assert_eq!(
             tsconfig["include"],
-            serde_json::json!(["app", "otfw.config.js"])
+            serde_json::json!(["app", "afw.config.js"])
         );
 
         let library = otf_written("library", "ts", None, None);
         let paths: Vec<&str> = library.iter().map(|(path, _)| path.as_str()).collect();
         assert!(paths.contains(&"index.ts"));
         assert!(paths.contains(&"src/Counter.tsx"));
-        assert!(paths.contains(&"otfw-env.d.ts"));
+        assert!(paths.contains(&"afw-env.d.ts"));
         assert!(!paths.contains(&"index.js"));
         let manifest: serde_json::Value =
             serde_json::from_str(&otf_text(&library, "package.json")).expect("valid JSON");
@@ -3138,7 +3134,7 @@ mod tests {
             assert!(
                 plugins.iter().any(|plugin| {
                     plugin.get("module").and_then(|m| m.as_str())
-                        == Some("@opentf/esdev-plugin-web")
+                        == Some("@opentf/esdev-plugin-afw")
                         && plugin
                             .get("options")
                             .and_then(|o| o.get("mode"))
@@ -3159,7 +3155,7 @@ mod tests {
             }
             assert!(
                 manifest["devDependencies"]
-                    .get("@opentf/esdev-plugin-web")
+                    .get("@opentf/esdev-plugin-afw")
                     .is_some(),
                 "{template}: the plugin is installed"
             );
@@ -3180,13 +3176,13 @@ mod tests {
         assert_eq!(options["routes"], serde_json::json!(false));
         assert_eq!(
             config["test"]["setup"],
-            serde_json::json!(["@opentf/web-test/setup"])
+            serde_json::json!(["@opentf/afw-test/setup"])
         );
     }
 
     /// The fullstack server is explicit file-convention wiring: server.js is
     /// the server target's entry — the plugin resolves framework imports in a
-    /// server build to the DOM-free `@opentf/web/server`, so nothing needs a
+    /// server build to the DOM-free `@opentf/afw/server`, so nothing needs a
     /// DOM shim ahead of it — and it registers routes, API, loaders and
     /// middleware against `/app`-rooted map keys the framework derives URLs
     /// from — keys a bundler cannot discover, so they are written, not found.
@@ -3216,7 +3212,7 @@ mod tests {
             assert!(server.contains(expected), "server.js wires {expected}");
         }
         assert!(
-            server.contains("from \"@opentf/web/server\""),
+            server.contains("from \"@opentf/afw/server\""),
             "registration comes from the server entry: {server}"
         );
         let manifest: serde_json::Value =
@@ -3301,7 +3297,7 @@ mod tests {
         let middleware = otf_text(&fullstack, "app/_middleware.ts");
         assert!(
             middleware
-                .contains("import type { MiddlewareContext, NextFn } from \"@opentf/web/server\""),
+                .contains("import type { MiddlewareContext, NextFn } from \"@opentf/afw/server\""),
             "the middleware names its types: {middleware}"
         );
         assert!(
@@ -3635,7 +3631,7 @@ mod tests {
             !bare.iter().any(|(path, _)| path.starts_with("app/blog/")),
             "no blog means no blog files"
         );
-        let config = otf_text(&bare, "otfw.config.js");
+        let config = otf_text(&bare, "afw.config.js");
         assert!(!config.contains("blog:"));
 
         let blogged = otf_written("docs", "js", None, Some(true));
@@ -3645,7 +3641,7 @@ mod tests {
                 .any(|(path, _)| path == "app/blog/hello-world/page.mdx"),
             "yes means the sample post"
         );
-        let config = otf_text(&blogged, "otfw.config.js");
+        let config = otf_text(&blogged, "afw.config.js");
         assert!(config.contains("href: \"/blog\""));
         assert!(config.contains("dir: \"blog\""));
         let page = otf_text(&blogged, "app/docs/page.mdx");

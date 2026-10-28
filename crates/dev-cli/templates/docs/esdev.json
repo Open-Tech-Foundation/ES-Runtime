@@ -1,21 +1,21 @@
 {
   "plugins": [
     {
-      "module": "@opentf/esdev-plugin-web",
+      "module": "@opentf/esdev-plugin-afw",
       "options": {
         "mode": "ssg",
         "appDir": "app"
       }
     },
     {
-      "module": "@opentf/web-docs/build",
+      "module": "@opentf/afw-docs/build",
       "export": "docsNavPlugin",
       "options": {
         "appDir": "app"
       }
     },
     {
-      "module": "@opentf/web-docs/build",
+      "module": "@opentf/afw-docs/build",
       "export": "blogPostsPlugin",
       "options": {
         "appDir": "app",
@@ -23,7 +23,7 @@
       }
     },
     {
-      "module": "@opentf/web-cli/ssg",
+      "module": "@opentf/afw-cli/ssg",
       "export": "siteOutputPlugin",
       "options": {
         "root": ".",

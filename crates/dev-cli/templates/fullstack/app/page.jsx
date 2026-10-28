@@ -1,4 +1,4 @@
-import { router } from "@opentf/web";
+import { router } from "@opentf/afw";
 
 export default function Home() {
   return (

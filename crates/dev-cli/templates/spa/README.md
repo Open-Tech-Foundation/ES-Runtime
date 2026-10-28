@@ -1,6 +1,6 @@
 # {{name}}
 
-An [OTF Web](https://web.opentechf.org) single-page app. Start with `app/page.jsx`.
+An [AFW](https://afw.opentechf.org) single-page app. Start with `app/page.jsx`.
 
 ```sh
 {{pm}} install

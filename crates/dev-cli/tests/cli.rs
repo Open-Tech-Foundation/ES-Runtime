@@ -12807,7 +12807,7 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The OTF Web starter set scaffolds through `esdev create`: four templates,
+/// The AFW starter set scaffolds through `esdev create`: four templates,
 /// each with the axes `create-web` asks about, as flags. stdin is closed
 /// throughout, so every answer here comes from a flag.
 #[test]
@@ -12830,7 +12830,7 @@ fn otf_templates_scaffold_from_flags() {
     let dir = parent.join("shop-ts");
     assert!(dir.join("app/page.tsx").is_file());
     assert!(dir.join("tsconfig.json").is_file());
-    assert!(dir.join("app/otfw-env.d.ts").is_file());
+    assert!(dir.join("app/afw-env.d.ts").is_file());
     assert!(!dir.join("app/page.jsx").exists());
     assert!(!dir.join("jsconfig.json").exists());
     let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
@@ -12887,7 +12887,7 @@ fn otf_templates_scaffold_from_flags() {
     assert!(bare.status.success(), "{}", stderr(&bare));
     let dir = parent.join("manual");
     assert!(!dir.join("app/blog").exists(), "the blog was not withheld");
-    let config = std::fs::read_to_string(dir.join("otfw.config.js")).expect("read");
+    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
     assert!(!config.contains("blog:"), "{config}");
 
     let blogged = esdev_in(&parent)
@@ -12898,7 +12898,7 @@ fn otf_templates_scaffold_from_flags() {
     assert!(blogged.status.success(), "{}", stderr(&blogged));
     let dir = parent.join("journal");
     assert!(dir.join("app/blog/hello-world/page.mdx").is_file());
-    let config = std::fs::read_to_string(dir.join("otfw.config.js")).expect("read");
+    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
     assert!(config.contains("dir: \"blog\""), "{config}");
     assert!(config.contains("title: \"journal\""), "{config}");
     let document = std::fs::read_to_string(dir.join("index.html")).expect("read");
@@ -12927,7 +12927,7 @@ fn otf_templates_scaffold_from_flags() {
     let config = std::fs::read_to_string(dir.join("esdev.json")).expect("read");
     assert!(config.contains(r#""target": "csr""#), "{config}");
     assert!(config.contains(r#""routes": false"#), "{config}");
-    assert!(config.contains("@opentf/web-test/setup"), "{config}");
+    assert!(config.contains("@opentf/afw-test/setup"), "{config}");
     let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
     assert!(
         manifest.contains(r#""test": "esdev test --dom""#),

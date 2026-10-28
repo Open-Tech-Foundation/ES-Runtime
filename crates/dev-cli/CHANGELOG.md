@@ -24,6 +24,16 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- The `spa`, `fullstack`, `docs` and `library` starters follow the framework's
+  rename from OTF Web to [AFW](https://afw.opentechf.org): they depend on
+  `@opentf/esdev-plugin-afw`, `@opentf/afw`, `@opentf/afw-docs`,
+  `@opentf/afw-cli` and `@opentf/afw-test`, the docs config is
+  `afw.config.js`, routes come from `@afw/routes`, and TypeScript projects get
+  `afw-env.d.ts`. The menu group reads "AFW". Projects scaffolded earlier keep
+  working on the `@opentf/web*` packages they were pinned to.
+
 ## [0.23.0] - 2026-10-27
 
 ### Fixed

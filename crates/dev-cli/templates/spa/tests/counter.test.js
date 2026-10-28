@@ -1,5 +1,5 @@
 import { expect, test } from "runtime:test";
-import { render } from "@opentf/web-test";
+import { render } from "@opentf/afw-test";
 import Home from "../app/page.jsx";
 
 test("the home page counts clicks", () => {

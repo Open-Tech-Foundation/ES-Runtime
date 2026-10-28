@@ -1,7 +1,7 @@
 {
   "plugins": [
     {
-      "module": "@opentf/esdev-plugin-web",
+      "module": "@opentf/esdev-plugin-afw",
       "options": { "mode": "ssr" }
     }
   ],

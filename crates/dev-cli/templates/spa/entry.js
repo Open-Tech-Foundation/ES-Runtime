@@ -1,7 +1,7 @@
 // Client entry for `esdev start` / `esdev build`.
-// The route map comes from the `@otfw/routes` virtual module; components
+// The route map comes from the `@afw/routes` virtual module; components
 // compile on load through the project's esdev plugin.
-import { mountApp } from "@opentf/web";
-import { guard, pages, loaderRoutes } from "@otfw/routes";
+import { mountApp } from "@opentf/afw";
+import { guard, pages, loaderRoutes } from "@afw/routes";
 
 mountApp({ pages, guard, loaders: loaderRoutes, target: document.getElementById("app") });

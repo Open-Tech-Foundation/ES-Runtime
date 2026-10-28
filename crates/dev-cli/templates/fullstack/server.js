@@ -14,8 +14,8 @@ import {
   registerRoutes,
   renderHead,
   renderRoute,
-} from "@opentf/web/server";
-import { pages } from "@otfw/routes";
+} from "@opentf/afw/server";
+import { pages } from "@afw/routes";
 import * as helloRoute from "./app/api/hello/route.js";
 import rootLoader from "./app/loader.js";
 import * as siteMiddleware from "./app/_middleware.js";
@@ -47,12 +47,12 @@ function injectMarkup(html, markup) {
   return html.replace(/(<div id="app"[^>]*>)\s*(<\/div>)/, (_m, open, close) => `${open}${markup}${close}`);
 }
 
-// The `data-otfw-hydrate` sentinel tells the client entry to adopt the server
+// The `data-afw-hydrate` sentinel tells the client entry to adopt the server
 // markup instead of rebuilding it.
 function stampHydrateSentinel(html) {
   return html.replace(
     /<div id="app"([^>]*)>/,
-    (m, attrs) => (/\bdata-otfw-hydrate\b/.test(attrs) ? m : `<div id="app"${attrs} data-otfw-hydrate>`),
+    (m, attrs) => (/\bdata-afw-hydrate\b/.test(attrs) ? m : `<div id="app"${attrs} data-afw-hydrate>`),
   );
 }
 
@@ -60,10 +60,10 @@ function renderDocument(shellHtml, { html, metadata, hydration, dataJson, path }
   let page = stampHydrateSentinel(injectMarkup(shellHtml, html));
   page = page.replace("</head>", () => `${renderHead(metadata ?? {}, { path })}</head>`);
   if (hydration) {
-    page = injectBeforeBody(page, `<script type="application/json" id="__otfw_h">${hydration}</script>`);
+    page = injectBeforeBody(page, `<script type="application/json" id="__afw_h">${hydration}</script>`);
   }
   if (dataJson) {
-    page = injectBeforeBody(page, `<script type="application/json" id="__otfw_data">${dataJson}</script>`);
+    page = injectBeforeBody(page, `<script type="application/json" id="__afw_data">${dataJson}</script>`);
   }
   return page;
 }

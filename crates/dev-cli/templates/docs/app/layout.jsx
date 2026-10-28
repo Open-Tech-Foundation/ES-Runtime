@@ -1,11 +1,11 @@
-import { Footer, Navbar } from "@opentf/web-docs";
-import config from "../otfw.config.js";
+import { Footer, Navbar } from "@opentf/afw-docs";
+import config from "../afw.config.js";
 
 export default function Layout(props) {
   return (
-    <div class="otfw-shell">
+    <div class="afw-shell">
       <Navbar config={config.docs} />
-      <div class="otfw-shell-body">{props.children}</div>
+      <div class="afw-shell-body">{props.children}</div>
       <Footer config={config.docs} />
     </div>
   );

@@ -1,5 +1,5 @@
-import { PostList } from "@opentf/web-docs";
-import { posts } from "@opentf/web-docs/posts";
+import { PostList } from "@opentf/afw-docs";
+import { posts } from "@opentf/afw-docs/posts";
 
 export const metadata = { title: "Blog" };
 

@@ -1,6 +1,6 @@
 # {{name}}
 
-An [OTF Web](https://web.opentechf.org) component library. Components live in `src/`,
+An [AFW](https://afw.opentechf.org) component library. Components live in `src/`,
 re-exported from `index.js`:
 
 ```js

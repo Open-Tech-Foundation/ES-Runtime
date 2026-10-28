@@ -1,4 +1,4 @@
-import { defineDocsConfig } from "@opentf/web-docs/config";
+import { defineDocsConfig } from "@opentf/afw-docs/config";
 
 export default defineDocsConfig({
   // Canonical site origin — required for production builds (sitemap, feeds).

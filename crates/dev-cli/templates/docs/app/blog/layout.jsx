@@ -1,6 +1,6 @@
-import { BlogLayout } from "@opentf/web-docs";
-import { posts } from "@opentf/web-docs/posts";
-import config from "../../otfw.config.js";
+import { BlogLayout } from "@opentf/afw-docs";
+import { posts } from "@opentf/afw-docs/posts";
+import config from "../../afw.config.js";
 
 export default function BlogLayoutRoute(props) {
   return (

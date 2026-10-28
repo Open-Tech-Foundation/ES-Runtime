@@ -9,12 +9,12 @@
     "preview": "esdev preview"
   },
   "dependencies": {
-    "@opentf/web": "{{registry:@opentf/web}}",
-    "@opentf/web-docs": "{{registry:@opentf/web-docs}}"
+    "@opentf/afw": "{{registry:@opentf/afw}}",
+    "@opentf/afw-docs": "{{registry:@opentf/afw-docs}}"
   },
   "devDependencies": {
-    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
-    "@opentf/web-cli": "{{registry:@opentf/web-cli}}",
+    "@opentf/esdev-plugin-afw": "{{registry:@opentf/esdev-plugin-afw}}",
+    "@opentf/afw-cli": "{{registry:@opentf/afw-cli}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
 }

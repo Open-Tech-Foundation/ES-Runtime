@@ -10,10 +10,10 @@
     "test": "esdev test"
   },
   "dependencies": {
-    "@opentf/web": "{{registry:@opentf/web}}"
+    "@opentf/afw": "{{registry:@opentf/afw}}"
   },
   "devDependencies": {
-    "@opentf/esdev-plugin-web": "{{registry:@opentf/esdev-plugin-web}}",
+    "@opentf/esdev-plugin-afw": "{{registry:@opentf/esdev-plugin-afw}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
   }
 }
