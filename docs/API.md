@@ -67,7 +67,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 [`runtime:` modules](#the-runtime-scheme).
 
 - **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` — `"ES-Runtime/<version>"` — and `hardwareConcurrency`)
-- **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — the standard one-argument form: pure URL resolution against the current module, with no I/O and no existence check. **Bare and `#private` specifiers resolve too**, through the module loader — useful for locating a file *inside* a dependency (a migration, a `.proto`, a template) whose install path you cannot hardcode. That reads `package.json` files, so it needs the same `FileSystem` grant an import does, and it obeys the same root jail and import policy; a denied run gets a `NotAllowedError` rather than a location. Resolving from somewhere other than the current module is `esdev`'s `resolve(specifier, from)` in `runtime:build` (D127). A module is its URL, query included: `./m.js?v=2` is a module of its own (D126).
+- **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — the standard one-argument form: pure URL resolution against the current module, with no I/O and no existence check. **Bare and `#private` specifiers resolve too**, through the module loader — useful for locating a file *inside* a dependency (a migration, a `.proto`, a template) whose install path you cannot hardcode. That reads `package.json` files, so it needs the same `FileSystem` grant an import does, and it obeys the same root jail; a denied run gets a `NotAllowedError` rather than a location. Resolving from somewhere other than the current module is `esdev`'s `resolve(specifier, from)` in `runtime:build` (D127). A module is its URL, query included: `./m.js?v=2` is a module of its own (D126).
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **Questions:** `prompt(message?, default?)`, `confirm(message?)`, `alert(message?)` — synchronous, as on the web: they block the agent until a line is typed. The question goes to **standard error**. When stdin is not a terminal they do not wait: `prompt` returns `null`, `confirm` returns `false`, `alert` returns at once. An empty answer to `prompt` is its default, shown in brackets. No capability. See [Standard input](#standard-input).
 - **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
@@ -998,8 +998,9 @@ Each name takes both prefixes: `--allow-net` and `--deny-net`.
 #### Scoped grants
 
 **Seven of the nine** can be granted narrowed to a list rather than whole. The
-two exceptions are all-or-nothing: `imports`, because what may be *loaded* is
-[its own mechanism](#import-policy--what-may-be-loaded), and `workers`, because
+two exceptions are all-or-nothing: `imports`, because it decides whether
+modules beyond the entry load at all — which packages a program is made of is
+decided when it is built (D193, D194) — and `workers`, because
 a worker's own grant is set at the spawn (`new Worker(url, { permissions })`)
 rather than on the command line. `--allow-workers=<list>` is **rejected** rather
 than ignored, so a run is never narrower on the command line than in reality:
@@ -1105,81 +1106,6 @@ the runtime exists. But since it denies `imports` too, a run with no flags is a
 gates them, so a denied script still computes. Ask from JS with
 [`permissions`](#runtimeprocess), or find the flag set a program needs with
 `esdev --trace-permissions app.js`.
-
-### Import policy — what may be *loaded*
-
-Capabilities answer *what may executing code reach*. Which modules may **become**
-executing code is a different question, and it has its own mechanism (DECISIONS
-D39): a JSON file named by `--import-policy=<file>`.
-
-```sh
-esrun --allow-imports --allow-net=db.internal:5432 \
-      --import-policy=./import-policy.json server.js
-```
-
-```json
-{
-  "allow": ["./src", "express", "@acme/ui"],
-  "deny": ["aws-sdk"]
-}
-```
-
-- **Entries read the way specifiers do.** An entry beginning with `.` or `/` is
-  a path covering its subtree; anything else is a package name (`lodash`,
-  `@scope/pkg`). No second grammar — it is the split the loader already makes
-  between a bare and a relative specifier. The two are alternatives, not
-  territories: a module matches if *either* kind names it, so a path entry
-  pointing inside `node_modules` governs what is there like any other.
-- **Deny wins over allow.** A module named by both is refused.
-- **A scope entry, `"@acme/*"`, names every package in the scope** (D193). It is
-  the only pattern: `*` anywhere else is an error.
-- **An `allow` entry may be an object** (D193):
-  `{ "package": "zod", "version": "3.23.8", "integrity": "h1:…", "reason": "…" }`
-  — `package` required, unknown keys an error, several entries for one package
-  allowed (one per approved copy). At run time it approves the package by name;
-  `esdev build` also checks the installed `version` and Go's `h1:` hash of the
-  installed directory, and a mismatch fails the build in every mode.
-- **`"unlisted"` says what happens to a module `"allow"` does not name**
-  (D193): `"error"`, the default, refuses it; `"warn"` loads it and reports it
-  once per package — how a policy is rolled out. A denied module is refused in
-  every mode. Without `"allow"` there is nothing unlisted, and `"unlisted"` is
-  an error.
-- **Omitting `"allow"`** permits everything not denied — the shape for a policy
-  that only wants to exclude a few packages. An empty `"allow": []` is an error
-  rather than a run that can load nothing; `"deny": []` is fine.
-- **Unknown keys are an error.** A misspelled `"allowed"` would otherwise parse
-  as protection that is not there.
-- **Paths resolve relative to the policy file**, not the working directory: a
-  policy is committed next to the project it governs and means the same thing
-  wherever it is invoked from.
-- **Matching runs on the resolved, canonicalized module**, after the root jail —
-  so a symlink cannot name its way in, and a pnpm store path is still
-  recognisably its package. A package entry covers that package's own files and
-  says nothing about the packages *it* imports; each is named in its own right,
-  including a nested `node_modules` copy.
-- **The entry file is exempt** — it is read before a loader exists, and you
-  named it.
-- **Never auto-discovered.** The file is read only when `--import-policy` names
-  it, exactly as `--env-file` works (D30).
-- **A build applies the same file to what it ships** (D193). A deployed bundle
-  inlines its packages, so the loader never resolves them; `esdev build` judges
-  every module read into each bundle — every target, browser and server, and
-  the dev loop's builds — against the file `esdev.json` names as
-  `build.importPolicy`. A refusal fails the build, names every refused package
-  at once, and writes nothing. Build tools whose code does not ship (Tailwind,
-  PostCSS, plugins) are not judged, and neither is a plugin's generated module.
-  `esdev build --inventory=<file>` writes what shipped as a draft policy, and
-  `build.subresourceIntegrity` adds SRI attributes to a release HTML build.
-
-The two layers do not substitute for each other: the `imports` capability
-decides whether the loader runs at all, the policy decides what it may resolve.
-A policy is therefore **not a way around a missing `imports` grant** — without
-`--allow-imports`, an allow entry still loads nothing.
-
-> **Content is pinned at build time.** At run time a policy matches by name;
-> the `version` and `integrity` of an entry are checked by `esdev build`, where
-> packages are chosen into a bundle (D193). Lockfiles remain the install-time
-> counterpart.
 
 **The parser is strict, and its grammar is two rules for every flag** — not just
 the permission ones:
@@ -5676,8 +5602,7 @@ classification simply has no `code`, so test `e.code === "ERR_X"`, never
 exhaustively.
 
 A rejected `import()` and a throwing `import.meta.resolve` carry the same codes:
-a missing module is `ERR_NOT_FOUND`, one outside the root `ERR_JAIL_ESCAPE`, and
-one the import policy refuses `ERR_PERMISSION_DENIED`.
+a missing module is `ERR_NOT_FOUND`, and one outside the root `ERR_JAIL_ESCAPE`.
 
 ```js
 try {
@@ -5695,7 +5620,7 @@ try {
 | `ERR_PROVIDER_UNAVAILABLE` | The backing provider for this API is not installed. |
 | `ERR_NOT_FOUND` | The path, module or package does not exist. |
 | `ERR_ALREADY_EXISTS` | The target already exists. |
-| `ERR_PERMISSION_DENIED` | Access was refused — by the OS, by a scoped `--allow-read`/`--allow-write` list, or by the import policy (distinct from a capability denial). |
+| `ERR_PERMISSION_DENIED` | Access was refused — by the OS, or by a scoped `--allow-read`/`--allow-write` list (distinct from a capability denial). |
 | `ERR_IS_DIRECTORY` / `ERR_NOT_DIRECTORY` | A file op hit a directory / a directory op hit a non-directory. |
 | `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
 | `ERR_JAIL_ESCAPE` | The real (canonicalized) path, or a module being imported, lies outside the filesystem root jail. |

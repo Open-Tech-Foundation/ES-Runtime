@@ -67,8 +67,6 @@ PERMISSIONS:
     -A, --allow-all             Grant every capability (unsandboxed)
     --deny-<name>               Take one back; requires --allow-all; repeatable
     --deny-all                  Grant nothing — the default, said outright
-    --import-policy=<file>      JSON policy for what may be *loaded*, which is a
-                                separate question from what running code reaches
 
 OPTIONS:
     -t, --timeout=<ms>          Stop execution after <ms> (watchdog, SPEC §4)

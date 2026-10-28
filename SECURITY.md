@@ -137,47 +137,19 @@ ignored — the rule outlives the capabilities it was written for. The filesyste
 it and never widens it, so an entry outside the project root is not a way out of
 it.
 
-## Import policy (what may be loaded)
+## Dependencies (what a program is made of)
 
-Capabilities bound what running code may *reach*. What may **become** running
-code is a separate question, and has a separate mechanism (DECISIONS D39) — a
-JSON file, named explicitly and never auto-discovered:
+Which packages a program is made of is decided when it is built, not when it
+runs (DECISIONS D193, D194). `esdev build` can hold every bundle to a
+dependency policy that a project commits — approved packages, their versions,
+and Go `h1:` hashes of their installed files — and fails the build on anything
+else. A built bundle has its packages inlined, so at run time there is nothing
+left to choose: deploy it **without `--allow-imports`** (esrun grants nothing by
+default), and nothing but the file you named can run. Protect the artifact
+itself with an image digest and a read-only filesystem.
 
-```sh
-esrun --allow-imports --allow-net=db.internal:5432 \
-      --import-policy=./import-policy.json server.js
-```
-
-```json
-{ "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
-```
-
-An entry beginning with `.` or `/` is a path covering its subtree; anything else
-is a package name — the split the loader already makes between a relative and a
-bare specifier. **Deny wins over allow.** Omitting `"allow"` permits everything
-not denied; an empty `"allow": []` is an error, not a run that can load nothing.
-Unknown keys are an error, for the same reason an unknown flag is: a misspelled
-`"allowed"` would read as protection that is not there. Paths resolve relative
-to the **policy file**, so a committed policy means the same thing wherever the
-run is invoked from.
-
-Matching runs on the **resolved, canonicalized** module, after the root jail, so
-a symlink cannot name its way in and a pnpm store path is still recognisably its
-package. A package entry covers that package's own files and **not** the
-packages it imports — each is named in its own right, so a dependency that
-quietly pulls in another cannot load it. The entry file is exempt: it is read
-before a loader exists.
-
-The two layers do not substitute for each other. The `imports` capability
-decides whether the loader runs at all; the policy decides what it may resolve.
-A policy is **not a way around a missing `imports` grant** — without
-`--allow-imports`, an allow entry still loads nothing.
-
-**Known gap: no integrity.** A policy names packages and paths, not content.
-`"express"` says the loader may resolve that package; it says nothing about
-which version, or whether the bytes are the ones you audited. Lockfiles remain
-the install-time counterpart; content pinning is future work. Treat the policy
-as a bound on *which* dependencies can run, not as proof of *what* they are.
+esrun has no runtime import policy. A runtime check that names packages but
+cannot pin what they contain would read as protection it does not give.
 
 ## Child processes (`Capability::Run`)
 

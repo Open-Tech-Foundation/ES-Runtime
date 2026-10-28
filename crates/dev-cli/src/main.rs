@@ -60,6 +60,7 @@ mod dts;
 mod global_setup;
 mod guest;
 mod html;
+mod import_policy;
 mod init;
 mod inline_snapshot;
 mod inspect;
@@ -177,7 +178,6 @@ RUN OPTIONS (esrun's, with one deliberate difference):
     --allow-<name>[=<list>]     Grant one back, optionally narrowed; requires
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
-    --import-policy=<file>      JSON policy for what may be loaded
     -t, --timeout=<ms>          Stop execution after <ms>
     --max-heap=<mb>             Heap ceiling in megabytes
     --env-file=<path>           Load env vars from a .env file

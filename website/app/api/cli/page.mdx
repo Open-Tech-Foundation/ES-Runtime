@@ -26,8 +26,6 @@ esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the eleven)
 esrun --allow-all, -A       Grant everything (unsandboxed)
 esrun --deny-<name>         Take one back; requires --allow-all; repeatable
 esrun --deny-all            Grant nothing — the default, said outright
-esrun --import-policy=<file>
-                            JSON policy for what may be loaded
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
 esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as the
@@ -72,8 +70,7 @@ script that genuinely wants a flag esrun also knows.
 | `--allow-all, -A` | Grant every capability. Cannot be combined with `--allow-<name>` or `--deny-all`. |
 | `--deny-<name>` | Take one capability back; repeatable. Requires `--allow-all`. |
 | `--deny-all` | Grant nothing — the default, said outright. Cannot be combined with `--allow-all`. |
-| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy` — and neither does `workers`, whose scope is set at the spawn. See [Scoped grants](#scoped-grants). |
-| `--import-policy=<file>` | A JSON file of `"allow"` and/or `"deny"` lists of package names and paths, bounding what the module loader may resolve. Never auto-discovered. A second layer, not a substitute for the `imports` capability. See [Import policy](#import-policy). |
+| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — it decides whether modules beyond the entry load at all — and neither does `workers`, whose scope is set at the spawn. See [Scoped grants](#scoped-grants). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -122,8 +119,8 @@ esrun --allow-imports --allow-listen=8080 \
       --allow-read=./public --allow-write=./var/log \
       --allow-signals=SIGTERM server.js
 
-# Bound what the module loader may resolve, too
-esrun --allow-imports --import-policy=./import-policy.json server.js
+# A bundle needs no imports: without --allow-imports nothing but it can load
+esrun --allow-listen=8080 dist/server.js
 
 # Grant everything except the network and subprocesses
 esrun --allow-all --deny-net --deny-run app.js
@@ -176,8 +173,9 @@ operation, not the import.
 
 **Seven of the eleven** `--allow-<name>` flags take a comma-separated list that
 narrows the grant instead of handing over the whole capability. `imports`,
-`workers`, `diagnostics` and `diagnostics-detail` are all-or-nothing — what
-may be *loaded* has [its own mechanism](#import-policy).
+`workers`, `diagnostics` and `diagnostics-detail` are all-or-nothing. Which
+packages a program is made of is decided when it is built — see
+[Dependency policy](/docs/security/dependency-policy).
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
@@ -252,63 +250,6 @@ A **signal entry** is a signal name, and unlisted signals are hidden from
 
 A value on a flag that could not enforce it would still be rejected rather than
 ignored; that rule holds for any capability added later.
-
-### Import policy
-
-Capabilities answer *what may executing code reach*. Which modules may **become**
-executing code is a different question, and it has its own mechanism —
-`--import-policy=<file>`, a JSON file named explicitly and never auto-discovered.
-
-```sh
-esrun --allow-imports --allow-net=db.internal:5432 \
-      --import-policy=./import-policy.json server.js
-```
-
-```json
-{
-  "allow": ["./src", "express", "@acme/ui"],
-  "deny": ["aws-sdk"]
-}
-```
-
-An entry beginning with `.` or `/` is a path covering its subtree; anything else
-is a package name (`lodash`, `@scope/pkg`) — the split the loader already makes
-between a relative and a bare specifier, so there is no second grammar. A module
-matches if either kind names it, so a path entry pointing inside `node_modules`
-governs what is there. **Deny wins over allow.** Omitting `"allow"` permits everything not denied, which is the
-shape for a policy that only excludes a few packages; an empty `"allow": []` is
-an error rather than a run that can load nothing, and so is an unknown key.
-
-A scope entry, `"@acme/*"`, names every package in the scope; it is the only
-pattern. `"unlisted"` says what happens to a module `"allow"` does not name:
-`"error"` (the default) refuses it, `"warn"` loads it and reports it once per
-package. A denied module is refused in every mode.
-
-An `allow` entry may be an object — `{ "package": "zod", "version": "3.23.8",
-"integrity": "h1:…", "reason": "…" }`, `package` required, unknown keys an
-error, one entry per approved copy. At run time it approves the package by
-name; `esdev build` also checks the installed version and hash.
-
-Paths resolve relative to the **policy file**, not the working directory — a
-policy is committed next to the project it governs and means the same thing
-wherever the run is invoked from. Matching runs on the resolved, canonicalized
-module (after the root jail), so a symlink cannot name its way in and a pnpm
-store path is still recognisably its package. A package entry covers that
-package's own files and says nothing about the packages *it* imports, so a
-dependency cannot quietly bring another along. The entry file is exempt: it is
-read before a loader exists, and you named it.
-
-<Callout type="note" title="A policy is not a way around a missing imports grant">
-  Two layers, not two alternatives: the `imports` capability decides whether the
-  loader runs at all, the policy decides what it may resolve. Without
-  `--allow-imports`, an allow entry still loads nothing.
-</Callout>
-
-<Callout type="note" title="Content is pinned at build time">
-  At run time `"express"` says the loader may resolve that package, at any
-  version. Versions and hashes are checked by `esdev build`, where packages are
-  chosen into a bundle — see [Dependency policy](/docs/security/dependency-policy).
-</Callout>
 
 ### Strict by design
 

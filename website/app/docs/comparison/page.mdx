@@ -233,13 +233,12 @@ Node's suite).
 | Interactive prompt | <No /> | <No /> | — | <Yes /> |
 | Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
 | Local imports readable | `--allow-imports` | <No /> | — | <Yes /> |
-| Allow/deny which modules load | `--import-policy` file | <No /> | — | <No /> |
 | Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
 | Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
 | Filesystem root jail | always on | <No /> | <No /> | <No /> |
 | Status | alpha | stable (v22.13+) | [requested](https://github.com/oven-sh/bun/issues/6617) | stable |
 
-- **Rows 6–8:** entry file runs, second file needs a grant (Deno exempts analysable imports). What the loader may *resolve* is separate: esrun's `--import-policy` (packages/paths) vs Deno's `--allow-import` (remote hosts); Node removed theirs.
+- **Rows 6–7:** entry file runs, second file needs a grant (Deno exempts analysable imports). Which packages may ship is decided at build time by esdev's [dependency policy](/docs/security/dependency-policy); Deno's `--allow-import` scopes remote hosts, and Node removed its policy.
 - **Names:** `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail` — flags, `permissions.has()`, Worker options. See [Security model](/docs/security/permissions#granting-capabilities-in-esrun).
 
 ## Images, feature by feature

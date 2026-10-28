@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use es_runtime_default_providers::{ImportPolicy, Unlisted, Verdict, package_of};
+use crate::import_policy::{ImportPolicy, Unlisted, Verdict, package_of};
 use rolldown::plugin::{HookNoopReturn, HookUsage, Plugin, PluginContext};
 
 /// The modules parsed into a bundle's graph, collected by a bundler plugin.

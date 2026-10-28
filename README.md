@@ -97,9 +97,9 @@ importing a `runtime:` module always works.
 inner loop needs no flags. `esdev --trace-permissions app.mjs` prints the
 `esrun` line that grants exactly what a run reached for.
 
-What a run may *load* is a separate question from what running code may reach,
-so it has a separate mechanism — `--import-policy=./import-policy.json` takes
-JSON with `"allow"` and/or `"deny"` lists of package names and paths. See
+Which packages a program is made of is decided when it is built: `esdev build`
+can hold a bundle to a dependency policy, and a bundled program needs no
+`--allow-imports`, so nothing but the bundle can load. See
 [SECURITY.md](SECURITY.md).
 
 ## Security

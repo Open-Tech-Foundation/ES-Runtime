@@ -24,6 +24,11 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Removed
+
+- `esdev <file> --import-policy` (D194), with esrun's: a dependency policy is
+  applied by `esdev build`, which names it in `esdev.json`.
+
 ### Added
 
 - `esdev build` applies the import policy `esdev.json` names as

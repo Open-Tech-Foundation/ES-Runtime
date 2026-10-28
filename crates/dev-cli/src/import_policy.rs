@@ -1,54 +1,29 @@
-//! The **import & loader policy** — what a run is allowed to *load*
-//! (DECISIONS D39).
-//!
-//! This is deliberately not part of the capability model. Capabilities answer
-//! "what may executing code reach"; a policy answers "which modules may become
-//! executing code in the first place". Two layers, not two alternatives:
-//!
-//! - the `imports` **capability** decides whether the loader runs at all — it
-//!   is what makes `--deny-all` mean "runs only the file you named";
-//! - the **policy** decides, given that it runs, what it may resolve.
-//!
-//! Keeping them apart is what lets the policy grow rules a permission model
-//! must never have — a warn-only mode, aliases, replacements — without any of
-//! that leaking into a security check, where "warn and continue" would be the
-//! sandbox that silently isn't one.
+//! The **dependency policy** a build is held to (DECISIONS D193): which
+//! packages and project paths may ship in a bundle, at which version and with
+//! which content.
 //!
 //! **Entries are read the way specifiers are.** An entry beginning with `.` or
 //! `/` is a path covering its subtree; anything else is a package name
-//! (`lodash`, `@scope/pkg`). That is the split the loader already makes between
-//! a bare and a relative specifier, so there is no second grammar to learn. The
-//! two kinds are alternatives, not territories: a module is named by a rule if
-//! *either* list names it, so a path entry that happens to point inside a
-//! `node_modules` tree governs what is there like any other path entry.
+//! (`lodash`, `@scope/pkg`). The two kinds are alternatives, not territories: a
+//! module is named by a rule if *either* list names it, so a path entry that
+//! points inside a `node_modules` tree governs what is there like any other.
 //!
-//! **A scope entry, `@acme/*`, names every package in the scope**, so an
-//! organisation's own packages are one line (D193). It is the only pattern:
-//! `*` anywhere else is refused rather than read literally.
+//! **A scope entry, `@acme/*`, names every package in the scope.** It is the
+//! only pattern: `*` anywhere else is refused rather than read literally.
 //!
 //! **What a policy does with a package it does not list** is written in the
-//! file (D193): with no `allow`, everything not denied loads; with `allow`,
-//! `"unlisted": "error"` (the default) refuses it and `"unlisted": "warn"` lets
-//! it load and says so, the way a policy is rolled out. A denied module is
-//! refused in every mode. `esdev build` applies the same file to what a build
-//! ships, through [`ImportPolicy::judge`].
+//! file: with no `allow`, everything not denied ships; with `allow`,
+//! `"unlisted": "error"` (the default) refuses it and `"unlisted": "warn"`
+//! reports it. A denied module is refused in every mode.
 //!
-//! **Matching runs on the resolved, canonicalized module**, after the sandbox
-//! root has been enforced: judging the specifier would let
-//! `./src/link-to-node_modules/evil/index.js` through, and resolving first is
-//! also what makes package matching work under pnpm, whose `node_modules/pkg`
-//! is a symlink into a content store — the real path still ends in
-//! `…/node_modules/lodash/…`, so the package is recoverable from the path.
+//! **Matching runs on the resolved, canonicalized module**, so a symlink
+//! cannot name its way in, and under pnpm — whose `node_modules/pkg` is a link
+//! into a content store — the real path still ends in `…/node_modules/pkg/…`,
+//! so the package is recoverable from it.
 
-use std::collections::HashSet;
-use std::path::{Component, Path};
-use std::sync::Mutex;
+use std::path::{Component, Path, PathBuf};
 
-use es_runtime_common::ErrorCode;
-use es_runtime_providers::ProviderError;
 use serde_json::Value;
-
-use crate::path_allowlist::PathAllowlist;
 
 /// One side of a policy: the packages and paths a rule names.
 #[derive(Clone, Debug, Default)]
@@ -57,8 +32,9 @@ struct Rules {
     packages: Vec<String>,
     /// Scopes from `@scope/*` entries, as `@scope`.
     scopes: Vec<String>,
-    /// Path entries, canonicalized — the same matching `--allow-read` uses.
-    paths: PathAllowlist,
+    /// Path entries, as their longest existing prefix canonicalized; a module
+    /// matches one it is inside.
+    paths: Vec<PathBuf>,
 }
 
 impl Rules {
@@ -75,8 +51,13 @@ impl Rules {
             if entry.is_empty() {
                 return Err("an empty entry is neither a package nor a path".to_string());
             }
-            if entry.starts_with('.') || entry.starts_with('/') || entry.starts_with("file:") {
-                paths.push(entry.to_string());
+            if entry.starts_with('.') || entry.starts_with('/') {
+                let raw = Path::new(entry);
+                paths.push(canonicalize_existing_prefix(&if raw.is_absolute() {
+                    raw.to_path_buf()
+                } else {
+                    base.join(raw)
+                }));
             } else if let Some(scope) = entry.strip_suffix("/*")
                 && scope.starts_with('@')
                 && scope.len() > 1
@@ -94,7 +75,7 @@ impl Rules {
         Ok(Rules {
             packages,
             scopes,
-            paths: PathAllowlist::parse(paths, base)?,
+            paths,
         })
     }
 
@@ -121,7 +102,7 @@ impl Rules {
         {
             return true;
         }
-        self.paths.permits(real)
+        self.paths.iter().any(|path| real.starts_with(path))
     }
 }
 
@@ -165,7 +146,7 @@ pub enum Verdict {
 
 /// What a run may load. The default permits everything — a policy applies only
 /// when one is supplied.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ImportPolicy {
     /// The allow list. `None` when the file omits `"allow"`, which means
     /// "everything not denied" — the shape for a policy that only wants to
@@ -178,21 +159,6 @@ pub struct ImportPolicy {
     unlisted: Unlisted,
     /// The `allow` entries written as objects, in file order.
     pins: Vec<Pin>,
-    /// The packages a run has already reported under `"unlisted": "warn"`, so
-    /// each is reported once rather than per module.
-    reported: Mutex<HashSet<String>>,
-}
-
-impl Clone for ImportPolicy {
-    fn clone(&self) -> Self {
-        ImportPolicy {
-            allow: self.allow.clone(),
-            deny: self.deny.clone(),
-            unlisted: self.unlisted,
-            pins: self.pins.clone(),
-            reported: Mutex::new(HashSet::new()),
-        }
-    }
 }
 
 impl ImportPolicy {
@@ -265,7 +231,6 @@ impl ImportPolicy {
             deny,
             unlisted,
             pins,
-            reported: Mutex::new(HashSet::new()),
         })
     }
 
@@ -309,48 +274,6 @@ impl ImportPolicy {
             Verdict::Denied => false,
             Verdict::Unlisted => self.unlisted == Unlisted::Warn,
         }
-    }
-
-    /// [`permits`](Self::permits), as a provider error naming what was refused
-    /// and which list refused it.
-    ///
-    /// What is named is the package, or else the `specifier` the program wrote
-    /// — never `real`, which is canonical (D141).
-    pub(crate) fn check(&self, real: &Path, specifier: &str) -> Result<(), ProviderError> {
-        let verdict = self.judge(real);
-        let what = match package_of(real) {
-            Some(name) => format!("package {name}"),
-            None => format!("module {specifier:?}"),
-        };
-        match verdict {
-            Verdict::Allowed => return Ok(()),
-            Verdict::Unlisted if self.unlisted == Unlisted::Warn => {
-                // Reported once per package (or module), not per file it loads.
-                let first = self
-                    .reported
-                    .lock()
-                    .map(|mut seen| seen.insert(what.clone()))
-                    .unwrap_or(false);
-                if first {
-                    tracing::warn!(
-                        target: "import-policy",
-                        "{what} is not in the import policy's allow list \
-                         (loaded: the policy's \"unlisted\" is \"warn\")"
-                    );
-                }
-                return Ok(());
-            }
-            _ => {}
-        }
-        let why = if verdict == Verdict::Denied {
-            "denied by the import policy"
-        } else {
-            "not in the import policy's allow list"
-        };
-        Err(ProviderError::Coded {
-            code: ErrorCode::PermissionDenied,
-            message: format!("{what} is {why}"),
-        })
     }
 }
 
@@ -455,6 +378,31 @@ fn string_list(key: &str, value: &Value) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// `abs` with its longest existing prefix canonicalized and the rest kept,
+/// so an entry naming a directory that does not exist yet still means the
+/// place it will be, and one under a symlink means where the link leads.
+fn canonicalize_existing_prefix(abs: &Path) -> PathBuf {
+    let mut existing = abs.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(real) = es_runtime_default_providers::path::canonicalize(&existing) {
+            let mut out = real;
+            for segment in tail.iter().rev() {
+                out.push(segment);
+            }
+            return out;
+        }
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.push(name.to_os_string());
+                existing = parent.to_path_buf();
+            }
+            // Nothing of it exists: kept as written, which matches nothing.
+            _ => return abs.to_path_buf(),
+        }
+    }
+}
+
 /// The package a resolved module belongs to, if it is inside a `node_modules`
 /// tree: the one or two components after the **last** `node_modules`, so a
 /// scoped package (`@scope/pkg`) keeps its scope and a nested dependency is
@@ -486,7 +434,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("esrt-importpolicy-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        crate::path::canonicalize(&dir).unwrap()
+        es_runtime_default_providers::path::canonicalize(&dir).unwrap()
     }
 
     fn policy(json: &str, base: &Path) -> ImportPolicy {
@@ -635,43 +583,6 @@ mod tests {
     }
 
     #[test]
-    fn check_says_which_list_refused() {
-        let root = temp_dir("message");
-        let p = policy(r#"{ "allow": ["lodash"], "deny": ["aws-sdk"] }"#, &root);
-        let denied = p
-            .check(Path::new("/proj/node_modules/aws-sdk/index.js"), "aws-sdk")
-            .unwrap_err();
-        assert!(
-            denied.to_string().contains("denied by the import policy"),
-            "{denied}"
-        );
-        let unlisted = p
-            .check(Path::new("/proj/node_modules/other/index.js"), "other")
-            .unwrap_err();
-        assert!(
-            unlisted
-                .to_string()
-                .contains("not in the import policy's allow list"),
-            "{unlisted}"
-        );
-        assert_eq!(unlisted.code(), Some(ErrorCode::PermissionDenied));
-    }
-
-    /// A refused file that is not a package is named by the specifier the
-    /// program wrote, not by where it resolved (D141).
-    #[test]
-    fn a_refused_file_is_named_as_written() {
-        let root = temp_dir("spelling");
-        let p = policy(r#"{ "allow": ["./src"] }"#, &root);
-        let refused = p
-            .check(&root.join("lib/secret.js"), "../lib/secret.js")
-            .unwrap_err()
-            .to_string();
-        assert!(refused.contains("\"../lib/secret.js\""), "{refused}");
-        assert!(!refused.contains(root.to_str().unwrap()), "{refused}");
-    }
-
-    #[test]
     fn a_scope_entry_names_every_package_in_the_scope_and_nothing_else() {
         let root = temp_dir("scope");
         let p = policy(r#"{ "allow": ["@acme/*"] }"#, &root);
@@ -722,8 +633,6 @@ mod tests {
         assert_eq!(strict.judge(tailwind), Verdict::Unlisted);
         assert!(strict.permits(zod) && !strict.permits(tailwind) && !strict.permits(denied));
         assert!(report.permits(zod) && report.permits(tailwind) && !report.permits(denied));
-        assert!(report.check(tailwind, "left-pad").is_ok());
-        assert!(report.check(denied, "aws-sdk").is_err());
     }
 
     #[test]

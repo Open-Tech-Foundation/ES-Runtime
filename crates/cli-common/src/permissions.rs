@@ -14,10 +14,9 @@ pub type Scopes = HashMap<Capability, Vec<String>>;
 /// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if that
 /// capability cannot enforce a list.
 ///
-/// Seven of the eight take a list. `imports` deliberately does **not**: what
-/// may be loaded is an [import policy](es_runtime_default_providers::ImportPolicy)
-/// (`--import-policy=<file>`, D39), not a capability scope — the capability
-/// decides whether the loader runs, the policy decides what it may resolve. The
+/// Seven of the eight take a list. `imports` deliberately does **not**: it
+/// decides whether modules beyond the entry load at all, and which packages a
+/// program is made of is decided when it is built (D193, D194). The
 /// `None` arm is the rule, not a placeholder: a capability rejects a value until
 /// something enforces it (D38 — a run must never be narrower on the command line
 /// than it is in reality).
@@ -228,11 +227,11 @@ impl Permissions {
                     if cap == Capability::FileSystem {
                         return Err(format!(
                             "{flag} takes no value (got {flag}={value}).\n\n\
-                             What may be *loaded* is an import policy, not a capability \
-                             scope: the capability decides whether the loader runs, the \
-                             policy decides what it may resolve. Use \
-                             --import-policy=<file> — a JSON file with \"allow\" and/or \
-                             \"deny\" lists of packages and paths."
+                             imports is all-or-nothing: it decides whether modules beyond \
+                             the entry load at all. Which packages a program is made of is \
+                             decided when it is built — esdev build holds a bundle to a \
+                             dependency policy — and a bundled program needs no imports: \
+                             run it without --allow-imports."
                         ));
                     }
                     return Err(format!(

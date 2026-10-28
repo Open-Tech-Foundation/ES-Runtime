@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Removed
+
+- `esrun --import-policy` (D194). The runtime loader judged modules by name and
+  could not pin what they contained, and a built program — the way esrun runs
+  in production — has its packages inlined, so the loader never saw them.
+  Which packages ship is now decided only at build time, by esdev's dependency
+  policy; a bundle runs without `--allow-imports`, so nothing else can load.
+  `--allow-imports=<list>` now says so. `import.meta.resolve` and the loader are
+  otherwise unchanged.
+
 ### Changed
 
 - `BSON.decode` builds documents and the BSON class instances in V8's fast
@@ -23,12 +33,6 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
-- Import policies gain `"unlisted": "error" | "warn"` and scope entries
-  (`"@acme/*"`) (D193). With `"warn"`, a module the allow list does not name
-  loads and is reported once per package — how an allow list is rolled out; a
-  denied module is refused in every mode. `allow` entries may also be objects
-  (`{ "package", "version", "integrity", "reason" }`); esrun matches them by
-  name, and `esdev build` checks the version and hash.
 - `environment()` in `runtime:process`: the deployment environment, read at
   run time — `RUNTIME_ENV`, else `NODE_ENV`, else `"production"` (D192).
   `RUNTIME_ENV` is proposed as one name for every runtime and language, for

@@ -74,7 +74,7 @@ const NAV = [
         items: [
           { title: "Overview", path: "/docs/guides/securing-runtime" },
           { title: "Granting capabilities", path: "/docs/guides/securing-runtime/capabilities" },
-          { title: "Import policy & deployment", path: "/docs/guides/securing-runtime/policy" },
+          { title: "Deployment commands", path: "/docs/guides/securing-runtime/commands" },
           { title: "Hardening checklist", path: "/docs/guides/securing-runtime/hardening" },
         ],
       },
@@ -208,7 +208,6 @@ const NAV = [
         items: [
           { title: "Overview", path: "/docs/security" },
           { title: "Permissions & capabilities", path: "/docs/security/permissions" },
-          { title: "Import policy", path: "/docs/security/imports" },
           { title: "Dependency policy", path: "/docs/security/dependency-policy" },
           { title: "Processes and workers", path: "/docs/security/processes" },
           { title: "Network security", path: "/docs/security/networking" },

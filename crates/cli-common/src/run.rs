@@ -14,11 +14,10 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
-    ImportPolicy, Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub,
-    ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb,
-    SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
-    SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers,
-    WorkerProcess, path,
+    Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
+    ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
+    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
+    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, WorkerProcess, path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 
@@ -956,15 +955,8 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // jailed to — the working directory's project (D25, D79) — so resolution is
     // confined under it and the node_modules walk stops there. Held behind an
     // Arc so dynamic import() can reach it.
-    // `--import-policy=<file>` governs what the loader may resolve (D39) — a
-    // layer above the `imports` capability, which governs whether it runs at
-    // all. The entry file is unaffected: it is read before a loader exists, and
-    // the user named it on the command line.
-    let mut loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
+    let loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
         .map_err(|e| format!("module loader: {e}"))?;
-    if let Some(file) = &options.import_policy {
-        loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
-    }
     let resolved: Arc<dyn ModuleLoader> = if config.bundler_style_resolution {
         Arc::new(BundlerStyleLoader {
             inner: Arc::new(loader_impl),

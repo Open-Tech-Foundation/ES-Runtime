@@ -36,7 +36,6 @@ crates/default-providers/src/system_db.rs|a door: the database VFS opens through
 crates/default-providers/src/path.rs|the one path module (D165): canonicalize
 crates/default-providers/src/path_allowlist.rs|parses the command-line scope lists (host input)
 crates/default-providers/src/modules.rs|module loading, under the import policy (D21/D40)
-crates/default-providers/src/import_policy.rs|module loading, under the import policy (D21/D40)
 crates/default-providers/src/node_modules.rs|module resolution, confined with jail::confine
 crates/default-providers/src/system_command.rs|executable lookup on PATH for an allowed command (D38); the rest is tests
 crates/default-providers/src/system_net.rs|Unix socket files, under the socket path list (D140), not the file jail

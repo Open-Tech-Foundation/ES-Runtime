@@ -113,4 +113,4 @@ permissions.denied;       // ["read", "write"]
 permissions.has("net");  // false
 ```
 
-For the separate question of which modules may load, see [Import policy](/docs/security/imports).
+Which packages a program is made of is decided when it is built: see [Dependency policy](/docs/security/dependency-policy). A bundled program runs without `--allow-imports`, so nothing but the bundle loads.

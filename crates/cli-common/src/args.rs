@@ -24,9 +24,6 @@ pub struct RunOptions {
     pub timeout: Option<Duration>,
     /// `.env` file to load, via `--env-file` (last one wins if repeated).
     pub env_file: Option<String>,
-    /// Import policy file, via `--import-policy` (D39). Never auto-discovered:
-    /// like `--env-file`, nothing on disk is read unless it is named.
-    pub import_policy: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     pub env_override: bool,
     /// Environment variables given to the program when neither the OS nor an
@@ -71,7 +68,6 @@ impl Default for RunOptions {
             track_pending_work: false,
             timeout: None,
             env_file: None,
-            import_policy: None,
             env_override: false,
             env_defaults: Vec::new(),
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
@@ -134,9 +130,6 @@ impl RunOptions {
             "--env-file" => {
                 self.env_file = Some(require_value(flag, value)?.to_string());
             }
-            "--import-policy" => {
-                self.import_policy = Some(require_value(flag, value)?.to_string());
-            }
             "--env-override" => {
                 reject_value(flag, value)?;
                 self.env_override = true;
@@ -171,7 +164,6 @@ impl RunOptions {
             flag,
             "-t" | "--timeout"
                 | "--env-file"
-                | "--import-policy"
                 | "--env-override"
                 | "--max-heap"
                 | "--shutdown-grace"

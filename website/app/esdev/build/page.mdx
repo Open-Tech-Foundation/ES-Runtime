@@ -109,15 +109,52 @@ import it could not resolve: the bundle keeps it as an import and the build
 succeeds, but the program fails where it is deployed, so the warning names the
 file and the line.
 
-## Import policy
+## Dependency policy
 
-A project whose `esdev.json` names `build.importPolicy` has every build judged
-against it: each module read into each bundle, for every target. A strict
-policy refuses an unapproved package, a denied one, or a copy whose version or
-files differ from the approved ones, lists them all, and writes nothing.
-`--inventory=<file>` writes what a build shipped as a draft policy, and
-`build.subresourceIntegrity` adds `integrity` attributes to the tags a release
-HTML build writes. See [Dependency policy](/docs/security/dependency-policy).
+A project whose `esdev.json` names `build.importPolicy` has every build held to
+it: each module read into each bundle, for every target and the builds
+`esdev start` makes. How to adopt one is on
+[Dependency policy](/docs/security/dependency-policy); the rules of the file are
+these.
+
+```json
+{
+  "allow": [
+    "./src",
+    "@acme/*",
+    "left-pad",
+    { "package": "zod", "version": "3.23.8", "integrity": "h1:…", "reason": "input validation" }
+  ],
+  "deny": ["aws-sdk"],
+  "unlisted": "error"
+}
+```
+
+- **An entry beginning with `.` or `/` is a path** covering its subtree,
+  relative to the policy file; anything else is a package name. A module
+  matches if either kind names it, so a path entry pointing into
+  `node_modules` governs what is there.
+- **`"@scope/*"` names every package in a scope.** It is the only pattern; `*`
+  anywhere else is an error.
+- **An object entry** names a package with an optional `version` (checked
+  against the installed `package.json`), `integrity` (Go's `h1:` hash of the
+  installed directory) and `reason` (for the review). Unknown keys are an
+  error. Several entries may name one package, one per approved copy.
+- **`deny` wins over `allow`**, and a denied package fails the build in every
+  mode, as does a copy whose version or files differ from every entry for it.
+- **`"unlisted"`** is `"error"` (the default) or `"warn"`, and says what
+  happens to a package `allow` does not name. Without `allow` nothing is
+  unlisted, and `"unlisted"` is an error.
+- **Omitting `allow`** permits everything not denied; `"allow": []` and an
+  unknown key are errors.
+- **Matching is on the resolved, canonical path**, so a symlink cannot name its
+  way in and a pnpm store path is still its package. A package entry covers
+  that package's own files; a nested `node_modules` copy is named in its own
+  right.
+
+A refusal lists everything refused and writes nothing. `--inventory=<file>`
+writes what a build shipped as a draft policy, and `build.subresourceIntegrity`
+adds `integrity` attributes to the tags a release HTML build writes.
 
 ## Source maps
 

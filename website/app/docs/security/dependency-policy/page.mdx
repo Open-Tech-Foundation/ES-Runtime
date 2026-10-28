@@ -30,7 +30,8 @@ The policy is a JSON file in the repository, named by `esdev.json`:
 Every build then judges every module read into each bundle — server and
 browser targets alike, and the builds `esdev start` makes, so a refusal shows
 on a developer's machine before it reaches CI. Nothing on the command line
-turns it off or loosens it.
+turns it off or loosens it. Every rule of the file is in the
+[`esdev build` reference](/esdev/build#dependency-policy).
 
 ## Three modes
 
@@ -132,11 +133,20 @@ it.
 
 ## Payment pages
 
-PCI DSS v4.0 requirement 6.4.3, effective 31 March 2025, asks that every script
-loaded on a payment page be authorized, have its integrity assured, and be in
-an inventory with a written justification. The PCI Security Standards Council's
-guidance names Subresource Integrity and Content Security Policy among the
-integrity controls.
+PCI DSS requirement 6.4.3 covers the scripts loaded on a payment page: each must
+be authorized, have its integrity assured, and be listed in an inventory with a
+justification. Read it in the standard itself, and the Council's guidance on
+applying it:
+
+- [PCI DSS standard](https://www.pcisecuritystandards.org/standards/pci-dss/)
+  and the [PCI SSC document library](https://www.pcisecuritystandards.org/document_library/),
+  where the current version is published
+- [Payment page security and preventing e-skimming](https://blog.pcisecuritystandards.org/new-information-supplement-payment-page-security-and-preventing-e-skimming),
+  the Council's information supplement on 6.4.3 and 11.6.1
+- [Guidance for e-commerce requirements effective after 31 March 2025](https://blog.pcisecuritystandards.org/coffee-with-the-council-podcast-guidance-for-pci-dss-e-commerce-requirements-effective-after-31-march-2025)
+- [FAQ: how 6.4.3 applies to 3DS scripts](https://www.pcisecuritystandards.org/faqs/how-does-pci-dss-requirement-6-4-3-apply-to-3ds-scripts-called-from-a-merchant-check-out-page-as-part-of-3ds-processing/)
+
+What this page's controls give an assessor to examine:
 
 | 6.4.3 asks for | What provides it |
 | --- | --- |
@@ -145,16 +155,15 @@ integrity controls.
 | An inventory with a justification | The committed policy, each entry with its `reason` |
 
 <Callout type="warning" title="Not a compliance certificate">
-  These are controls an assessor can examine, not an attestation. Scope,
-  third-party scripts loaded from other origins, and change monitoring
-  (requirement 11.6.1) remain your assessment's to cover.
+  These are controls, not an attestation. Scope, scripts loaded from other
+  origins, and the change and tamper detection of requirement 11.6.1 remain
+  your assessment's to cover.
 </Callout>
 
-## And at run time
+## After the build
 
-`esrun --import-policy` reads the same file, so a policy means the same thing
-everywhere: it matches entries by name as it always has. Versions and hashes
-are checked only by the build, where packages are chosen; a deployed bundle is
-protected by its image digest and a read-only filesystem. See
-[Import policy](/docs/security/imports) for runtime loading, and the
-[CLI reference](/api/cli#import-policy) for every rule of the file.
+The policy is a build-time control. esrun does not read it: a bundle has its
+packages inlined, so there is nothing left at run time for a policy to choose.
+Deploy the bundle without `--allow-imports`, so nothing but it can load, and
+protect the artifact itself with an image digest and a read-only filesystem.
+See [Deployment commands](/docs/guides/securing-runtime/commands).

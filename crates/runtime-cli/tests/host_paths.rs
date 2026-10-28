@@ -25,13 +25,11 @@ fn scene() -> (PathBuf, PathBuf) {
     std::fs::write(base.join("outside/secret.txt"), "s").unwrap();
     std::fs::write(project.join("package.json"), r#"{"type":"module"}"#).unwrap();
     std::fs::write(project.join("data/ok.txt"), "ok").unwrap();
-    std::fs::write(project.join("src/denied.js"), "export default 1;").unwrap();
     std::fs::write(
         project.join("node_modules/noentry/package.json"),
         r#"{"name":"noentry"}"#,
     )
     .unwrap();
-    std::fs::write(project.join("policy.json"), r#"{"allow":["./app.mjs"]}"#).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(base.join("outside/secret.txt"), project.join("data/link")).unwrap();
     let base = es_runtime_default_providers::path::canonicalize(&base).unwrap();
@@ -50,7 +48,6 @@ const probes = {
   "import-missing": () => import("./src/missing.js"),
   "import-outside": () => import("../outside/nothing-here.js"),
   "import-outside-existing": () => import("../outside/secret.txt"),
-  "import-policy": () => import("./src/denied.js"),
   "import-no-package": () => import("nopkg"),
   "import-no-entry": () => import("noentry"),
   "resolve-no-package": async () => import.meta.resolve("nopkg"),
@@ -76,7 +73,6 @@ fn a_caught_refusal_names_no_host_path() {
             "--allow-read=data",
             "--allow-write=out",
             "--allow-imports",
-            "--import-policy=policy.json",
             "app.mjs",
         ])
         .output()
@@ -96,7 +92,6 @@ fn a_caught_refusal_names_no_host_path() {
         ("import-missing", "ERR_NOT_FOUND"),
         ("import-outside", "ERR_JAIL_ESCAPE"),
         ("import-outside-existing", "ERR_JAIL_ESCAPE"),
-        ("import-policy", "ERR_PERMISSION_DENIED"),
         ("import-no-package", "ERR_NOT_FOUND"),
         ("import-no-entry", "ERR_NOT_FOUND"),
         ("resolve-no-package", "ERR_NOT_FOUND"),

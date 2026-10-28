@@ -105,9 +105,8 @@ const sql = await file(new URL(import.meta.resolve("my-orm/migrations/001.sql"))
 ```
 
 That reads `package.json` files ([Resolving packages](/docs/modules#resolving-packages)),
-so it needs `--allow-imports`, as an import does, and obeys the same root jail
-and import policy: a run that may not import a package may not locate it
-either. A URL it returns is always one `import()` accepts.
+so it needs `--allow-imports`, as an import does, and obeys the same root jail:
+a run that may not import may not locate a package either. A URL it returns is always one `import()` accepts.
 
 A tool that has to resolve from somewhere other than its own module — a dev
 server finding the project's copy of a package rather than one nested under

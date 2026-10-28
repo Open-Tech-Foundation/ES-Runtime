@@ -56,7 +56,8 @@ Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
   on its *error* paths too: retries, telemetry, crash reporters.
 - `--allow-read` and `--allow-write` entries are all inside the project root, so
   none of them is inert.
-- An `--import-policy` exists, even if it only denies.
+- A bundled service runs without `--allow-imports`, and its build is held to a
+  [dependency policy](/docs/security/dependency-policy).
 - The permission flags precede the script path.
 - The deployment command is committed and code-reviewed like source, and widening
   it takes the same review as changing the code.
