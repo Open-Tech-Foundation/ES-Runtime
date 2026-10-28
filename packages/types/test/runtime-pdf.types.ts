@@ -1,7 +1,7 @@
 // A type test for `runtime:pdf`. Compiled by `tsc -p .`, never run.
 
 import { file } from "runtime:fs";
-import { PDF, PDFEdit, type PDFOutline, type PDFPageText } from "runtime:pdf";
+import { PDF, type PDFEdit, type PDFOutline, type PDFPageText } from "runtime:pdf";
 
 const controller = new AbortController();
 const doc: PDF = await PDF.open(new Uint8Array(0), {
@@ -22,7 +22,8 @@ const text: string = await doc.text();
 const page: PDFPageText = await doc.pageText(0);
 const word: string | undefined = page.lines[0]?.words[0]?.text;
 const outlines: PDFOutline[] = await doc.outlines();
-const font: string | undefined = (await doc.pageText(0, { chars: true })).lines[0]?.chars?.[0]?.font;
+const font: string | undefined = (await doc.pageText(0, { chars: true })).lines[0]?.chars?.[0]
+  ?.font;
 const named: string | undefined = (await doc.destinations())[0]?.name;
 const xmp: string | undefined = await doc.xmp();
 const scripts: number = (await doc.sanitizeReport({ links: true })).javascript;
@@ -59,4 +60,21 @@ await edit.bytes({ version: "1.4" });
 // @ts-expect-error the constructor is private
 new PDF();
 
-export { font, named, xmp, scripts, count, version, copy, created, kind, text, word, outlines, data, bytes, blob, written };
+export {
+  blob,
+  bytes,
+  copy,
+  count,
+  created,
+  data,
+  font,
+  kind,
+  named,
+  outlines,
+  scripts,
+  text,
+  version,
+  word,
+  written,
+  xmp,
+};
