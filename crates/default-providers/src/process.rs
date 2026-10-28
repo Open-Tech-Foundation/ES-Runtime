@@ -145,7 +145,7 @@ impl Process for SystemProcess {
         // Last, so neither the OS environment nor an --env-file overlay can
         // reintroduce a name the allowlist leaves out.
         if let Some(allow) = &self.env_allow {
-            map.retain(|name, _| allow.iter().any(|a| same_name(a, name)));
+            map.retain(|name, _| allow.contains(name));
         }
         map.into_iter().collect()
     }

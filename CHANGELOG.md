@@ -72,8 +72,7 @@ namespace) is unstable and may change between minor releases until the API freez
   instead: 297 of 300 queries sent straight after an idle `cancel()` were.
 - On Windows, an `--env-file` entry or a `RUNTIME_ENV` default now matches an
   OS variable whatever its case, as Windows does, so `PATH` replaces or keeps
-  the OS's `Path` instead of appearing beside it as a second variable. The
-  `--allow-env` list matches the same way.
+  the OS's `Path` instead of appearing beside it as a second variable.
 
 ### Testing / CI
 
