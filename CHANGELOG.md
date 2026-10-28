@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-28
+
 ### Removed
 
 - `esrun --import-policy` (D194). The runtime loader judged modules by name and

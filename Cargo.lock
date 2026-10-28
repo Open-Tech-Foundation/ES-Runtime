@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1490,11 +1490,11 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-bson"
-version = "0.44.0"
+version = "0.45.0"
 
 [[package]]
 name = "es-runtime-cli"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "es-runtime-cli-common",
  "es-runtime-common",
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-cli-common"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "base64 0.22.1",
  "es-runtime",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-common"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-default-providers"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "bytes",
  "dunce",
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-dev-cli"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "arcstr",
@@ -1611,7 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-engine"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "es-runtime-bson",
  "es-runtime-common",
@@ -1623,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-json"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "serde_json",
  "unicode-ident",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-providers"
-version = "0.44.0"
+version = "0.45.0"
 dependencies = [
  "es-runtime-common",
  "futures-core",
