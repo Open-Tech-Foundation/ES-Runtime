@@ -529,7 +529,7 @@ button:not(:disabled),
   color: var(--afw-accent, #ff7a00);
 }
 
-.web-status-icon {
+.afw-status-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
