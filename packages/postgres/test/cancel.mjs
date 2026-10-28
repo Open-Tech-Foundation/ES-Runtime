@@ -81,7 +81,22 @@ console.log(
 // And after all that the connection is still the one we started with.
 console.log("survives:", (await (await db.query("SELECT 3 AS n")).first()).n);
 
-// cancel() with nothing running is a no-op rather than an error.
-await db.cancel();
+// cancel() with nothing running is a no-op rather than an error — and it never
+// reaches the query sent after it. The server acts on a cancel when it gets
+// to it, so a cancel() that returned before then cancelled the next query
+// nearly every time. A few hundred rounds, because that was a race.
+let cancelledNext = 0;
+for (let i = 0; i < 200; i++) {
+  await db.cancel();
+  try {
+    await db.query("SELECT pg_sleep(0.001)");
+  } catch (e) {
+    if (e.backendCode !== "57014") throw e;
+    cancelledNext++;
+  }
+}
+if (cancelledNext > 0) {
+  throw new Error(`an idle cancel() cancelled the next query ${cancelledNext} times in 200`);
+}
 console.log("idle cancel is harmless:", (await (await db.query("SELECT 4 AS n")).first()).n);
 await db.close();

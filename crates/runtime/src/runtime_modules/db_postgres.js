@@ -830,8 +830,9 @@ class PgConnection extends BaseConnection {
   }
 
   /// Asks the server to cancel whatever this connection is running, on a
-  /// connection of its own. Returns once the request is sent: the outcome
-  /// shows up at the query (a `57014`), or not at all if it had finished.
+  /// connection of its own. Returns once the server has acted on it: the
+  /// outcome shows up at the query (a `57014`), or not at all if it had
+  /// finished — never at a query sent after this returns.
   async cancel() {
     if (this._id === null || this._processId === 0) return;
     const result = await ops.pg_cancel(this._id);

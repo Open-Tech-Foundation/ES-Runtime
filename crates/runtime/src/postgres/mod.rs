@@ -840,9 +840,9 @@ impl Connection {
 /// answer — negotiated the same way, since a cancel that skipped TLS against a
 /// server requiring it would simply be refused.
 ///
-/// The server replies to nothing and closes, so this returns once the request
-/// is sent; the outcome shows up at the query (`57014`), or not at all if it
-/// had already finished.
+/// The server replies to nothing and closes once it has signalled the
+/// backend, so this returns at that close; the outcome shows up at the query
+/// (`57014`), or not at all if it had already finished.
 pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> Result<(), Failure> {
     let (mut socket, _) = net
         .connect(
@@ -885,7 +885,18 @@ pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> R
         wire::cancel_request(&mut out, target.process_id, target.secret_key);
         net.write(socket, out.into_bytes())
             .await
-            .map_err(|e| Failure::Lost(provider_message(&e)))
+            .map_err(|e| Failure::Lost(provider_message(&e)))?;
+        // The server closes this connection once it has signalled the backend.
+        // Returning before then let the cancel land on whatever the connection
+        // ran next — a cancel with nothing running cancelled the following
+        // query. libpq's PQcancel waits for the same close, for the same
+        // reason. Nothing is expected on it; only its end is.
+        while let Ok(Some(chunk)) = net.read(socket).await {
+            if chunk.is_empty() {
+                break;
+            }
+        }
+        Ok(())
     }
     .await;
     let _ = net.close(socket).await;

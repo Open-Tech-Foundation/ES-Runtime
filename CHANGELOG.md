@@ -65,6 +65,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A PostgreSQL `cancel()` — direct, or from an aborted `signal` — returns only
+  once the server has acted on it, as libpq's `PQcancel` does. It returned as
+  soon as the request was sent, so a cancel that arrived after its query had
+  finished, or one made with nothing running, cancelled the next query
+  instead: 297 of 300 queries sent straight after an idle `cancel()` were.
 - On Windows, an `--env-file` entry or a `RUNTIME_ENV` default now matches an
   OS variable whatever its case, as Windows does, so `PATH` replaces or keeps
   the OS's `Path` instead of appearing beside it as a second variable. The
