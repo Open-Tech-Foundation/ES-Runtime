@@ -43,6 +43,7 @@ pub fn print(sheet: &Stylesheet) -> String {
         out: String::new(),
         minify: false,
         last: None,
+        closed: false,
     };
     out.stylesheet(sheet);
     out.out
@@ -54,6 +55,7 @@ pub fn print_minified(sheet: &Stylesheet) -> String {
         out: String::new(),
         minify: true,
         last: None,
+        closed: false,
     };
     out.stylesheet(sheet);
     out.out
@@ -68,6 +70,7 @@ pub fn value_text(value: &ComponentValue) -> String {
         out: String::new(),
         minify: false,
         last: None,
+        closed: false,
     };
     printer.value(value, Context::Value);
     printer.out
@@ -111,6 +114,12 @@ struct Printer {
     /// `@media` and its prelude are printed by different calls, and dropping
     /// the space between them yields `@mediascreen`.
     last: Option<Token>,
+    /// Whether what was written last was a closing `)` or `]`. Nothing merges
+    /// with one, which is why `last` is `None` there — but in a selector a
+    /// space after one is still the descendant combinator: `[open] *`,
+    /// `:not(.a) .b`. Closing it up made `[data-theme="dark"]*`, which matches
+    /// the themed element alone instead of everything inside it.
+    closed: bool,
 }
 
 impl Printer {
@@ -136,6 +145,7 @@ impl Printer {
         match rule {
             Rule::At(at) => {
                 self.push(&at.at.text);
+                self.closed = false;
                 self.last = Some(at.at.clone());
                 self.values(&at.prelude, Context::AtPrelude);
                 match &at.block {
@@ -256,7 +266,7 @@ impl Printer {
         // between two significant values is kept.
         if context.keeps_whitespace() {
             let is_comma = |t: Option<&Token>| t.is_some_and(|t| t.kind == Kind::Comma);
-            return left.is_some() && !is_comma(left) && !is_comma(right);
+            return (left.is_some() || self.closed) && !is_comma(left) && !is_comma(right);
         }
 
         if context == Context::Math {
@@ -281,10 +291,12 @@ impl Printer {
                     return;
                 }
                 self.push(&token.text);
+                self.closed = false;
                 self.last = Some(token.clone());
             }
             ComponentValue::Function(function) => {
                 self.push(&function.name.text);
+                self.closed = false;
                 self.last = Some(function.name.clone());
                 let inner = if MATH.contains(&function.name().as_str()) {
                     Context::Math
@@ -300,10 +312,12 @@ impl Printer {
                     self.push(")");
                     // Nothing merges with a closing bracket.
                     self.last = None;
+                    self.closed = true;
                 }
             }
             ComponentValue::Block(block) => {
                 self.push(&block.open.text);
+                self.closed = false;
                 self.last = Some(block.open.clone());
                 // `[href^='x' i]` is part of a selector and keeps its spaces;
                 // `(min-width: 40em)` is a media feature and reads as a value.
@@ -315,6 +329,7 @@ impl Printer {
                 if block.closed {
                     self.push(block.close());
                     self.last = None;
+                    self.closed = true;
                 }
             }
         }
@@ -389,6 +404,27 @@ mod tests {
 
     fn minified(source: &str) -> String {
         print_minified(&parse(source))
+    }
+
+    /// A space after a closing bracket in a selector is a descendant
+    /// combinator, and survives: Tailwind's class-based `dark:` variant is
+    /// `:where([data-theme="dark"], [data-theme="dark"] *)`, and without the
+    /// space every `dark:` utility matched only the `<html>` element.
+    #[test]
+    fn a_descendant_space_after_a_closing_bracket_is_kept() {
+        assert_eq!(
+            minified(".x:where([data-theme=\"dark\"], [data-theme=\"dark\"] *) { color: red }"),
+            ".x:where([data-theme=\"dark\"],[data-theme=\"dark\"] *){color:red}"
+        );
+        assert_eq!(minified("[open] .x { a: b }"), "[open] .x{a:b}");
+        assert_eq!(minified(":not(.a) .b { a: b }"), ":not(.a) .b{a:b}");
+        assert_eq!(minified("a:hover > b { a: b }"), "a:hover > b{a:b}");
+        // A value has no combinators, so it still closes up after a bracket.
+        assert_eq!(minified("a { b: f(x) y }"), "a{b:f(x)y}");
+        assert_eq!(
+            minified("a { margin: calc(1px + 2px) }"),
+            "a{margin:calc(1px + 2px)}"
+        );
     }
 
     #[test]

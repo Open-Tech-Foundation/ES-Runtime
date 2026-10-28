@@ -82,6 +82,13 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- `esdev build --minify` keeps the space after a closing `]` or `)` in a
+  selector, which is the descendant combinator: `[data-theme="dark"] *` was
+  written as `[data-theme="dark"]*`, which matches the themed element alone.
+  Every Tailwind `dark:` utility built on a class or attribute variant matched
+  only `<html>`, so a minified site's dark mode left its own components light.
+  `[open] .x` and `:not(.a) .b` lost their space the same way.
+
 - The `docs` starter builds its search index: its config named an unknown
   search provider (`otf`), so the build skipped the index and the navbar
   search had nothing to query. The fullstack starter's sample middleware
