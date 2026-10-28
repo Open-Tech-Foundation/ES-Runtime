@@ -40,10 +40,12 @@ crates/default-providers/src/import_policy.rs|module loading, under the import p
 crates/default-providers/src/node_modules.rs|module resolution, confined with jail::confine
 crates/default-providers/src/system_command.rs|executable lookup on PATH for an allowed command (D38); the rest is tests
 crates/default-providers/src/system_net.rs|Unix socket files, under the socket path list (D140), not the file jail
+crates/default-providers/src/dns/config.rs|/etc/resolv.conf for the name servers to ask (D188), a fixed path
 crates/cli-common/src/run.rs|reads the entry module the operator named
 crates/cli-common/src/dotenv.rs|reads the --env-file the operator named
 crates/cli-common/src/sourcemap.rs|reads source maps beside modules already loaded
 crates/runtime/src/lib.rs|/proc/self/statm for memory stats; the rest is tests
+crates/runtime/src/mongodb/spec_tests.rs|test-only: reads the fetched MongoDB specification suites
 crates/engine/src/sysinfo.rs|/proc/self/status for process stats
 crates/engine/src/sysmem.rs|/proc and cgroup files for memory limits
 '

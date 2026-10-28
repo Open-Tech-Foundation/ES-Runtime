@@ -11,6 +11,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Testing / CI
+
+- `scripts/fs-discipline.sh` lists the DNS resolver's read of
+  `/etc/resolv.conf` and the MongoDB specification tests' reads, which had
+  left the check failing.
+
 ## [0.44.0] - 2026-10-27
 
 ### Added
