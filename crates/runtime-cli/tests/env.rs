@@ -434,3 +434,95 @@ fn environment_is_gated_like_any_env_read() {
         stderr(&out)
     );
 }
+
+/// A variable spelled the way Windows spells `Path`: neither all upper nor all
+/// lower, so every case-variant lookup below is a different spelling of it.
+const MIXED: &str = "EsrunCaseVar";
+
+/// `env` finds a variable as the platform names it (D195): on Windows a
+/// lookup, write, delete or `in` in any case reaches the one variable, under
+/// the spelling the OS gave it; elsewhere names are exact.
+#[test]
+fn env_names_follow_the_platform_s_case_rule() {
+    let script = write(
+        "env_case.js",
+        r#"import { env } from "runtime:process";
+const same = Object.keys(env).filter((k) => k.toUpperCase() === "ESRUNCASEVAR");
+console.log(env.ESRUNCASEVAR, env.esruncasevar, "ESRUNCASEVAR" in env, same.join(","));
+env.ESRUNCASEVAR = "w";
+console.log(env.EsrunCaseVar);
+delete env.esruncasevar;
+console.log("EsrunCaseVar" in env);
+"#,
+    );
+    let out = esrun().env(MIXED, "v").arg(&script).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected = if cfg!(windows) {
+        "v v true EsrunCaseVar\nw\nfalse\n"
+    } else {
+        "undefined undefined false EsrunCaseVar\nv\ntrue\n"
+    };
+    assert_eq!(stdout(&out), expected);
+}
+
+/// `--allow-env=<names>` grants a variable as the platform names it (D195).
+#[test]
+fn an_allow_env_grant_names_a_variable_as_the_platform_does() {
+    let script = write(
+        "env_case_grant.js",
+        "import { env } from \"runtime:process\";\nconsole.log(Object.keys(env).join(\",\"));\n",
+    );
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
+        .arg("--allow-env=ESRUNCASEVAR")
+        .arg(&script)
+        .env(MIXED, "v")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected = if cfg!(windows) { MIXED } else { "" };
+    assert_eq!(stdout(&out).trim(), expected);
+}
+
+/// `runtime:system`'s `env` over `inheritEnv` sets and removes the inherited
+/// variable it names, as the platform names it (D195). The child is esrun.
+#[test]
+fn a_child_s_env_names_inherited_variables_as_the_platform_does() {
+    let child = write(
+        "env_case_child.js",
+        "import { env } from \"runtime:process\";\n\
+         console.log(Object.entries(env).filter(([k]) => k.toUpperCase() === \"ESRUNCASEVAR\").map(([k, v]) => `${k}=${v}`).join(\",\"));\n",
+    );
+    let parent = write(
+        "env_case_parent.js",
+        r#"import { env } from "runtime:process";
+import { Command } from "runtime:system";
+const run = async (changes) => {
+  const out = await new Command(env.ESRUN_SELF, {
+    args: ["--allow-env", env.ESRUN_CHILD],
+    inheritEnv: true,
+    env: changes,
+  }).output();
+  return new TextDecoder().decode(out.stdout).trim();
+};
+console.log(await run({ ESRUNCASEVAR: undefined }));
+console.log(await run({ ESRUNCASEVAR: "w" }));
+"#,
+    );
+    let out = Command::new(common::esrun_bin())
+        .current_dir(common::tmpdir())
+        .args(["--allow-env", "--allow-run"])
+        .arg(&parent)
+        .env(MIXED, "v")
+        .env("ESRUN_SELF", common::esrun_bin())
+        .env("ESRUN_CHILD", &child)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected = if cfg!(windows) {
+        "\nEsrunCaseVar=w\n"
+    } else {
+        "EsrunCaseVar=v\nESRUNCASEVAR=w,EsrunCaseVar=v\n"
+    };
+    assert_eq!(stdout(&out), expected);
+}

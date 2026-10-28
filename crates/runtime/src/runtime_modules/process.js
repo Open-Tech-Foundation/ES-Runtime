@@ -70,7 +70,10 @@ function unmask(value) {
 // throws. `args` uses the same lazy seeding — not because it needs a capability
 // (D65 ungated it) but because it is frozen on first read, and freezing at
 // module evaluation would fix it before a worker's arguments arrive.
-function seeded(target, fill, onWrite) {
+//
+// `nameOf(target, key)` maps a key to the one the target holds it under —
+// identity for everything but `env` on Windows (D195).
+function seeded(target, fill, onWrite, nameOf = (_t, k) => k) {
   let done = false;
   const seed = () => {
     if (done) return;
@@ -82,16 +85,24 @@ function seeded(target, fill, onWrite) {
   // Every trap that can observe or mutate the target seeds first, so the value
   // is indistinguishable from one built eagerly.
   return new Proxy(target, {
-    get: (t, k, r) => (seed(), Reflect.get(t, k, r)),
+    get: (t, k, r) => (seed(), Reflect.get(t, nameOf(t, k), r)),
     set: (t, k, v, r) => (
-      seed(), Reflect.set(t, k, onWrite === undefined ? v : onWrite(k, v), r)
+      seed(),
+      Reflect.set(t, nameOf(t, k), onWrite === undefined ? v : onWrite(k, v), r)
     ),
-    has: (t, k) => (seed(), Reflect.has(t, k)),
-    deleteProperty: (t, k) => (seed(), Reflect.deleteProperty(t, k)),
+    has: (t, k) => (seed(), Reflect.has(t, nameOf(t, k))),
+    deleteProperty: (t, k) => (seed(), Reflect.deleteProperty(t, nameOf(t, k))),
     ownKeys: (t) => (seed(), Reflect.ownKeys(t)),
-    getOwnPropertyDescriptor: (t, k) => (
-      seed(), Reflect.getOwnPropertyDescriptor(t, k)
-    ),
+    getOwnPropertyDescriptor: (t, k) => {
+      seed();
+      const name = nameOf(t, k);
+      const found = Reflect.getOwnPropertyDescriptor(t, name);
+      if (name === k || found === undefined) return found;
+      // Another spelling of a key the target holds. A proxy may only report a
+      // property its target lacks as configurable, and only while the target
+      // is extensible: a frozen `env` answers for its own spellings alone.
+      return Reflect.isExtensible(t) ? { ...found, configurable: true } : undefined;
+    },
     // `Object.defineProperty(env, k, { value })` is a write that never reaches
     // the `set` trap, so without this it was the one way to leave a raw
     // non-string in `env` (Node coerces here too).
@@ -99,7 +110,7 @@ function seeded(target, fill, onWrite) {
       seed(),
       Reflect.defineProperty(
         t,
-        k,
+        nameOf(t, k),
         onWrite !== undefined && d !== undefined && "value" in d
           ? { ...d, value: onWrite(k, d.value) }
           : d,
@@ -120,6 +131,21 @@ function seeded(target, fill, onWrite) {
 // `env`: a mutable in-process object seeded from the host snapshot. Reads,
 // writes, and deletes work in-process; they do not (yet) propagate to the host
 // process or future child processes. Secret-keyed values are wrapped (above).
+// Windows names a variable without regard to case, so `Path` and `PATH` are
+// one variable there (D195): a key finds it under whatever spelling it has,
+// and listing the keys shows that spelling, as Node does. Elsewhere names are
+// exact. Compared by Unicode uppercase, as the Rust side compares them.
+// Asked on first use, not at import, like everything `env` needs.
+let envNamesIgnoreCase;
+function envName(target, key) {
+  envNamesIgnoreCase ??= ops.process_platform() === "windows";
+  if (!envNamesIgnoreCase || typeof key !== "string" || Object.hasOwn(target, key)) {
+    return key;
+  }
+  const upper = key.toUpperCase();
+  return Object.keys(target).find((name) => name.toUpperCase() === upper) ?? key;
+}
+
 const env = seeded({}, (target) => {
   // A worker its parent handed an `env` reads that, and needs no capability for
   // it: those values came from the parent, which already held them. Everyone
@@ -129,9 +155,9 @@ const env = seeded({}, (target) => {
   for (const [key, value] of provided ?? ops.process_env()) {
     // Masked by the same key convention either way. A parent that unwrapped a
     // Secret to pass it on does not thereby unmask it for the worker.
-    target[key] = toEnvValue(key, value);
+    target[envName(target, key)] = toEnvValue(key, value);
   }
-}, toEnvValue);
+}, toEnvValue, envName);
 
 // What actually gets stored for an assignment to `env`, applied to the host
 // snapshot *and* to anything written later.

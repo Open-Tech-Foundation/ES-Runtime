@@ -23,6 +23,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- On Windows, environment variable names are case-insensitive, as Windows
+  makes them (D195). `env.PATH`, `env.path` and `"PATH" in env` reach the
+  variable the OS spells `Path`, and a write or delete in any case changes
+  that one variable; `--allow-env=PATH` grants it; an `--env-file` entry or a
+  `RUNTIME_ENV` default replaces or keeps it instead of adding a second
+  variable beside it; and `runtime:system`'s `env` over `inheritEnv` sets or
+  removes it, where `{ PATH: undefined }` had let the inherited `Path` through
+  to the child. On Linux and macOS names stay exact.
+
 - `BSON.decode` builds documents and the BSON class instances in V8's fast
   mode, as `JSON.parse` builds objects, where it used to build dictionaries
   (D187). Documents with the same fields share a shape, so reading them is
@@ -70,9 +79,6 @@ namespace) is unstable and may change between minor releases until the API freez
   soon as the request was sent, so a cancel that arrived after its query had
   finished, or one made with nothing running, cancelled the next query
   instead: 297 of 300 queries sent straight after an idle `cancel()` were.
-- On Windows, an `--env-file` entry or a `RUNTIME_ENV` default now matches an
-  OS variable whatever its case, as Windows does, so `PATH` replaces or keeps
-  the OS's `Path` instead of appearing beside it as a second variable.
 
 ### Testing / CI
 

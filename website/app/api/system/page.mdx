@@ -47,7 +47,7 @@ argument list is never silently dropped.
 | --- | --- | --- | --- |
 | `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |
 | `cwd` | `string \| URL` | the parent's | The child's working directory. |
-| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` is unwrapped for the child; `undefined` removes an inherited key. |
+| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` is unwrapped for the child; `undefined` removes an inherited key. On Windows a key names an inherited variable whatever its case: `{ PATH: undefined }` removes the inherited `Path`, and `{ PATH: "…" }` replaces it. |
 | `inheritEnv` | `boolean` | `false` | Start from the host environment. **Needs Env as well as Run.** |
 | `stdin` | `"null" \| "piped" \| "inherit"`, or a body | `"null"` | A body — string, bytes, `Blob`, `Response`, `ReadableStream` — is written to the child, then stdin closed. |
 | `stdout` / `stderr` | `"piped" \| "inherit" \| "null"` | `"piped"` | How the output is connected. |

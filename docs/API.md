@@ -1029,6 +1029,11 @@ written) and a spawn is admitted only if it lands on the same file. So
 spellings — and refuses `/tmp/git`, which is a different program that happens to
 share a name.
 
+A name in `--allow-env` matches a variable as the platform names it: exactly
+on Linux and macOS, ignoring case on Windows, where `--allow-env=PATH` grants
+the variable the OS spells `Path`. Windows holds one variable per name whatever
+its case, so a grant still reaches exactly one variable.
+
 **An address** is a host (any port), a `host:port`, a bare port (any
 interface — usually what a `--allow-listen` wants), or `unix:` and an absolute
 Unix socket path (`unix:/var/run/docker.sock`). Bracket an IPv6 literal that
@@ -1466,7 +1471,7 @@ environment wins on a conflict unless `--env-override` is passed, and later
 
 | Export            | Type                                | Description                                                                                                                                                                              |
 | ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Assigned values are **coerced to strings** — an environment holds nothing else, so `env.PORT = 8080` stores `"8080"` and a symbol throws, matching Node and Deno. Secret-keyed values are `Secret` wrappers (see below) — including ones the program **assigns at runtime**, so `env.MY_API_KEY = "…"` masks on the same convention the snapshot does. |
+| `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Assigned values are **coerced to strings** — an environment holds nothing else, so `env.PORT = 8080` stores `"8080"` and a symbol throws, matching Node and Deno. Secret-keyed values are `Secret` wrappers (see below) — including ones the program **assigns at runtime**, so `env.MY_API_KEY = "…"` masks on the same convention the snapshot does. On Windows, names are case-insensitive, as Windows makes them: `env.PATH`, `env.path` and `"PATH" in env` all reach the variable the OS spells `Path`, a write or delete in any case changes that one variable, and `Object.keys(env)` shows the OS's spelling. Elsewhere, names are exact. |
 | `environment()` | `() => string` | The deployment environment (D192): `RUNTIME_ENV`, else `NODE_ENV`, else `"production"`; an empty value counts as unset. Read at run time through `env`, so it needs `Env` — `--allow-env=RUNTIME_ENV,NODE_ENV` is enough. esdev sets `RUNTIME_ENV` to `"development"` for what it runs and `"test"` under `esdev test` when the shell has not. Unrelated to the `process.env.NODE_ENV` a bundler folds in, which describes the build. |
 | `args`            | `readonly string[]`                 | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
 | `stdin`           | `StdIn`                             | The process's standard input: `isTTY`, `readable`, `lines()`, `question(query)`, `setRawMode(on)`, `isRaw`. **No capability**; main agent only. See [Standard input](#standard-input). |
@@ -4019,7 +4024,7 @@ argument list is never silently dropped.
 | --- | --- | --- | --- |
 | `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |
 | `cwd` | `string \| URL` | the parent's | The child's working directory. |
-| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` from `runtime:process` is unwrapped for the child (it would otherwise arrive as the literal `"[redacted]"`); `undefined` removes an inherited key. |
+| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` from `runtime:process` is unwrapped for the child (it would otherwise arrive as the literal `"[redacted]"`); `undefined` removes an inherited key. On Windows a key names an inherited variable whatever its case: `{ PATH: undefined }` removes the inherited `Path`, and `{ PATH: "…" }` replaces it. |
 | `inheritEnv` | `boolean` | `false` | Start from the host environment. **Needs `Env` as well as `Run`.** |
 | `stdin` | `"null" \| "piped" \| "inherit"`, or a body | `"null"` | A body — string, bytes, `Blob`, `Response`, or `ReadableStream` — is written to the child and stdin then closed. |
 | `stdout` / `stderr` | `"piped" \| "inherit" \| "null"` | `"piped"` | How the output is connected. |

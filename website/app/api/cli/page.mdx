@@ -237,6 +237,11 @@ Granting one capability both whole and narrowed (`--allow-env --allow-env=HOME`)
 is an error rather than a precedence rule — no flag overrides another here
 either.
 
+A name in `--allow-env` matches a variable as the platform names it: exactly
+on Linux and macOS, ignoring case on Windows, where `--allow-env=PATH` grants
+the variable the OS spells `Path`. Windows holds one variable per name whatever
+its case, so a grant still reaches exactly one variable.
+
 <Callout type="note" title="A scoped grant is still a grant">
   `--allow-env=HOME` reports `permissions.has("env") === true`. The capability
   is what opens the door; the list is what the provider then declines to hand

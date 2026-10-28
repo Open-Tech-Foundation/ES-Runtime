@@ -78,17 +78,32 @@ function checkCwd(cwd) {
 // The child's complete environment, as the [name, value] pairs the op takes.
 // `inheritEnv` reads the host environment through the Env-gated op, so a runtime
 // granted Run but not Env cannot inherit — it throws where it would have leaked.
+//
+// On Windows a key names the inherited variable whatever its case (D195), so
+// `{ PATH: undefined }` removes the inherited `Path` rather than missing it
+// and letting it through, and `{ PATH: "…" }` replaces it under its own
+// spelling rather than handing the child two.
+// Asked on first use, not at import: importing a `runtime:` module does
+// nothing but define it.
+let envNamesIgnoreCase;
 function checkEnv(env, inheritEnv) {
   const pairs = inheritEnv ? ops.process_env() : [];
   if (env === undefined || env === null) return pairs;
   if (typeof env !== "object") throw new TypeError("env must be an object");
   const merged = new Map(pairs);
+  envNamesIgnoreCase ??= ops.process_platform() === "windows";
+  const nameOf = (key) => {
+    if (!envNamesIgnoreCase || merged.has(key)) return key;
+    const upper = key.toUpperCase();
+    for (const name of merged.keys()) if (name.toUpperCase() === upper) return name;
+    return key;
+  };
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) {
-      merged.delete(key); // an explicit undefined removes an inherited key
+      merged.delete(nameOf(key)); // an explicit undefined removes an inherited key
       continue;
     }
-    merged.set(key, unwrapSecret(key, value));
+    merged.set(nameOf(key), unwrapSecret(key, value));
   }
   return [...merged];
 }

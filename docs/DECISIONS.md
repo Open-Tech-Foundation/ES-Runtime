@@ -4067,3 +4067,28 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **Making it pin content at run time** (D193's withdrawn phase 4). It would mostly pin one file that an image digest already pins.
 
 **Consequences:** D39's file format lives on only in esdev. The import-policy pages and the CLI reference's section are removed; the dependency policy page and the esdev build reference carry the file, and the deployment guide shows a bundle run without `--allow-imports`.
+
+### D195 — environment variable names follow the platform: exact on Unix, case-insensitive on Windows · *Accepted (2026-10-29)*
+
+**Context:** Windows treats environment variable names case-insensitively, so `Path` and `PATH` are one variable. The OS keeps whichever spelling the variable was created with, which for the search path is `Path`. esrun compared names exactly everywhere, so on Windows:
+- `env.PATH` was `undefined`, and a program written for Node or Deno failed there;
+- `--allow-env=PATH` hid the OS's `Path` from a program that had been granted it;
+- an `--env-file` entry or a `RUNTIME_ENV` default spelled `PATH` was added as a second variable beside `Path` rather than replacing or keeping it;
+- `spawn({ inheritEnv: true, env: { PATH: undefined } })` removed nothing, and the inherited `Path` still reached the child.
+
+**Decision (maintainer, 2026-10-29):** one rule wherever esrun compares environment variable names. On Windows, two names are the same variable when they are equal ignoring case; elsewhere, only when they are equal. Each place that compares names uses it:
+- **`env` (`runtime:process`)**: a read, write, delete or `in` finds the variable under whatever spelling it has; listing the keys shows the spelling the variable already has. Node does the same.
+- **`--allow-env=<names>`**: a name grants the variable whatever its case. Deno matches the same way, on Windows only.
+- **`--env-file` and `RUNTIME_ENV` defaults**: an entry replaces or keeps the existing variable, keeping its spelling. Two entries that differ only in case are one name, so the later wins, as it already did for an exact repeat.
+- **`runtime:system`'s `env` over `inheritEnv`**: a key sets or removes the inherited variable it names.
+
+Case is compared by Unicode uppercase, the same in the Rust and JavaScript halves, so the two cannot disagree about a name.
+
+**Why handled rather than reported:** to know a lookup should fail or warn, esrun would already have found the variable; refusing it then makes the error the bug. The spelling is the OS's choice, not the program's, so nothing a warning said could be acted on except by code that tries every spelling. A grant cannot widen: Windows holds one variable per name ignoring case, so `--allow-env=PATH` still reaches exactly one variable.
+
+**Rejected:**
+- **Exact matching everywhere.** Correct-looking programs fail on one platform, and the failure is silent: `undefined`, or a variable that was granted but cannot be seen.
+- **An error or a warning on a case mismatch.** See above: it reports what the runtime already resolved and leaves the program broken.
+- **Node's exception for worker threads**, whose copy of `env` is case-sensitive. A worker's `env` follows the same rule as the main thread's.
+
+**Consequences:** on Unix nothing changes. On Windows, the four places above resolve names the platform's way, and the API reference says so for `env`, `--allow-env` and `spawn`'s `env`.

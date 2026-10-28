@@ -115,39 +115,14 @@ impl SystemProcess {
 
 impl Process for SystemProcess {
     fn env(&self) -> Vec<(String, String)> {
-        // Fold the overlay first so later entries win within it (later
-        // --env-file overrides earlier), then merge with the OS environment per
-        // the override flag. BTreeMap keeps the output deterministic.
-        let mut overlay: BTreeMap<&str, &str> = BTreeMap::new();
-        for (k, v) in &self.env_overlay {
-            overlay.insert(k, v);
-        }
-        let mut map: BTreeMap<String, String> = std::env::vars().collect();
-        for (k, v) in overlay {
-            match os_name(&map, k) {
-                Some(name) if self.env_override => {
-                    map.insert(name, v.to_string());
-                }
-                Some(_) => {}
-                None => {
-                    map.insert(k.to_string(), v.to_string());
-                }
-            }
-        }
-        // An empty value counts as unset (D192): container templates write
-        // `RUNTIME_ENV=` as often as they leave it out.
-        for (k, v) in &self.env_defaults {
-            let name = os_name(&map, k).unwrap_or_else(|| k.clone());
-            if map.get(&name).is_none_or(String::is_empty) {
-                map.insert(name, v.clone());
-            }
-        }
-        // Last, so neither the OS environment nor an --env-file overlay can
-        // reintroduce a name the allowlist leaves out.
-        if let Some(allow) = &self.env_allow {
-            map.retain(|name, _| allow.contains(name));
-        }
-        map.into_iter().collect()
+        merge_env(
+            std::env::vars(),
+            &self.env_overlay,
+            self.env_override,
+            &self.env_defaults,
+            self.env_allow.as_ref(),
+            cfg!(windows),
+        )
     }
 
     fn args(&self) -> Vec<String> {
@@ -251,28 +226,76 @@ impl Process for SystemProcess {
     }
 }
 
-/// Whether two environment variable names are the same variable: exactly on
-/// Unix, ignoring ASCII case on Windows, where the OS spells `PATH` as `Path`
-/// and treats both as one.
-fn same_name(a: &str, b: &str) -> bool {
-    same_name_on(a, b, cfg!(windows))
-}
-
-fn same_name_on(a: &str, b: &str, windows: bool) -> bool {
-    if windows {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
+/// The environment a program sees: the OS's, the `--env-file` overlay, the
+/// defaults, then the allowlist — with names compared as `windows` says the
+/// platform compares them (D195). A pure function of its inputs, so the
+/// Windows rule is tested on every platform.
+fn merge_env(
+    os: impl IntoIterator<Item = (String, String)>,
+    overlay: &[(String, String)],
+    overlay_wins: bool,
+    defaults: &[(String, String)],
+    allow: Option<&BTreeSet<String>>,
+    windows: bool,
+) -> Vec<(String, String)> {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in os {
+        put(&mut map, &k, v, windows);
     }
+    // Folded first so a later entry wins within it (a later --env-file over an
+    // earlier one), including one that differs only in case on Windows.
+    let mut folded: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in overlay {
+        put(&mut folded, k, v.clone(), windows);
+    }
+    for (k, v) in folded {
+        match spelling(&map, &k, windows) {
+            Some(name) if overlay_wins => {
+                map.insert(name, v);
+            }
+            Some(_) => {}
+            None => {
+                map.insert(k, v);
+            }
+        }
+    }
+    // An empty value counts as unset (D192): container templates write
+    // `RUNTIME_ENV=` as often as they leave it out.
+    for (k, v) in defaults {
+        let name = spelling(&map, k, windows).unwrap_or_else(|| k.clone());
+        if map.get(&name).is_none_or(String::is_empty) {
+            map.insert(name, v.clone());
+        }
+    }
+    // Last, so neither the OS environment nor an --env-file overlay can
+    // reintroduce a name the allowlist leaves out.
+    if let Some(allow) = allow {
+        map.retain(|name, _| allow.iter().any(|a| same_name(a, name, windows)));
+    }
+    map.into_iter().collect()
 }
 
-/// The spelling `map` already holds for `name`, so an overlay or default
-/// replaces that variable instead of adding a second one beside it.
-fn os_name(map: &BTreeMap<String, String>, name: &str) -> Option<String> {
+/// Whether two environment variable names are the same variable (D195):
+/// exactly on Unix, ignoring case on Windows, where the OS spells `PATH` as
+/// `Path` and treats both as one. Case is compared by Unicode uppercase, as
+/// `runtime:process` and `runtime:system` compare it.
+fn same_name(a: &str, b: &str, windows: bool) -> bool {
+    a == b || (windows && a.to_uppercase() == b.to_uppercase())
+}
+
+/// The spelling `map` already holds for `name`, if it holds the variable.
+fn spelling(map: &BTreeMap<String, String>, name: &str, windows: bool) -> Option<String> {
     if map.contains_key(name) {
         return Some(name.to_string());
     }
-    map.keys().find(|k| same_name(k, name)).cloned()
+    map.keys().find(|k| same_name(k, name, windows)).cloned()
+}
+
+/// Sets `name` in `map`, replacing the variable it names under the spelling
+/// that variable already has.
+fn put(map: &mut BTreeMap<String, String>, name: &str, value: String, windows: bool) {
+    let name = spelling(map, name, windows).unwrap_or_else(|| name.to_string());
+    map.insert(name, value);
 }
 
 /// One write, all of it, then flushed. A short write is retried by
@@ -340,17 +363,85 @@ mod tests {
         assert_eq!(get(&env, overlaid), Some("file"));
         assert_eq!(get(&env, empty), Some("default"));
         // Windows spells it `Path`; the default must not add a second `PATH`.
-        let path: Vec<_> = env.iter().filter(|(k, _)| same_name(k, "PATH")).collect();
+        let path: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| same_name(k, "PATH", cfg!(windows)))
+            .collect();
         assert_eq!(path.len(), 1, "one PATH variable, not two: {path:?}");
         assert_ne!(path[0].1, "default");
     }
 
     #[test]
     fn env_names_compare_as_the_platform_does() {
-        assert!(same_name_on("PATH", "PATH", false));
-        assert!(!same_name_on("Path", "PATH", false));
-        assert!(same_name_on("Path", "PATH", true));
-        assert!(!same_name_on("PATHS", "PATH", true));
+        assert!(same_name("PATH", "PATH", false));
+        assert!(!same_name("Path", "PATH", false));
+        assert!(same_name("Path", "PATH", true));
+        assert!(same_name("straße", "STRASSE", true), "Unicode uppercase");
+        assert!(!same_name("PATHS", "PATH", true));
+    }
+
+    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// The Windows rule (D195), run on every platform: an overlay, a default
+    /// and the allowlist each find `Path` when they name `PATH`, and keep the
+    /// OS's spelling.
+    #[test]
+    fn on_windows_a_name_finds_its_variable_whatever_its_case() {
+        let os = pairs(&[("Path", "C:\\bin"), ("TEMP", "C:\\t")]);
+        let allow: BTreeSet<String> = ["PATH".to_string(), "temp".to_string()].into();
+
+        let kept = merge_env(os.clone(), &pairs(&[("PATH", "x")]), false, &[], None, true);
+        assert_eq!(kept, pairs(&[("Path", "C:\\bin"), ("TEMP", "C:\\t")]));
+
+        let replaced = merge_env(os.clone(), &pairs(&[("PATH", "x")]), true, &[], None, true);
+        assert_eq!(replaced, pairs(&[("Path", "x"), ("TEMP", "C:\\t")]));
+
+        let defaulted = merge_env(os.clone(), &[], false, &pairs(&[("PATH", "d")]), None, true);
+        assert_eq!(defaulted, pairs(&[("Path", "C:\\bin"), ("TEMP", "C:\\t")]));
+
+        let granted = merge_env(os.clone(), &[], false, &[], Some(&allow), true);
+        assert_eq!(granted, pairs(&[("Path", "C:\\bin"), ("TEMP", "C:\\t")]));
+
+        // Within the overlay, a later entry wins over one differing in case.
+        let later = merge_env(
+            vec![],
+            &pairs(&[("Mode", "a"), ("MODE", "b")]),
+            false,
+            &[],
+            None,
+            true,
+        );
+        assert_eq!(later, pairs(&[("Mode", "b")]));
+    }
+
+    /// The same inputs on Unix: names are exact, so each is its own variable.
+    #[test]
+    fn elsewhere_names_differing_in_case_are_different_variables() {
+        let os = pairs(&[("Path", "/bin")]);
+        let allow: BTreeSet<String> = ["PATH".to_string()].into();
+        let merged = merge_env(
+            os.clone(),
+            &pairs(&[("PATH", "x")]),
+            false,
+            &[],
+            None,
+            false,
+        );
+        assert_eq!(merged, pairs(&[("PATH", "x"), ("Path", "/bin")]));
+        assert!(merge_env(os, &[], false, &[], Some(&allow), false).is_empty());
+        let later = merge_env(
+            vec![],
+            &pairs(&[("Mode", "a"), ("MODE", "b")]),
+            false,
+            &[],
+            None,
+            false,
+        );
+        assert_eq!(later, pairs(&[("MODE", "b"), ("Mode", "a")]));
     }
 
     #[test]
@@ -404,12 +495,14 @@ mod tests {
         assert!(p.env().is_empty());
     }
 
+    /// A grant names a whole variable: a prefix is not it. Case follows the
+    /// platform (D195), which the `merge_env` tests above cover for both.
     #[test]
-    fn allowlist_matching_is_exact() {
+    fn allowlist_matches_whole_names_only() {
         let key = "ESRUN_TEST_EXACT_KEY";
         let p = SystemProcess::new(vec![])
             .with_env(vec![(key.into(), "v".into())], false)
-            .with_env_allowlist(["esrun_test_exact_key", "ESRUN_TEST_EXACT"]);
+            .with_env_allowlist(["ESRUN_TEST_EXACT", "ESRUN_TEST_EXACT_KEY_2"]);
         assert_eq!(get(&p.env(), key), None);
     }
 
