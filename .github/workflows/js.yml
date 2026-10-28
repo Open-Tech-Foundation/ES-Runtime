@@ -254,18 +254,20 @@ jobs:
       - run: tsr build
       - run: tsr typecheck
       # The image restarts mongod after creating the root user; wait until both
-      # servers answer the way the tests will reach them.
+      # servers answer. Asked from inside each container, so a probe neither
+      # starts a container of its own nor depends on host networking; on a
+      # timeout the server's log says why.
       - run: |
           wait_for() {
-            for _ in $(seq 60); do
-              docker run --rm --network host mongo:${{ matrix.mongo }} \
-                mongosh --quiet "$1" --eval "db.runCommand({ ping: 1 }).ok" >/dev/null 2>&1 && return 0
+            for _ in $(seq 90); do
+              docker exec "$1" mongosh --quiet "$2" --eval "db.runCommand({ ping: 1 }).ok" >/dev/null 2>&1 && return 0
               sleep 2
             done
+            docker logs --tail 50 "$1"
             return 1
           }
-          wait_for mongodb://127.0.0.1:27017/
-          wait_for mongodb://root:esrun@127.0.0.1:27018/
+          wait_for standalone mongodb://127.0.0.1:27017/
+          wait_for with-auth mongodb://root:esrun@127.0.0.1:27017/
       - run: echo "MONGODB_RS_URL=$(packages/mongodb/test/replica-set.sh ${{ matrix.mongo }})" >> "$GITHUB_ENV"
       # The discovery, monitoring and selection specification suites, fetched
       # at their pinned revision.

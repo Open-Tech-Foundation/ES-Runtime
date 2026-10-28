@@ -82,6 +82,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - The sharded hibernating-room test waits for both clients to receive the
   last broadcast before printing, where it waited for one and failed when the
   other's copy was still in flight.
+- The MongoDB job waits for its servers by asking each from inside its own
+  container, for up to three minutes, and prints the server's log when one
+  never answers. It started a `mongosh` container per probe and gave up after
+  two minutes without saying why.
 
 ## [0.44.0] - 2026-10-27
 
