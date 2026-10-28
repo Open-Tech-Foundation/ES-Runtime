@@ -22,6 +22,12 @@ namespace) is unstable and may change between minor releases until the API freez
   `JSONC.stringify` is `JSON.stringify`; `JSON5.stringify` writes JSON5 as the
   `json5` package does, with `toJSON5()` and a `quote` option. Errors name the
   dialect and end `at line L column C`.
+- `JSONC.edit(text, path, value)` and `JSON5.edit(text, path, value)` change
+  one value in a config file and keep every other byte: comments, blank
+  lines, key order and quotes (D191). A missing key is added in the style of
+  its siblings, missing objects on the path are created, and `undefined`
+  removes the member with its comma and its line's comment. A `json_edit`
+  fuzz target checks that every edit means exactly the change asked for.
 - `es-runtime-json`, the reader behind the coming `JSONC` and `JSON5` in
   `runtime:serialization` (D191). JSONC is JSON with `//` and `/* */`
   comments and one trailing comma; JSON5 is JSON5 1.0.0 in full. One lexer

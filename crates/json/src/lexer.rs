@@ -119,6 +119,11 @@ impl<'a> Lexer<'a> {
         self.pos
     }
 
+    /// Moves to `pos`, the start of a token found earlier.
+    pub fn seek(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
     /// Consumes the one-byte token [`peek`](Self::peek) returned.
     #[inline]
     pub fn bump(&mut self) {

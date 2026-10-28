@@ -1055,6 +1055,7 @@ dependencies = [
  "es-runtime-bson",
  "es-runtime-common",
  "es-runtime-engine",
+ "es-runtime-json",
  "es-runtime-providers",
  "flate2",
  "futures-channel",

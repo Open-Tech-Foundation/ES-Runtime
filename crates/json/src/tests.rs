@@ -812,3 +812,300 @@ fn json_test_suite_and_json5_tests() {
         failures.join("\n")
     );
 }
+
+// ---- edit -----------------------------------------------------------------------
+
+fn path<'a>(steps: &[&'a str]) -> Vec<Segment<'a>> {
+    steps
+        .iter()
+        .map(|s| match s.parse::<usize>() {
+            Ok(i) => Segment::Index(i),
+            Err(_) => Segment::Key(std::borrow::Cow::Borrowed(*s)),
+        })
+        .collect()
+}
+
+/// Sets the value at `steps` to `value`, written as the plan asks: `value` is
+/// given compact, and laid out here with the plan's indent the way
+/// `JSON.stringify(v, null, indent)` would for these simple test values.
+fn set(text: &str, dialect: Dialect, steps: &[&str], value: &str) -> String {
+    let p = path(steps);
+    let plan = plan(text, dialect, &p).unwrap();
+    let value = layout(value, &plan.indent);
+    let out = edit(text, dialect, &p, Some(&value)).unwrap();
+    assert!(
+        validate(&out, dialect).is_ok(),
+        "the result must parse:\n{out}"
+    );
+    out
+}
+
+/// Lays out a compact JSON array or object of scalars over lines with
+/// `indent`, as `JSON.stringify` does; anything else as it is.
+fn layout(compact: &str, indent: &str) -> String {
+    if indent.is_empty()
+        || compact.len() < 3
+        || !(compact.starts_with('[') || compact.starts_with('{'))
+    {
+        return compact.to_owned();
+    }
+    let (open, close) = compact.split_at(compact.len() - 1);
+    let (open, body) = open.split_at(1);
+    let items: Vec<&str> = body.split(',').collect();
+    format!(
+        "{open}\n{indent}{}\n{close}",
+        items.join(&format!(",\n{indent}"))
+    )
+}
+
+fn remove(text: &str, dialect: Dialect, steps: &[&str]) -> String {
+    let out = edit(text, dialect, &path(steps), None).unwrap();
+    assert!(
+        validate(&out, dialect).is_ok(),
+        "the result must parse:\n{out}"
+    );
+    out
+}
+
+const TSCONFIG: &str = r#"{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2020", // the emitted language
+    "strict": true
+  },
+  "include": ["src"]
+}
+"#;
+
+#[test]
+fn edit_replaces_a_value_and_nothing_else() {
+    assert_eq!(
+        set(
+            TSCONFIG,
+            Dialect::Jsonc,
+            &["compilerOptions", "target"],
+            r#""ES2022""#
+        ),
+        TSCONFIG.replace(r#""ES2020""#, r#""ES2022""#)
+    );
+    assert_eq!(
+        set(TSCONFIG, Dialect::Jsonc, &["include", "0"], r#""lib""#),
+        TSCONFIG.replace(r#"["src"]"#, r#"["lib"]"#)
+    );
+}
+
+#[test]
+fn edit_appends_a_key_in_the_style_of_its_siblings() {
+    let out = set(
+        TSCONFIG,
+        Dialect::Jsonc,
+        &["compilerOptions", "types"],
+        r#"["@opentf/esrun-types"]"#,
+    );
+    assert_eq!(
+        out,
+        r#"{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2020", // the emitted language
+    "strict": true,
+    "types": [
+      "@opentf/esrun-types"
+    ]
+  },
+  "include": ["src"]
+}
+"#
+    );
+    // A comment after the last member stays on its line; the comma goes before it.
+    let text = "{\n  \"a\": 1 // one\n}";
+    assert_eq!(
+        set(text, Dialect::Jsonc, &["b"], "2"),
+        "{\n  \"a\": 1, // one\n  \"b\": 2\n}"
+    );
+}
+
+#[test]
+fn edit_keeps_trailing_commas_tabs_and_crlf() {
+    let text = "{\r\n\t\"a\": 1,\r\n}\r\n";
+    assert_eq!(
+        set(text, Dialect::Jsonc, &["b"], "[1,2]"),
+        "{\r\n\t\"a\": 1,\r\n\t\"b\": [\r\n\t\t1,\r\n\t\t2\r\n\t],\r\n}\r\n"
+    );
+    let p = plan(text, Dialect::Jsonc, &path(&["b"])).unwrap();
+    assert_eq!((p.indent.as_str(), p.trailing_commas), ("\t", true));
+}
+
+#[test]
+fn edit_creates_missing_objects_on_the_path() {
+    let text = "{\n    \"name\": \"app\"\n}\n";
+    assert_eq!(
+        set(
+            text,
+            Dialect::Jsonc,
+            &["compilerOptions", "types"],
+            r#"["x"]"#
+        ),
+        "{\n    \"name\": \"app\",\n    \"compilerOptions\": {\n        \"types\": [\n            \"x\"\n        ]\n    }\n}\n"
+    );
+    assert_eq!(
+        set("{}", Dialect::Jsonc, &["a", "b"], "1"),
+        r#"{"a": {"b": 1}}"#
+    );
+    let e = edit(text, Dialect::Jsonc, &path(&["list", "0"]), Some("1")).unwrap_err();
+    assert!(matches!(e, EditError::Path(_)), "{e}");
+}
+
+#[test]
+fn edit_fills_an_empty_container_in_the_file_s_layout() {
+    assert_eq!(
+        set(
+            "{\n  \"paths\": {}\n}",
+            Dialect::Jsonc,
+            &["paths", "a"],
+            "1"
+        ),
+        "{\n  \"paths\": {\n    \"a\": 1\n  }\n}"
+    );
+    assert_eq!(
+        set("{\"paths\": {}}", Dialect::Jsonc, &["paths", "a"], "1"),
+        "{\"paths\": {\"a\": 1}}"
+    );
+    assert_eq!(
+        set(
+            "{\n  \"list\": [ /* none yet */ ]\n}",
+            Dialect::Jsonc,
+            &["list", "0"],
+            "1"
+        ),
+        "{\n  \"list\": [ /* none yet */\n    1\n  ]\n}"
+    );
+}
+
+#[test]
+fn edit_writes_inline_containers_inline() {
+    assert_eq!(
+        set(r#"{"a":1,"b":2}"#, Dialect::Jsonc, &["c"], "3"),
+        r#"{"a":1,"b":2,"c":3}"#
+    );
+    assert_eq!(
+        set(r#"{"a": 1}"#, Dialect::Jsonc, &["b"], "[1,2]"),
+        r#"{"a": 1, "b": [1,2]}"#
+    );
+    assert_eq!(set("[1, 2,]", Dialect::Jsonc, &["2"], "3"), "[1, 2, 3,]");
+    assert_eq!(set("[1, 2]", Dialect::Jsonc, &["2"], "3"), "[1, 2, 3]");
+}
+
+#[test]
+fn edit_refuses_what_it_cannot_do() {
+    let e = edit("[1]", Dialect::Jsonc, &path(&["5"]), Some("1")).unwrap_err();
+    assert!(matches!(e, EditError::Range(_)), "{e}");
+    let e = edit(
+        r#"{"a": "x"}"#,
+        Dialect::Jsonc,
+        &path(&["a", "b"]),
+        Some("1"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "the value at .a is a string, which has no property \"b\""
+    );
+    let e = edit("[1]", Dialect::Jsonc, &path(&["a"]), Some("1")).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "the value at the top is an array, which has no property \"a\""
+    );
+    let e = edit("{a: 1}", Dialect::Jsonc, &path(&["a"]), Some("1")).unwrap_err();
+    assert!(matches!(e, EditError::Syntax(_)), "{e}");
+    let e = edit("{}", Dialect::Jsonc, &path(&["a"]), Some("'x'")).unwrap_err();
+    assert!(matches!(e, EditError::Path(_)), "{e}");
+    let e = edit("{}", Dialect::Jsonc, &[], None).unwrap_err();
+    assert!(matches!(e, EditError::Path(_)), "{e}");
+}
+
+#[test]
+fn edit_removes_a_member_with_its_line_and_comma() {
+    let out = remove(TSCONFIG, Dialect::Jsonc, &["compilerOptions", "target"]);
+    assert_eq!(
+        out,
+        TSCONFIG.replace("    \"target\": \"ES2020\", // the emitted language\n", "")
+    );
+    // The last member takes the comma before it.
+    let out = remove(TSCONFIG, Dialect::Jsonc, &["compilerOptions", "strict"]);
+    assert_eq!(
+        out,
+        TSCONFIG.replace(
+            "    \"target\": \"ES2020\", // the emitted language\n    \"strict\": true\n",
+            "    \"target\": \"ES2020\" // the emitted language\n"
+        )
+    );
+    assert_eq!(
+        remove(r#"{"a": 1, "b": 2, "c": 3}"#, Dialect::Jsonc, &["b"]),
+        r#"{"a": 1, "c": 3}"#
+    );
+    assert_eq!(
+        remove(r#"{"a": 1, "b": 2}"#, Dialect::Jsonc, &["b"]),
+        r#"{"a": 1}"#
+    );
+    assert_eq!(remove(r#"{"a": 1}"#, Dialect::Jsonc, &["a"]), r#"{}"#);
+    assert_eq!(remove("[1, 2, 3]", Dialect::Jsonc, &["0"]), "[2, 3]");
+    // Every occurrence of a repeated key goes; a missing one changes nothing.
+    assert_eq!(
+        remove(r#"{"a": 1, "b": 2, "a": 3}"#, Dialect::Jsonc, &["a"]),
+        r#"{"b": 2}"#
+    );
+    assert_eq!(
+        remove(TSCONFIG, Dialect::Jsonc, &["missing", "x"]),
+        TSCONFIG
+    );
+    assert_eq!(remove("[1]", Dialect::Jsonc, &["4"]), "[1]");
+}
+
+#[test]
+fn edit_sets_the_last_of_a_repeated_key_and_the_root() {
+    assert_eq!(
+        set(r#"{"a": 1, "a": 2}"#, Dialect::Jsonc, &["a"], "3"),
+        r#"{"a": 1, "a": 3}"#
+    );
+    assert_eq!(
+        set("// c\n[1]\n", Dialect::Jsonc, &[], "true"),
+        "// c\ntrue\n"
+    );
+}
+
+#[test]
+fn edit_writes_json5_keys_as_the_file_does() {
+    let text = "{\n  // JSON5\n  name: 'app',\n  list: ['a',],\n}\n";
+    let p = plan(text, Dialect::Json5, &path(&["b"])).unwrap();
+    assert_eq!((p.quote, p.trailing_commas), (Some('\''), true));
+    assert_eq!(
+        set(text, Dialect::Json5, &["version"], "'1.0'"),
+        "{\n  // JSON5\n  name: 'app',\n  list: ['a',],\n  version: '1.0',\n}\n"
+    );
+    assert_eq!(
+        set(text, Dialect::Json5, &["kebab-key"], "1"),
+        "{\n  // JSON5\n  name: 'app',\n  list: ['a',],\n  'kebab-key': 1,\n}\n"
+    );
+    let quoted = "{\"a\": 1}";
+    assert_eq!(
+        set(quoted, Dialect::Json5, &["b"], "2"),
+        "{\"a\": 1, \"b\": 2}"
+    );
+    // A JSONC plan names no quote: its strings are always double-quoted.
+    assert_eq!(
+        plan(
+            text.replace('\'', "\"")
+                .replace("name", "\"name\"")
+                .replace("list", "\"list\"")
+                .as_str(),
+            Dialect::Jsonc,
+            &[]
+        )
+        .unwrap()
+        .quote,
+        None
+    );
+}

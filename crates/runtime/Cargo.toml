@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-bson.workspace = true
+es-runtime-json.workspace = true
 es-runtime-engine.workspace = true
 es-runtime-providers.workspace = true
 futures-util = { workspace = true, features = ["alloc", "sink"] }

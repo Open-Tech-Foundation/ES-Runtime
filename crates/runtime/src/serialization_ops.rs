@@ -1,4 +1,5 @@
-//! Host ops backing the `runtime:serialization` module (XML/YAML/TOML/CSV/JSONL/MessagePack/CBOR).
+//! Host ops backing the `runtime:serialization` module (XML/YAML/TOML/CSV/JSONL/MessagePack/CBOR,
+//! and JSONC's and JSON5's `edit`).
 use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -171,6 +172,8 @@ fn toml_to_value(v: toml::Value) -> Value {
 }
 
 pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
+    install_json_edit(engine)?;
+
     // XML: the reader, writer and stream all live in `crate::xml`, so the
     // three cannot drift apart (they used to walk events separately).
     engine.register_op(OpDecl::sync("xml_parse", |args| {
@@ -667,6 +670,101 @@ fn xml_class(kind: crate::xml::ErrorKind) -> ExceptionClass {
         crate::xml::ErrorKind::Type => ExceptionClass::TypeError,
         crate::xml::ErrorKind::Limit => ExceptionClass::RangeError,
     }
+}
+
+/// The dialect, text and path an edit op is called with.
+fn json_edit_args(
+    args: &[Value],
+) -> Result<
+    (
+        es_runtime_json::Dialect,
+        &str,
+        Vec<es_runtime_json::Segment<'_>>,
+    ),
+    OpError,
+> {
+    use es_runtime_json::{Dialect, Segment};
+    let dialect = match args.first().and_then(Value::as_str) {
+        Some("jsonc") => Dialect::Jsonc,
+        Some("json5") => Dialect::Json5,
+        _ => return Err(OpError::type_error("the dialect is \"jsonc\" or \"json5\"")),
+    };
+    let text = args
+        .get(1)
+        .and_then(Value::as_str)
+        .ok_or_else(|| OpError::type_error("the text must be a string"))?;
+    let Some(Value::Array(steps)) = args.get(2) else {
+        return Err(OpError::type_error("the path must be an array"));
+    };
+    let path = steps
+        .iter()
+        .map(|step| match step {
+            Value::String(key) => Ok(Segment::Key(key.as_str().into())),
+            Value::Number(n) if n.fract() == 0.0 && *n >= 0.0 && *n <= 9_007_199_254_740_991.0 => {
+                Ok(Segment::Index(*n as usize))
+            }
+            _ => Err(OpError::type_error(
+                "each step of the path is a string key or a non-negative integer index",
+            )),
+        })
+        .collect::<Result<_, _>>()?;
+    Ok((dialect, text, path))
+}
+
+fn json_edit_error(
+    dialect: es_runtime_json::Dialect,
+    error: es_runtime_json::EditError,
+) -> OpError {
+    use es_runtime_json::{Dialect, EditError, ErrorKind};
+    let name = match dialect {
+        Dialect::Jsonc => "JSONC",
+        Dialect::Json5 => "JSON5",
+    };
+    match error {
+        EditError::Syntax(e) => {
+            let class = match e.kind {
+                ErrorKind::Syntax => ExceptionClass::SyntaxError,
+                ErrorKind::Depth => ExceptionClass::RangeError,
+            };
+            OpError::new(class, format!("{name}: {e}"))
+        }
+        EditError::Path(m) => OpError::type_error(format!("{name}.edit: {m}")),
+        EditError::Range(m) => OpError::range_error(format!("{name}.edit: {m}")),
+    }
+}
+
+/// `json_edit_plan(dialect, text, path)` and `json_edit(dialect, text, path,
+/// value)`: JSONC's and JSON5's `edit` (DECISIONS D191). Text in and text out,
+/// so they are ordinary ops; the value is written by the dialect's `stringify`
+/// in JavaScript, in the style the plan reports.
+fn install_json_edit(engine: &mut dyn Engine) -> crate::Result<()> {
+    engine.register_op(OpDecl::sync("json_edit_plan", |args| {
+        let (dialect, text, path) = json_edit_args(&args)?;
+        let plan =
+            es_runtime_json::plan(text, dialect, &path).map_err(|e| json_edit_error(dialect, e))?;
+        Ok(Value::Object(vec![
+            ("indent".into(), Value::String(plan.indent)),
+            (
+                "quote".into(),
+                plan.quote
+                    .map_or(Value::Undefined, |q| Value::String(q.to_string())),
+            ),
+            ("trailingCommas".into(), Value::Bool(plan.trailing_commas)),
+        ]))
+    }))?;
+
+    engine.register_op(OpDecl::sync("json_edit", |args| {
+        let (dialect, text, path) = json_edit_args(&args)?;
+        let value = match args.get(3) {
+            Some(Value::String(value)) => Some(value.as_str()),
+            None | Some(Value::Undefined | Value::Null) => None,
+            Some(_) => return Err(OpError::type_error("the value must be written text")),
+        };
+        es_runtime_json::edit(text, dialect, &path, value)
+            .map(Value::String)
+            .map_err(|e| json_edit_error(dialect, e))
+    }))?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -278,3 +278,93 @@ console.log(serialization.JSONC === JSONC, serialization.JSON5 === JSON5);
     );
     assert_eq!(out, ["0", "true true"]);
 }
+
+#[test]
+fn edit_changes_one_value_and_keeps_every_other_byte() {
+    let out = run(
+        "json_edit.mjs",
+        r#"
+const tsconfig = `{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2020", // the emitted language
+    "strict": true,
+  },
+}
+`;
+const added = JSONC.edit(tsconfig, ["compilerOptions", "types"], ["@opentf/esrun-types"]);
+console.log(JSON.stringify(added));
+console.log(JSON.stringify(JSONC.parse(added).compilerOptions.types));
+// Setting a value back where it was gives the text back.
+console.log(JSONC.edit(tsconfig, ["compilerOptions", "target"], "ES2020") === tsconfig);
+const removed = JSONC.edit(added, ["compilerOptions", "target"], undefined);
+console.log(JSON.stringify(removed));
+console.log(JSONC.edit(tsconfig, ["missing", "deeper"], undefined) === tsconfig);
+"#,
+    );
+    assert_eq!(
+        out,
+        [
+            r#""{\n  // Visit https://aka.ms/tsconfig to read more about this file\n  \"compilerOptions\": {\n    /* Language and Environment */\n    \"target\": \"ES2020\", // the emitted language\n    \"strict\": true,\n    \"types\": [\n      \"@opentf/esrun-types\"\n    ],\n  },\n}\n""#,
+            r#"["@opentf/esrun-types"]"#,
+            "true",
+            r#""{\n  // Visit https://aka.ms/tsconfig to read more about this file\n  \"compilerOptions\": {\n    /* Language and Environment */\n    \"strict\": true,\n    \"types\": [\n      \"@opentf/esrun-types\"\n    ],\n  },\n}\n""#,
+            "true",
+        ]
+    );
+}
+
+#[test]
+fn json5_edit_writes_json5_in_the_file_s_style() {
+    let out = run(
+        "json_edit5.mjs",
+        r#"
+const text = "{\n  // renovate.json5\n  extends: ['config:recommended'],\n}\n";
+console.log(JSON.stringify(JSON5.edit(text, ["schedule"], ["before 6am", "it's"])));
+console.log(JSON.stringify(JSON5.edit(text, ["extends", 1], "group:all")));
+console.log(JSON.stringify(JSON5.edit('{"a": 1}', ["b-c"], { d: NaN })));
+"#,
+    );
+    assert_eq!(
+        out,
+        [
+            r#""{\n  // renovate.json5\n  extends: ['config:recommended'],\n  schedule: [\n    'before 6am',\n    'it\\'s',\n  ],\n}\n""#,
+            r#""{\n  // renovate.json5\n  extends: ['config:recommended', 'group:all'],\n}\n""#,
+            r#""{\"a\": 1, \"b-c\": {d:NaN}}""#,
+        ]
+    );
+}
+
+#[test]
+fn edit_errors_say_what_is_wrong_with_the_path() {
+    let out = run(
+        "json_edit_errors.mjs",
+        r#"
+const report = (f) => { try { console.log(f()); } catch (e) { console.log(`${e.name}: ${e.message}`); } };
+report(() => JSONC.edit("{a: 1}", ["a"], 2));
+report(() => JSONC.edit('{"a": "x"}', ["a", "b"], 1));
+report(() => JSONC.edit("[1]", [3], 1));
+report(() => JSONC.edit("[1]", ["x"], 1));
+report(() => JSONC.edit("{}", "a", 1));
+report(() => JSONC.edit("{}", [-1], 1));
+report(() => JSONC.edit("{}", ["a"], () => 1));
+report(() => JSONC.edit("{}", [], undefined));
+report(() => JSONC.edit('{"a": 1}', ["a", "b", "c"], undefined));
+"#,
+    );
+    assert_eq!(
+        out,
+        [
+            "SyntaxError: JSONC: a property name must be a double-quoted string at line 1 column 2",
+            r#"TypeError: JSONC.edit: the value at .a is a string, which has no property "b""#,
+            "RangeError: JSONC.edit: the value at the top has 1 element, so [3] is past its end",
+            r#"TypeError: JSONC.edit: the value at the top is an array, which has no property "x""#,
+            "TypeError: JSONC.edit: the path is an array of keys and indices",
+            "TypeError: JSONC.edit: each step of the path is a string key or a non-negative integer index",
+            "TypeError: JSONC.edit: the value has no JSONC form",
+            "TypeError: JSONC.edit: the whole document cannot be removed",
+            r#"TypeError: JSONC.edit: the value at .a is a number, which has no property "b""#,
+        ]
+    );
+}

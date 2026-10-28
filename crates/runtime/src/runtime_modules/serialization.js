@@ -391,6 +391,7 @@ const BSON = {
 const g = globalThis;
 const jsonParse = g.__json_parse;
 const jsonValidate = g.__json_validate;
+const { json_edit_plan, json_edit } = g.__ops;
 const LONE_SURROGATE = /\p{Surrogate}/gu;
 function source(text) {
 	const s = String(text);
@@ -444,7 +445,7 @@ const ESCAPES = {
 	"\u2029": "\\u2029"
 };
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
-function stringifyJSON5(value, replacerOrOptions, spaceArg) {
+function stringifyJSON5(value, replacerOrOptions, spaceArg, trailingCommas = true) {
 	let replacer = replacerOrOptions;
 	let space = spaceArg;
 	let quote;
@@ -530,7 +531,8 @@ function stringifyJSON5(value, replacerOrOptions, spaceArg) {
 	const close = (open, parts, end, outer) => {
 		if (parts.length === 0) return open + end;
 		if (gap === "") return open + parts.join(",") + end;
-		return `${open}\n${indent}${parts.join(`,\n${indent}`)},\n${outer}${end}`;
+		const last = trailingCommas ? "," : "";
+		return `${open}\n${indent}${parts.join(`,\n${indent}`)}${last}\n${outer}${end}`;
 	};
 	const object = (v) => {
 		enter(v);
@@ -562,18 +564,38 @@ function stringifyJSON5(value, replacerOrOptions, spaceArg) {
 	define(root, "", value);
 	return property(root, "");
 }
+function editWith(dialect, text, path, value) {
+	const name = dialect === "jsonc" ? "JSONC" : "JSON5";
+	const s = String(text);
+	if (!s.isWellFormed()) throw new TypeError(`${name}.edit: the text has a lone surrogate, which no file holds`);
+	if (!Array.isArray(path)) throw new TypeError(`${name}.edit: the path is an array of keys and indices`);
+	const steps = Array.from(path);
+	for (const step of steps) if (typeof step !== "string" && !(Number.isSafeInteger(step) && step >= 0)) throw new TypeError(`${name}.edit: each step of the path is a string key or a non-negative integer index`);
+	if (value === void 0) return json_edit(dialect, s, steps, void 0);
+	const plan = json_edit_plan(dialect, s, steps);
+	const written = dialect === "jsonc" ? JSON.stringify(value, null, plan.indent) : stringifyJSON5(value, {
+		space: plan.indent,
+		quote: plan.quote
+	}, void 0, plan.trailingCommas);
+	if (written === void 0) throw new TypeError(`${name}.edit: the value has no ${name} form`);
+	return json_edit(dialect, s, steps, written);
+}
 const JSONC = {
 	/** Parses JSON with comments and trailing commas, as `JSON.parse` would. */
 	parse: (text, reviver) => parseWith("jsonc", text, reviver),
 	/** Standard JSON: what `JSON.stringify` writes. */
 	stringify: (value, replacer, space) => JSON.stringify(value, replacer, space),
-	validate: (text, options) => validateWith$1("jsonc", text, options)
+	validate: (text, options) => validateWith$1("jsonc", text, options),
+	/** The text with the value at `path` set to `value`, or removed when it is `undefined`; every other byte is kept. */
+	edit: (text, path, value) => editWith("jsonc", text, path, value)
 };
 const JSON5 = {
 	/** Parses JSON5 1.0.0, as `JSON.parse` would parse the JSON it shares. */
 	parse: (text, reviver) => parseWith("json5", text, reviver),
 	stringify: stringifyJSON5,
-	validate: (text, options) => validateWith$1("json5", text, options)
+	validate: (text, options) => validateWith$1("json5", text, options),
+	/** The text with the value at `path` set to `value`, or removed when it is `undefined`; every other byte is kept. */
+	edit: (text, path, value) => editWith("json5", text, path, value)
 };
 //#endregion
 //#region serialization/protobuf/utf8.ts

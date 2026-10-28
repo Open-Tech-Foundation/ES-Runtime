@@ -15,8 +15,9 @@ itself.
 
 ### Added
 
-- `JSONC` and `JSON5` in `runtime:serialization`: `parse`, `stringify` and
-  `validate`, with `JSONReviver`, `JSONReplacer` and `JSON5StringifyOptions`.
+- `JSONC` and `JSON5` in `runtime:serialization`: `parse`, `stringify`,
+  `validate` and `edit`, with `JSONPath`, `JSONReviver`, `JSONReplacer` and
+  `JSON5StringifyOptions`.
 
 ### Changed
 

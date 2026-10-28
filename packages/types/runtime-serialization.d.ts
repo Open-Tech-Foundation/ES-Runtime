@@ -400,6 +400,9 @@ declare module "runtime:serialization" {
   /** What `JSON.parse` takes as a reviver: called on each value after its children; `undefined` removes the value. */
   export type JSONReviver = (this: any, key: string, value: any) => any;
 
+  /** A path into a value: property names and array indices, from the top. */
+  export type JSONPath = readonly (string | number)[];
+
   /** What `JSON.stringify` takes as a replacer: a function, or the property names to keep. */
   export type JSONReplacer = ((this: any, key: string, value: any) => any) | readonly (string | number)[] | null;
 
@@ -421,6 +424,17 @@ declare module "runtime:serialization" {
 
     /** Checks the text without building a value; agrees with `parse`. */
     export function validate(text: string, options?: ValidationOptions): boolean | ValidationDetailedResult;
+
+    /**
+     * The text with the value at `path` set to `value`, or removed when `value`
+     * is `undefined`; every other byte, comments included, is kept. A missing
+     * key is added in the style of its siblings, missing objects on the path
+     * are created, and an index equal to an array's length appends.
+     * @throws {SyntaxError} the text does not parse.
+     * @throws {TypeError} the path goes through a value that cannot hold it, or `value` has no JSON form.
+     * @throws {RangeError} an index past the end of an array.
+     */
+    export function edit(text: string, path: JSONPath, value: unknown): string;
   }
 
   export interface JSON5StringifyOptions {
@@ -455,6 +469,17 @@ declare module "runtime:serialization" {
 
     /** Checks the text without building a value; agrees with `parse`. */
     export function validate(text: string, options?: ValidationOptions): boolean | ValidationDetailedResult;
+
+    /**
+     * The text with the value at `path` set to `value`, or removed when `value`
+     * is `undefined`; every other byte, comments included, is kept. A missing
+     * key is added in the style of its siblings, missing objects on the path
+     * are created, and an index equal to an array's length appends.
+     * @throws {SyntaxError} the text does not parse.
+     * @throws {TypeError} the path goes through a value that cannot hold it, or `value` has no form in JSON5.
+     * @throws {RangeError} an index past the end of an array.
+     */
+    export function edit(text: string, path: JSONPath, value: unknown): string;
   }
 
   export interface ProtobufSchemaOptions {

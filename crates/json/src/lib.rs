@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+mod edit;
 mod lexer;
 mod number;
 mod parser;
@@ -30,6 +31,7 @@ mod parser;
 use std::borrow::Cow;
 use std::fmt;
 
+pub use edit::{EditError, Plan, Segment, edit, plan};
 pub use parser::{parse, validate};
 
 /// How deep objects and arrays may nest. The same bound as YAML's and BSON's

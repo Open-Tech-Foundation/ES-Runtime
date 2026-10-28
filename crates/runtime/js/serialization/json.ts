@@ -3,7 +3,9 @@
 // (crates/engine/src/json.rs), with `reviver` applied here as `JSON.parse`
 // applies it; `JSONC.stringify` is `JSON.stringify`, since a comment cannot
 // come from a value; `JSON5.stringify` writes JSON5 as the `json5` reference
-// package does.
+// package does. `edit` changes one value in the text and keeps every other
+// byte: the host finds the place and the file's style, the dialect's
+// `stringify` writes the value in that style, and the host splices it in.
 
 type Dialect = "jsonc" | "json5";
 type Reviver = (this: any, key: string, value: any) => any;
@@ -16,6 +18,9 @@ const g = globalThis as unknown as {
 // Captured now: the globals are hidden, not locked (harden.js).
 const jsonParse = g.__json_parse;
 const jsonValidate = g.__json_validate;
+const { json_edit_plan, json_edit } = (
+  g as unknown as { __ops: Record<string, (...a: any[]) => any> }
+).__ops;
 
 export interface ValidateOptions {
   detailed?: boolean;
@@ -107,6 +112,8 @@ function stringifyJSON5(
   value: unknown,
   replacerOrOptions?: Replacer | JSON5StringifyOptions,
   spaceArg?: string | number | null,
+  // Not public: `edit` turns them off for a file that has none.
+  trailingCommas = true,
 ): string | undefined {
   let replacer: unknown = replacerOrOptions;
   let space: unknown = spaceArg;
@@ -229,7 +236,8 @@ function stringifyJSON5(
     if (parts.length === 0) return open + end;
     if (gap === "") return open + parts.join(",") + end;
     // Indented, each member ends with a comma: adding one is a one-line diff.
-    return `${open}\n${indent}${parts.join(`,\n${indent}`)},\n${outer}${end}`;
+    const last = trailingCommas ? "," : "";
+    return `${open}\n${indent}${parts.join(`,\n${indent}`)}${last}\n${outer}${end}`;
   };
 
   const object = (v: any): string => {
@@ -265,6 +273,47 @@ function stringifyJSON5(
   return property(root, "");
 }
 
+// ---- edit ------------------------------------------------------------------
+
+/** Keys and array indices, from the top. */
+export type JSONPath = readonly (string | number)[];
+
+function editWith(dialect: Dialect, text: unknown, path: unknown, value: unknown): string {
+  const name = dialect === "jsonc" ? "JSONC" : "JSON5";
+  const s = String(text);
+  // The edit returns the text with every other byte as it was, which the
+  // escaping `parse` does for a lone surrogate would break.
+  if (!s.isWellFormed())
+    throw new TypeError(`${name}.edit: the text has a lone surrogate, which no file holds`);
+  if (!Array.isArray(path))
+    throw new TypeError(`${name}.edit: the path is an array of keys and indices`);
+  const steps = Array.from(path);
+  for (const step of steps) {
+    if (typeof step !== "string" && !(Number.isSafeInteger(step) && step >= 0)) {
+      throw new TypeError(
+        `${name}.edit: each step of the path is a string key or a non-negative integer index`,
+      );
+    }
+  }
+  if (value === undefined) return json_edit(dialect, s, steps, undefined);
+  const plan: { indent: string; quote?: "'" | '"'; trailingCommas: boolean } = json_edit_plan(
+    dialect,
+    s,
+    steps,
+  );
+  const written =
+    dialect === "jsonc"
+      ? JSON.stringify(value, null, plan.indent)
+      : stringifyJSON5(
+          value,
+          { space: plan.indent, quote: plan.quote },
+          undefined,
+          plan.trailingCommas,
+        );
+  if (written === undefined) throw new TypeError(`${name}.edit: the value has no ${name} form`);
+  return json_edit(dialect, s, steps, written);
+}
+
 export const JSONC = {
   /** Parses JSON with comments and trailing commas, as `JSON.parse` would. */
   parse: (text: string, reviver?: Reviver) => parseWith("jsonc", text, reviver),
@@ -272,6 +321,8 @@ export const JSONC = {
   stringify: (value: unknown, replacer?: Replacer, space?: string | number | null) =>
     JSON.stringify(value, replacer as any, space as any),
   validate: (text: string, options?: ValidateOptions) => validateWith("jsonc", text, options),
+  /** The text with the value at `path` set to `value`, or removed when it is `undefined`; every other byte is kept. */
+  edit: (text: string, path: JSONPath, value: unknown) => editWith("jsonc", text, path, value),
 };
 
 export const JSON5 = {
@@ -279,4 +330,6 @@ export const JSON5 = {
   parse: (text: string, reviver?: Reviver) => parseWith("json5", text, reviver),
   stringify: stringifyJSON5,
   validate: (text: string, options?: ValidateOptions) => validateWith("json5", text, options),
+  /** The text with the value at `path` set to `value`, or removed when it is `undefined`; every other byte is kept. */
+  edit: (text: string, path: JSONPath, value: unknown) => editWith("json5", text, path, value),
 };
