@@ -11,6 +11,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `es-runtime-json`, the reader behind the coming `JSONC` and `JSON5` in
+  `runtime:serialization` (D191). JSONC is JSON with `//` and `/* */`
+  comments and one trailing comma; JSON5 is JSON5 1.0.0 in full. One lexer
+  reads both and reports each value to a sink, so the engine can build values
+  with no intermediate tree. Nesting stops at 256 levels, and errors give the
+  line and column. Every case of JSONTestSuite and json5-tests runs in
+  `cargo test`, and a `json` fuzz target checks that whatever JSONC reads,
+  JSON5 reads the same way.
+
 ### Testing / CI
 
 - `scripts/fs-discipline.sh` lists the DNS resolver's read of

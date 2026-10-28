@@ -1618,6 +1618,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "es-runtime-json"
+version = "0.44.0"
+dependencies = [
+ "serde_json",
+ "unicode-ident",
+]
+
+[[package]]
 name = "es-runtime-providers"
 version = "0.44.0"
 dependencies = [

@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1096,11 +1096,11 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-bson"
-version = "0.43.0"
+version = "0.44.0"
 
 [[package]]
 name = "es-runtime-common"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "thiserror",
  "tracing",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-default-providers"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "bytes",
  "dunce",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-engine"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "es-runtime-bson",
  "es-runtime-common",
@@ -1159,12 +1159,20 @@ dependencies = [
  "arbitrary",
  "es-runtime",
  "es-runtime-default-providers",
+ "es-runtime-json",
  "libfuzzer-sys",
 ]
 
 [[package]]
+name = "es-runtime-json"
+version = "0.44.0"
+dependencies = [
+ "unicode-ident",
+]
+
+[[package]]
 name = "es-runtime-providers"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "es-runtime-common",
  "futures-core",

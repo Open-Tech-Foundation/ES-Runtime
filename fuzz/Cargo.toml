@@ -24,6 +24,9 @@ arbitrary = { version = "1", features = ["derive"] }
 path = "../crates/runtime"
 features = ["fuzzing"]
 
+[dependencies.es-runtime-json]
+path = "../crates/json"
+
 [dependencies.es-runtime-default-providers]
 path = "../crates/default-providers"
 features = ["fuzzing"]
@@ -108,6 +111,13 @@ bench = false
 [[bin]]
 name = "bson"
 path = "fuzz_targets/bson.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
 test = false
 doc = false
 bench = false

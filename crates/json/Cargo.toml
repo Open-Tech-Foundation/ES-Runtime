@@ -1,0 +1,18 @@
+[package]
+name = "es-runtime-json"
+description = "JSONC and JSON5 for ES-Runtime: a span-keeping reader that drives a sink. No engine types, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+unicode-ident.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
