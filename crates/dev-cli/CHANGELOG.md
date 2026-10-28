@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-28
+
 ### Removed
 
 - `esdev <file> --import-policy` (D194), with esrun's: a dependency policy is

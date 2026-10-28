@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-28
+
 ### Added
 
 - `environment()` in `runtime:process` (D192).
