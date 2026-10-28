@@ -86,8 +86,11 @@ namespace) is unstable and may change between minor releases until the API freez
   container, for up to three minutes, and prints the server's log when one
   never answers. It started a `mongosh` container per probe and gave up after
   two minutes without saying why.
-- The MongoDB job runs on Ubuntu 24.04: MongoDB 8 refuses to start on the
-  6.19+ kernel of the Ubuntu 26 image that `ubuntu-latest` now points to.
+- The MongoDB 8 leg of the driver job checks the runner's kernel first.
+  MongoDB 8 refuses to start on Linux 6.19 through 7.0.13, no MongoDB release
+  fixes it, and GitHub's runners are on such kernels, so there the leg posts a
+  warning and stops; MongoDB 7 runs every driver test, and the leg resumes by
+  itself on a kernel from 7.0.14.
 - The release leaves `es-runtime-json` unpublished, as it does the other
   internal crates; it had tried to publish it to crates.io and failed.
 - The benchmark's comparison dependencies move to Hono 4.13 and
