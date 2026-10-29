@@ -11,6 +11,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- The site's benchmark data is re-measured with esrun 0.45.0 (esdev 0.24.0,
+  node 24.21.0, bun 1.4.3, deno 2.9.7, llrt 0.9.0-beta) — the previous full run
+  published 0.43.0 — and now includes the `jsonc_large` and `json5_large` rows.
+  `website/src/versions.js` is regenerated to match. Eleven esrun rows are more
+  than 10% faster; `crypto_asym` (ECDSA P-256 sign + verify) is 55% slower,
+  the cost of the move to the 0.14 NIST curves for RUSTSEC-2026-0387.
+
 ## [0.45.0] - 2026-10-28
 
 ### Removed
