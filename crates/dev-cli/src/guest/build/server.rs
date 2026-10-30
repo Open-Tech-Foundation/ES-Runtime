@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rolldown::BundlerBuilder;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::Adapter;
@@ -308,17 +307,18 @@ async fn run(
         Arc::new(Adapter::new(pass)) as rolldown::plugin::__inner::SharedPluginable
     }));
 
-    let mut bundler = BundlerBuilder::default()
-        .with_options(
-            crate::bundler::translate(&options.bundler, output, {
-                let logs = logs.clone();
-                Some(Arc::new(move |line| logs.lock().expect("logs").push(line)))
-            })
-            .map_err(|e| vec![plain("INVALID_OPTIONS", e)])?,
-        )
-        .with_plugins(plugins)
-        .build()
-        .map_err(|e| failures!(e))?;
+    let mut bundler = crate::bundler::builder(
+        &options.bundler,
+        output,
+        {
+            let logs = logs.clone();
+            Some(Arc::new(move |line| logs.lock().expect("logs").push(line)))
+        },
+        plugins,
+    )
+    .map_err(|e| vec![plain("INVALID_OPTIONS", e)])?
+    .build()
+    .map_err(|e| failures!(e))?;
 
     let built = if write {
         bundler.write().await.map_err(|e| failures!(e))?

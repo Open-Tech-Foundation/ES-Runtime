@@ -1308,11 +1308,6 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
         // path relative to the project root, so both builds arrive at it
         // independently and neither has to tell the other. What the browser build
         // writes is the one copy.
-        let translated = crate::bundler::translate(
-            &options,
-            options.output.clone(),
-            Some(crate::bundler::printed()),
-        )?;
         let mut own_plugins: Vec<std::sync::Arc<dyn crate::contract::Pass>> = Vec::new();
         if config.jsx.react_compiler {
             own_plugins.push(std::sync::Arc::new(
@@ -1343,11 +1338,14 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
         let graph = crate::policy::Graph::default();
         let mut plugins = installed(own_plugins, &config.plugins);
         plugins.push(graph.plugin());
-        let mut bundler = rolldown::BundlerBuilder::default()
-            .with_options(translated)
-            .with_plugins(plugins)
-            .build()
-            .map_err(reported!())?;
+        let mut bundler = crate::bundler::builder(
+            &options,
+            options.output.clone(),
+            Some(crate::bundler::printed()),
+            plugins,
+        )?
+        .build()
+        .map_err(reported!())?;
         // Which pass failed, when there is more than one. The two write the
         // same source tree and their diagnostics are identical apart from this:
         // a top-level `await` is a module in CommonJS's case and nothing at all
@@ -1683,13 +1681,11 @@ pub async fn bundle_browser_entries(
         let styles = crate::cssmodules::Collected::new();
         let assets = crate::assets::Emitted::new();
         let graph = crate::policy::Graph::default();
-        let mut bundler = rolldown::BundlerBuilder::default()
-            .with_options(crate::bundler::translate(
-                &options,
-                options.output.clone(),
-                Some(crate::bundler::printed()),
-            )?)
-            .with_plugins(browser_plugins(
+        let mut bundler = crate::bundler::builder(
+            &options,
+            options.output.clone(),
+            Some(crate::bundler::printed()),
+            browser_plugins(
                 root,
                 &styles,
                 &assets,
@@ -1697,9 +1693,10 @@ pub async fn bundle_browser_entries(
                 &options.jsx_settings,
                 plugins,
                 &graph,
-            ))
-            .build()
-            .map_err(reported!())?;
+            ),
+        )?
+        .build()
+        .map_err(reported!())?;
         let written = bundler.write().await;
         record_inputs(&bundler);
         let output = written.map_err(reported!())?;
@@ -2139,13 +2136,11 @@ async fn build_warm(
         let styles = crate::cssmodules::Collected::new();
         let assets = crate::assets::Emitted::new();
         let modules = crate::policy::Graph::default();
-        let bundler = rolldown::BundlerBuilder::default()
-            .with_options(crate::bundler::translate(
-                options,
-                options.output.clone(),
-                Some(crate::bundler::printed()),
-            )?)
-            .with_plugins(browser_plugins(
+        let bundler = crate::bundler::builder(
+            options,
+            options.output.clone(),
+            Some(crate::bundler::printed()),
+            browser_plugins(
                 root,
                 &styles,
                 &assets,
@@ -2153,9 +2148,10 @@ async fn build_warm(
                 &options.jsx_settings,
                 plugins,
                 &modules,
-            ))
-            .build()
-            .map_err(reported!())?;
+            ),
+        )?
+        .build()
+        .map_err(reported!())?;
         *held = Some(Warm {
             modules,
             key: key.to_string(),

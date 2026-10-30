@@ -1,0 +1,54 @@
+# oxc_resolver 11.24.2, vendored and patched (DECISIONS.md D196).
+#
+# Upstream: https://github.com/oxc-project/oxc-resolver (MIT, see LICENSE).
+# The patch is esdev's tsconfig discovery rule; it is listed in PATCHES.md,
+# which is what to re-apply when this copy is moved to a new release.
+# Wired in through the workspace's `[patch.crates-io]`, so rolldown's resolver
+# and esdev's own use the same copy.
+[package]
+edition = "2024"
+rust-version = "1.95.0"
+name = "oxc_resolver"
+version = "11.24.2"
+authors = ["Boshen <boshenc@gmail.com>"]
+description = "ESM / CJS module resolution"
+license = "MIT"
+repository = "https://github.com/oxc-project/oxc-resolver"
+publish = false
+
+[features]
+default = []
+yarn_pnp = ["pnp"]
+
+[lib]
+name = "oxc_resolver"
+path = "src/lib.rs"
+
+[dependencies]
+compact_str = "0.9"
+dashmap = { version = "6.2.1", features = ["raw-api"] }
+document-features = { version = "0.2.12", optional = true }
+fast-glob = "1"
+indexmap = { version = "2", features = ["serde"] }
+json-strip-comments = "3.1"
+memchr = "2"
+nodejs-built-in-modules = "1.0.0"
+once_cell = "1"
+percent-encoding = "2"
+pnp = { version = "0.12.10", optional = true }
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+simdutf8 = "0.1"
+thiserror = "2"
+tracing = "0.1"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(target_endian = "little")'.dependencies]
+self_cell = "1"
+simd-json = { version = "0.17.0", default-features = false, features = ["runtime-detection"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }

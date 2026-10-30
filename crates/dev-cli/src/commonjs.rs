@@ -279,15 +279,17 @@ async fn convert(plan: &Plan) -> Result<Vec<Plan>, String> {
         },
         ..crate::bundler::Options::default()
     };
-    let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
-    let mut bundler = rolldown::BundlerBuilder::default()
-        .with_options(translated)
-        .with_plugins(vec![Arc::new(Packaging {
+    let mut bundler = crate::bundler::builder(
+        &options,
+        options.output.clone(),
+        None,
+        vec![Arc::new(Packaging {
             entry: plan.entry.clone(),
             required: required.clone(),
-        }) as Arc<dyn rolldown::plugin::Pluginable>])
-        .build()
-        .map_err(|e| crate::bundler::report(&crate::failures!(e)))?;
+        }) as Arc<dyn rolldown::plugin::Pluginable>],
+    )?
+    .build()
+    .map_err(|e| crate::bundler::report(&crate::failures!(e)))?;
     let written = bundler.write().await;
     let written = written.map_err(|e| crate::bundler::report(&crate::failures!(e)));
     let body = written.and_then(|_| {

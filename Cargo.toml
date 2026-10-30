@@ -22,6 +22,10 @@ members = [
     "crates/runtime-cli",
     "crates/dev-cli",
 ]
+# A vendored third-party crate, wired in below through `[patch.crates-io]`
+# rather than built as one of ours: it keeps its own lints and is not tested
+# here (D196).
+exclude = ["crates/vendor/oxc_resolver"]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
 # Versioning starts at 0.1.0 (DECISIONS D24): semver from here, 0.x allows
@@ -470,3 +474,10 @@ unimplemented = "warn"
 dbg_macro = "warn"
 print_stdout = "warn"                   # ARCHITECTURE.md §8: no println!
 print_stderr = "warn"
+
+# oxc_resolver with esdev's tsconfig discovery rule (D196). One copy, so the
+# resolver rolldown builds with and the one esdev runs unbundled modules
+# through cannot disagree. crates/vendor/oxc_resolver/PATCHES.md lists what to
+# re-apply when moving it to a new release.
+[patch.crates-io]
+oxc_resolver = { path = "crates/vendor/oxc_resolver" }

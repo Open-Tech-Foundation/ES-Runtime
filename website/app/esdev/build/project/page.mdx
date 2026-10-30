@@ -172,9 +172,9 @@ longest match wins, so `@/ui` beats `@`. `--alias=@=./src` replaces the alias of
 the same name. `esdev build <entry>` reads the project's `resolve.alias`, `jsx` and
 `plugins` too, though not its targets: the entry is in the project's source tree.
 
-`esdev test` and `esdev <file>` apply the same aliases to what they run
-unbundled, and so does `tsconfig.json`'s `paths`, as the bundler reads it. See
-[Imports](/esdev/test/imports#aliases). `esrun` never applies them: it runs the
+An alias applies before `tsconfig.json`'s `paths`, in a bundle and in
+`esdev test` and `esdev <file>`, which apply both to what they run unbundled.
+See [Imports](/esdev/test/imports#aliases) for which tsconfig a file takes. `esrun` never applies them: it runs the
 bundle, where they are already resolved. A library, whether `--lib` or a target
 with `"lib": true`, is built without them: a published module keeps the
 specifier its source wrote, and `--lib` refuses `--alias`.

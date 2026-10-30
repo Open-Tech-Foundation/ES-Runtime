@@ -295,6 +295,30 @@ a bundler carrying stale ones is a build that silently ignores what it was asked
 for. For the dev-server pattern — one build per route, discarded after — there is
 nothing to cache anyway.
 
+## Resolution is esdev's rule, not the resolver's
+
+Every bundle, every dev-loop rebuild and every module run unbundled resolves a
+specifier the same way, whatever the importing file's extension: the project's
+`resolve.alias` first, then `paths` from the `tsconfig.json` nearest the file.
+The libraries underneath were built to other rules, so esdev bends them.
+
+- **The alias is a plugin, not the bundler's option.** rolldown's resolver tries
+  `paths` before an alias, and the order is not configurable. `esdev:alias` runs
+  ahead of every other plugin, rewrites the specifier and hands it on, so the
+  rest of the chain and the resolver see what an import written that way would.
+  Every bundle is made by one constructor, so no build can be made without it.
+- **The tsconfig lookup is patched.** oxc_resolver gives a file the nearest
+  tsconfig *that would compile it*, judged by TypeScript's extension list and
+  `allowJs`, and otherwise walks on to an ancestor's. A page a plugin compiles
+  got no `paths`, and a project without `allowJs` took its parent folder's
+  `paths` and JSX settings. The same lookup feeds rolldown's transform, so the
+  fix has to be in the lookup itself: esdev builds with a vendored copy whose
+  discovery is "the nearest one", changed in three marked places.
+
+What it costs: the copy has to be moved by hand with each oxc_resolver release,
+re-applying a list of changes kept beside it. The decision and what was
+rejected are in DECISIONS.md, D196.
+
 ## Output is modern JavaScript, on purpose
 
 The build erases types and compiles JSX. It does **not** down-level the
