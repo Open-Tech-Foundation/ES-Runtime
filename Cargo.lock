@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "es-runtime-dev-cli"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "arcstr",
@@ -3960,8 +3960,6 @@ dependencies = [
 [[package]]
 name = "oxc_resolver"
 version = "11.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fa374d03b255c070a32ae65b8a05231b8e658104d6ef22034c09da8fa0c2fd9"
 dependencies = [
  "compact_str 0.9.1",
  "dashmap",

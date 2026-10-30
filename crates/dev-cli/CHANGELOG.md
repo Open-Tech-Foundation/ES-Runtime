@@ -24,6 +24,22 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-30
+
+### Fixed
+
+- One resolution rule for every importer (D196). A module takes the
+  `tsconfig.json` nearest to it — or the reference of it that covers the
+  file — whatever its extension: a `.mdx` page a plugin compiles gets the
+  project's `paths`, where it got none, and a `.jsx` file in a project without
+  `allowJs` no longer takes a parent folder's `paths`, `jsx` and decorator
+  settings. A project nested in a workspace could bundle two copies of one
+  package. `esdev.json`'s `resolve.alias` now applies before `paths` in a bundle,
+  as it already did in `esdev test` and `esdev <file>`, and an alias that names
+  nothing fails the build instead of resolving the specifier as written.
+  esdev builds with a vendored oxc_resolver carrying this rule
+  (`crates/vendor/oxc_resolver/PATCHES.md`).
+
 ## [0.24.0] - 2026-10-28
 
 ### Removed

@@ -492,8 +492,29 @@ pub(crate) fn relative_to(from: &Path, to: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
+/// A bundler for `options`, running `plugins` — the one way this binary makes
+/// one, so every bundle resolves a specifier by the same rules (D196). Ahead
+/// of `plugins` is the build's alias ([`crate::alias::Rewrite`]).
+pub fn builder(
+    options: &Options,
+    output: OutputOptions,
+    on_log: Option<LogSink>,
+    plugins: Vec<rolldown::plugin::__inner::SharedPluginable>,
+) -> Result<rolldown::BundlerBuilder, String> {
+    let translated = translate(options, output, on_log)?;
+    let mut all: Vec<rolldown::plugin::__inner::SharedPluginable> =
+        Vec::with_capacity(plugins.len() + 1);
+    if !options.alias.is_empty() {
+        all.push(Arc::new(crate::alias::Rewrite::new(options.alias.clone())));
+    }
+    all.extend(plugins);
+    Ok(rolldown::BundlerBuilder::default()
+        .with_options(translated)
+        .with_plugins(all))
+}
+
 /// Translates a build into the bundler's own options. The only such
-/// translation in this binary, deliberately.
+/// translation in this binary, deliberately; [`builder`] is what uses it.
 pub fn translate(
     options: &Options,
     output: OutputOptions,
@@ -525,18 +546,8 @@ pub fn translate(
             Some(options.main_fields.clone())
         },
         extensions: (!options.extensions.is_empty()).then(|| options.extensions.clone()),
-        alias: (!options.alias.is_empty()).then(|| {
-            options
-                .alias
-                .iter()
-                .map(|(find, to)| {
-                    (
-                        find.clone(),
-                        to.iter().map(|t| Some(t.clone())).collect::<Vec<_>>(),
-                    )
-                })
-                .collect()
-        }),
+        // Not the bundler's: it applies `paths` before an alias, and the alias
+        // comes first. [`builder`] installs it as a plugin ahead of the rest.
         ..ResolveOptions::default()
     };
 

@@ -1,21 +1,23 @@
-//! A project's import aliases, for a module `esdev` runs unbundled.
+//! A project's import aliases: in a bundle, and for a module `esdev` runs
+//! unbundled.
 //!
-//! Two places name them, and `esdev build` has always honoured both: the
-//! project's own `alias` in `esdev.json`, and `compilerOptions.paths` (with
-//! `baseUrl`) in `tsconfig.json`. A module run unbundled — a test file, `esdev
-//! app.ts` — went to the runtime's resolver instead, which knows neither, so
-//! `import { db } from "@/db"` built and failed under `esdev test`.
-//!
-//! This applies them the way the build's resolver does, in the same order:
+//! Two places name them: the project's own `alias` in `esdev.json`, and
+//! `compilerOptions.paths` (with `baseUrl`) in `tsconfig.json`. Every importer
+//! takes them the same way, whatever its extension and whichever command
+//! reads it (D196):
 //!
 //! 1. **`esdev.json` `alias`**: the longest name that is the whole specifier or
 //!    its start up to a `/`, replaced by a path or by another package's name.
-//! 2. **`tsconfig.json` `paths`, then `baseUrl`**: from the tsconfig that owns
-//!    the importing file, through the resolver `esdev build` uses — so
-//!    `extends`, project references and the `*` patterns mean what they mean
-//!    to the build. A mapping is taken only when it names a file, as
-//!    TypeScript and the build take it; otherwise the specifier is resolved
-//!    as written.
+//!    In a bundle that is [`Rewrite`], ahead of every other resolver; the
+//!    bundler's own applies `paths` before an alias, so it is not given one.
+//! 2. **`tsconfig.json` `paths`, then `baseUrl`**: from the `tsconfig.json`
+//!    nearest the importing file, or the reference of it that covers the file,
+//!    through the resolver `esdev build` uses — so `extends`, project
+//!    references and the `*` patterns mean what they mean to the build. A
+//!    mapping is taken only when it names a file, as TypeScript and the build
+//!    take it; otherwise the specifier is resolved as written. That resolver
+//!    is the vendored oxc_resolver, whose discovery is esdev's rule rather than
+//!    "the tsconfig that would compile this file" (`crates/vendor/oxc_resolver`).
 //!
 //! A file inside `node_modules` is not the project's, so the project's
 //! `tsconfig.json` does not apply to what it imports. `esdev.json`'s `alias`
@@ -24,7 +26,12 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::anyhow;
 use es_runtime_cli_common::run::SpecifierAlias;
+use rolldown::plugin::{
+    HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookUsage, Plugin, PluginContext,
+    PluginContextResolveOptions, PluginHookMeta, PluginOrder,
+};
 
 /// The aliases a module run unbundled resolves through — from
 /// [`crate::settings::Source`], which is where the file's and the flags' meet.
@@ -62,10 +69,7 @@ impl Aliases {
     /// `esdev.json`'s alias for `specifier`, if one names it.
     fn project_alias(&self, specifier: &str) -> Option<String> {
         self.project.iter().find_map(|(find, to)| {
-            let rest = specifier.strip_prefix(find.as_str())?;
-            if !(rest.is_empty() || rest.starts_with('/')) {
-                return None;
-            }
+            let rest = named(find, specifier)?;
             if Path::new(to).is_absolute() {
                 // A path: the file it names, found as the build finds it —
                 // otherwise the path as written, so a miss is reported
@@ -109,6 +113,90 @@ impl SpecifierAlias for Aliases {
             return None;
         }
         self.tsconfig_alias(specifier, &importer(referrer))
+    }
+}
+
+/// What follows `find` in `specifier`, when `find` names it: the whole
+/// specifier, or its start up to a `/` — `@` is not a prefix of `@scope/pkg`.
+fn named<'a>(find: &str, specifier: &'a str) -> Option<&'a str> {
+    let rest = specifier.strip_prefix(find)?;
+    (rest.is_empty() || rest.starts_with('/')).then_some(rest)
+}
+
+/// A bundle's aliases — `esdev.json`'s, the flags', or those a `build()` call
+/// names — applied before anything else resolves a specifier, as they are to
+/// a module run unbundled.
+///
+/// The first name that matches is taken, so the list is longest first. Its
+/// replacements are tried in order and the first that resolves wins; the
+/// rewritten specifier goes through every other plugin and the bundler's
+/// resolver, `paths` included, as one written that way would. One that names
+/// nothing is an error rather than a fall back to the specifier as written,
+/// which would quietly bundle a different copy of the module.
+#[derive(Debug)]
+pub struct Rewrite {
+    alias: Vec<(String, Vec<String>)>,
+}
+
+impl Rewrite {
+    pub fn new(alias: Vec<(String, Vec<String>)>) -> Rewrite {
+        Rewrite { alias }
+    }
+}
+
+impl Plugin for Rewrite {
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("esdev:alias")
+    }
+
+    fn register_hook_usage(&self) -> HookUsage {
+        HookUsage::ResolveId
+    }
+
+    fn resolve_id_meta(&self) -> Option<PluginHookMeta> {
+        Some(PluginHookMeta {
+            order: Some(PluginOrder::Pre),
+        })
+    }
+
+    async fn resolve_id(
+        &self,
+        ctx: &PluginContext,
+        args: &HookResolveIdArgs<'_>,
+    ) -> HookResolveIdReturn {
+        if is_path(args.specifier) {
+            return Ok(None);
+        }
+        let Some((find, to, rest)) = self
+            .alias
+            .iter()
+            .find_map(|(find, to)| named(find, args.specifier).map(|rest| (find, to, rest)))
+        else {
+            return Ok(None);
+        };
+        for target in to {
+            let options = PluginContextResolveOptions {
+                import_kind: args.kind,
+                is_entry: args.is_entry,
+                skip_self: true,
+                ..PluginContextResolveOptions::default()
+            };
+            let rewritten = format!("{target}{rest}");
+            if let Ok(resolved) = ctx
+                .resolve(&rewritten, args.importer, Some(options))
+                .await?
+            {
+                return Ok(Some(HookResolveIdOutput::from_resolved_id(resolved)));
+            }
+        }
+        Err(anyhow!(
+            "cannot resolve {:?}: the alias {find:?} points it at {}, which names no module",
+            args.specifier,
+            to.iter()
+                .map(|target| format!("{:?}", format!("{target}{rest}")))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ))
     }
 }
 
@@ -295,8 +383,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// `paths` from the tsconfig that owns the file, through `extends`, taken
-    /// only when it names a file.
+    /// `paths` from the file's tsconfig, through `extends`, taken only when it
+    /// names a file.
     #[test]
     fn tsconfig_paths_map_to_files_through_extends() {
         let dir = project(&[
@@ -345,5 +433,95 @@ mod tests {
         let from = url_of(&dir.join("node_modules/dep/index.js"));
         assert_eq!(aliases.alias("@/x", &from), None);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The nearest tsconfig is the file's, whatever its extension (D196): a
+    /// `.mdx` page and a `.jsx` file without `allowJs` take the project's
+    /// `paths`, never a parent directory's. Upstream's discovery gave the first
+    /// none and the second the parent's.
+    #[test]
+    fn the_nearest_tsconfig_applies_to_every_importer() {
+        let dir = project(&[
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "allowJs": true, "paths": { "pkg": ["./parent/pkg.js"] } } }"#,
+            ),
+            ("parent/pkg.js", ""),
+            (
+                "app/tsconfig.json",
+                r#"{ "compilerOptions": { "paths": { "pkg": ["./own/pkg.js"] } } }"#,
+            ),
+            ("app/own/pkg.js", ""),
+        ]);
+        let aliases = Aliases::new(Vec::new(), None);
+        let own = Some(url_of(&dir.join("app/own/pkg.js")));
+        for importer in ["page.mdx", "page.jsx", "page.js", "page.vue", "page.ts"] {
+            let from = url_of(&dir.join("app/src").join(importer));
+            assert_eq!(aliases.alias("pkg", &from), own, "{importer}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The nearest tsconfig applies even where its `include` does not reach,
+    /// rather than handing the file to an ancestor's.
+    #[test]
+    fn the_nearest_tsconfig_applies_outside_its_include() {
+        let dir = project(&[
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "paths": { "pkg": ["./parent/pkg.ts"] } } }"#,
+            ),
+            ("parent/pkg.ts", ""),
+            (
+                "app/tsconfig.json",
+                r#"{ "include": ["src"], "compilerOptions": { "paths": { "pkg": ["./own/pkg.ts"] } } }"#,
+            ),
+            ("app/own/pkg.ts", ""),
+        ]);
+        let aliases = Aliases::new(Vec::new(), None);
+        let from = url_of(&dir.join("app/scripts/seed.ts"));
+        assert_eq!(
+            aliases.alias("pkg", &from),
+            Some(url_of(&dir.join("app/own/pkg.ts")))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A solution config hands a file to the reference that covers it, by
+    /// path, whatever the extension: the Vite scaffold's shape, with a page
+    /// a plugin compiles.
+    #[test]
+    fn a_reference_covers_a_page_of_any_extension() {
+        let dir = project(&[
+            (
+                "tsconfig.json",
+                r#"{ "files": [], "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }] }"#,
+            ),
+            (
+                "tsconfig.app.json",
+                r#"{ "include": ["src"], "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#,
+            ),
+            (
+                "tsconfig.node.json",
+                r#"{ "include": ["vite.config.ts"], "compilerOptions": { "paths": { "@/*": ["./node/*"] } } }"#,
+            ),
+            ("src/ui/card.jsx", ""),
+        ]);
+        let aliases = Aliases::new(Vec::new(), None);
+        let from = url_of(&dir.join("src/pages/post.mdx"));
+        assert_eq!(
+            aliases.alias("@/ui/card", &from),
+            Some(url_of(&dir.join("src/ui/card.jsx")))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_name_matches_whole_or_up_to_a_slash() {
+        assert_eq!(named("pkg", "pkg"), Some(""));
+        assert_eq!(named("pkg", "pkg/sub"), Some("/sub"));
+        assert_eq!(named("pkg", "pkgs"), None);
+        assert_eq!(named("@", "@scope/pkg"), None);
+        assert_eq!(named("@", "@/ui"), Some("/ui"));
     }
 }

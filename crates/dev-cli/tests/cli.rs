@@ -2625,6 +2625,124 @@ fn a_jsconfig_names_the_paths_of_a_javascript_project() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// One resolution rule for every importer (D196): a project inside a folder
+/// whose own `tsconfig.json` maps the same package. A `.jsx` page (no
+/// `allowJs`) and an `.mdx` page a plugin compiles both take the project's
+/// `paths`, never the parent's; and `esdev.json`'s `alias` comes before
+/// `paths` in the bundle as it does in `esdev <file>`. The report this comes
+/// from had two copies of one package in one page.
+#[test]
+fn every_importer_resolves_through_the_projects_tsconfig_and_alias() {
+    let root = build_dir("b_one_rule");
+    for sub in [
+        "packages/pkg",
+        "app/node_modules/pkg",
+        "app/vendor",
+        "app/src",
+    ] {
+        std::fs::create_dir_all(root.join(sub)).expect("mkdir");
+    }
+    write_in(
+        &root,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "allowJs": true, "paths": { "pkg": ["./packages/pkg/index.js"] } } }"#,
+    );
+    write_in(
+        &root,
+        "packages/pkg/index.js",
+        "export const who = 'parent';\n",
+    );
+    let dir = root.join("app");
+    write_in(&dir, "package.json", r#"{"name":"app","type":"module"}"#);
+    write_in(
+        &dir,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "paths": { "pkg": ["./node_modules/pkg/index.js"] } } }"#,
+    );
+    write_in(
+        &dir,
+        "node_modules/pkg/package.json",
+        r#"{"name":"pkg","main":"index.js"}"#,
+    );
+    write_in(
+        &dir,
+        "node_modules/pkg/index.js",
+        "export const who = 'own';\n",
+    );
+    write_in(&dir, "vendor/pkg.js", "export const who = 'alias';\n");
+    write_in(
+        &dir,
+        "mdx.js",
+        "export default { name: 'mdx', transform: { filter: { id: /\\.mdx$/ }, handler() {\n\
+           return { code: \"import { who } from 'pkg'; export const page = 'mdx:' + who;\", type: 'js' };\n\
+         } } };\n",
+    );
+    write_in(
+        &dir,
+        "src/a.jsx",
+        "import { who } from 'pkg';\nexport const page = 'jsx:' + who;\n",
+    );
+    write_in(&dir, "src/b.mdx", "# b\n");
+    write_in(
+        &dir,
+        "src/main.js",
+        "import { page as a } from './a.jsx';\nimport { page as b } from './b.mdx';\n\
+         import { who } from 'pkg';\nconsole.log(a, b, 'js:' + who);\n",
+    );
+    let built = |config: &str| {
+        write_in(&dir, "esdev.json", config);
+        let out = esdev_in(&dir)
+            .args(["build", "src/main.js", "--out=dist/main.js"])
+            .output()
+            .expect("spawn esdev build");
+        assert!(out.status.success(), "{}", stderr(&out));
+        std::fs::read_to_string(dir.join("dist/main.js")).expect("the bundle")
+    };
+
+    let bundle = built(r#"{ "plugins": ["./mdx.js"] }"#);
+    assert!(
+        bundle.contains(r#""jsx:own", "mdx:own", "js:own""#),
+        "every importer takes the project's paths: {bundle}"
+    );
+    assert!(!bundle.contains("parent"), "{bundle}");
+
+    let bundle = built(
+        r#"{ "plugins": ["./mdx.js"], "resolve": { "alias": { "pkg": "./vendor/pkg.js" } } }"#,
+    );
+    assert!(
+        bundle.contains(r#""jsx:alias", "mdx:alias", "js:alias""#),
+        "the alias comes before paths: {bundle}"
+    );
+    write_in(
+        &dir,
+        "src/run.js",
+        "import { who } from 'pkg';\nconsole.log(who);\n",
+    );
+    let ran = esdev_in(&dir)
+        .arg("src/run.js")
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(stdout(&ran).trim(), "alias", "{}", stderr(&ran));
+
+    // An alias that names nothing is an error, not the package as written.
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "plugins": ["./mdx.js"], "resolve": { "alias": { "pkg": "./nowhere/pkg.js" } } }"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "src/main.js", "--out=dist/main.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains(r#"the alias "pkg" points it at"#),
+        "{}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `esdev test` resolves an import the way the build does: through
 /// `tsconfig.json`'s `paths` and `esdev.json`'s `alias` — and so does
 /// `mock.module`, which has to replace the module the import reaches.

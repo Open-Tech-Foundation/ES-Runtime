@@ -15,6 +15,9 @@
 # `specifier_path`, `file_url` and `to_slash`. A line that means it — a test
 # asserting a literal URL — says so with a `path-discipline:` comment.
 #
+# `crates/vendor` is third-party code kept at upstream's text apart from the
+# patches it lists (D196), so it is not held to this project's path interface.
+#
 # A script rather than a `run =` line in tasks.toml: the check is a pipeline and
 # tsr's mini-shell has no pipes by design.
 set -euo pipefail
@@ -23,7 +26,7 @@ cd "$(dirname "$0")/.."
 
 pattern='strip_prefix\("file://"\)|trim_start_matches\("file://"\)|format!\("file://|replace\(('"'"'\\\\'"'"'|"\\\\"), "/"\)'
 
-hits=$(grep -rnE --include='*.rs' "$pattern" crates \
+hits=$(grep -rnE --include='*.rs' --exclude-dir=vendor "$pattern" crates \
     | grep -v '^crates/default-providers/src/path\.rs:' \
     | grep -v 'path-discipline:' || true)
 

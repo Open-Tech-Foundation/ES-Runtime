@@ -4092,3 +4092,27 @@ Case is compared by Unicode uppercase, the same in the Rust and JavaScript halve
 - **Node's exception for worker threads**, whose copy of `env` is case-sensitive. A worker's `env` follows the same rule as the main thread's.
 
 **Consequences:** on Unix nothing changes. On Windows, the four places above resolve names the platform's way, and the API reference says so for `env`, `--allow-env` and `spawn`'s `env`.
+
+### D196 — One resolution rule for every importer: the nearest tsconfig, and the alias before `paths` · *Accepted (2026-10-30)* · *amends D124*
+
+**Context:** a project inside a folder whose own `tsconfig.json` mapped `@opentf/afw` to a workspace copy, with its own tsconfig and alias mapping it to `node_modules`. Its `.jsx` page bundled the parent's copy and its `.mdx` page the project's, so one page held two instances of one runtime and reloaded for ever. Three causes, reproduced:
+- **Which tsconfig applies depended on the file's extension.** esdev resolves through oxc_resolver (rolldown's resolver, and D124's for unbundled runs), whose discovery gives a file the nearest tsconfig *that would compile it* — `files`/`include`/`exclude` judged with TypeScript's extension list, `.js` only under `allowJs` — and otherwise walks on to an ancestor's. A `.mdx` page got no `paths`; a `.jsx` file without `allowJs` got the parent's.
+- **The same lookup feeds the transform.** rolldown reads `jsx`, `jsxImportSource`, `experimentalDecorators`, `verbatimModuleSyntax` and `target` from the tsconfig it discovers per file, so a parent's settings leaked into a project's JSX the same way.
+- **A bundle applied `paths` before `esdev.json`'s alias**, the order oxc_resolver hard-codes; an unbundled run applied the alias first, as D124 states. The same import resolved differently under `esdev build` and `esdev <file>`.
+
+Vite 8's `resolve.tsconfigPaths` has the first rule (a non-TS file must be listed in `include`); esbuild takes the nearest `tsconfig.json` and ignores `include`.
+
+**Decision (maintainer, 2026-10-30):** esdev states the rule and the libraries it builds on follow it.
+- **A module's tsconfig is the `tsconfig.json` nearest to it**, whatever its extension, and whether or not its `files`/`include`/`exclude` name it. When that config has `references`, the referenced config whose `files`/`include`/`exclude` covers the path applies, the extension again not consulted. A file in `node_modules` has none. A root `jsconfig.json` with no `tsconfig.json` beside it is still named explicitly (D124's amendment). This one lookup gives both `paths` and the transform's settings, in every command.
+- **It is enforced in a vendored oxc_resolver** (`crates/vendor/oxc_resolver`, MIT, wired in by `[patch.crates-io]`), changed in three marked places listed in its `PATCHES.md`. rolldown and the unbundled path already share that crate, so one patch covers the build, the dev loop, tests and `esdev <file>`.
+- **`resolve.alias` comes before `paths` in a bundle too**: a plugin ahead of every other (`esdev:alias`) rewrites the specifier and hands it to the rest of the chain and the resolver, and rolldown's own alias option is no longer used. Every bundle is made by one constructor (`bundler::builder`), so none can be made without it. An alias whose replacements name nothing is an error, not a fall back to the specifier as written.
+
+**Why the nearest config and not TypeScript's ownership rule:** which files a tsconfig *type-checks* is a question for the type checker. A page a plugin compiles to JavaScript imports exactly like JavaScript, and a project's own tsconfig is the one its author edits; that a parent folder's can take it over because a key is missing is not a behaviour anyone writes for. "Nearest" is also what a reader expects on seeing two tsconfig files.
+
+**Rejected:**
+- **Keeping the ownership rule (Vite 8, `tsserver`)**: every MDX, Vue or Svelte project would have to list its extensions in `include` for an alias to work, and a missing `allowJs` silently hands a project to its parent.
+- **Resolving `paths` in an esdev plugin and leaving rolldown's lookup on**: imports would follow the rule and the JSX and decorator settings would not, and an unmapped specifier could still take an ancestor's `paths`. Two rules for one question.
+- **One tsconfig for the whole project (`Manual`)**: a workspace package's source linked into the project would lose its own `paths`.
+- **Waiting for upstream**: the patch is small and esdev's to own; proposing it upstream as a discovery mode is a follow-up, and the vendored copy is then dropped.
+
+**Consequences:** a project with its own `tsconfig.json` is never resolved or compiled with a parent folder's. A file outside its nearest tsconfig's `include` now takes that tsconfig rather than an ancestor's. Moving oxc_resolver to a new release means re-applying `PATCHES.md`. Verified by 4 unit tests (every importer extension, a file outside `include`, a solution config's reference routing an `.mdx` page, the alias name rule) and an end-to-end test of the reported layout: `.jsx`, `.mdx` and `.js` importers under a parent tsconfig, with and without an alias, through `esdev build` and `esdev <file>`, and an alias that names nothing. Documented per D27 (site `esdev/test/imports`, `esdev/build/project`, internals `bundler`, `crates/dev-cli/CHANGELOG.md`).
