@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-30
+
 ### Fixed
 
 - One resolution rule for every importer (D196). A module takes the
