@@ -164,9 +164,6 @@ impl Plugin for Rewrite {
         ctx: &PluginContext,
         args: &HookResolveIdArgs<'_>,
     ) -> HookResolveIdReturn {
-        if is_path(args.specifier) {
-            return Ok(None);
-        }
         let Some((find, to, rest)) = self
             .alias
             .iter()
@@ -174,6 +171,9 @@ impl Plugin for Rewrite {
         else {
             return Ok(None);
         };
+        if !rewrites(rest, args.specifier) {
+            return Ok(None);
+        }
         for target in to {
             let options = PluginContextResolveOptions {
                 import_kind: args.kind,
@@ -207,6 +207,14 @@ fn is_path(specifier: &str) -> bool {
         || specifier.starts_with('/')
         || specifier.starts_with('\\')
         || url::Url::parse(specifier).is_ok_and(|url| url.scheme().len() > 1)
+}
+
+/// Whether an alias match rewrites `specifier`: always when the alias names
+/// the whole specifier, and when it does not only if the specifier is not a
+/// path or a URL. `runtime:test` is a URL-shaped specifier the browser test
+/// runner aliases, and an exact match must reach it; `./foo` is not `.`.
+fn rewrites(rest: &str, specifier: &str) -> bool {
+    rest.is_empty() || !is_path(specifier)
 }
 
 /// The file an import was written in. The entry's own imports have no referrer
@@ -523,5 +531,22 @@ mod tests {
         assert_eq!(named("pkg", "pkgs"), None);
         assert_eq!(named("@", "@scope/pkg"), None);
         assert_eq!(named("@", "@/ui"), Some("/ui"));
+    }
+
+    /// `runtime:test` parses as a URL (scheme `runtime`), so `is_path` says
+    /// yes — but the browser test runner aliases it to the staged module and
+    /// an exact match must reach it. A prefix match on a path or a URL does not.
+    #[test]
+    fn a_url_shaped_exact_alias_is_still_applied() {
+        assert!(is_path("runtime:test"));
+        assert_eq!(named("runtime:test", "runtime:test"), Some(""));
+        // Exact match: the alias applies despite the URL-shaped specifier.
+        assert!(rewrites("", "runtime:test"));
+        // Prefix match on a path: the alias does not apply.
+        assert!(!rewrites("/foo", "./foo"));
+        // Prefix match on a bare specifier: the alias applies.
+        assert!(rewrites("/foo", "@/foo"));
+        // Prefix match on a URL: the alias does not apply.
+        assert!(!rewrites(":///foo", "file:///foo"));
     }
 }

@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev test --browser` resolves `runtime:test` again. The 0.25 alias plugin
+  treated every URL-shaped specifier as a path and skipped it, so
+  `runtime:test` — which parses as scheme `runtime` — was left as an external
+  import the browser could not load. An exact alias match now always applies;
+  only a prefix match on a path or URL is skipped.
+
 ## [0.25.0] - 2026-10-30
 
 ### Fixed
