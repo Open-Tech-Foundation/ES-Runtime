@@ -435,85 +435,85 @@ same run that feeds the site. One machine; re-run locally for your own numbers.
 ```
 workload      |     node |      bun |     deno |     llrt |    esrun
 --------------+----------+----------+----------+----------+----------
-startup       |     20.3 |      4.2 |     13.1 |      3.5 |      8.9
-bigscript     |     32.9 |     14.1 |     21.1 |     11.3 |     20.4
-modules       |     94.6 |     12.1 |     31.4 |     15.2 |     33.7
-compute       |    191.6 |    109.7 |    233.6 |   1723.8 |    192.8
-json          |    256.0 |    144.7 |    195.2 |    624.0 |    185.4
-jsonbig       |    666.4 |    357.0 |    505.1 |   1506.1 |    472.9
-regex         |     65.1 |     12.4 |     62.2 |    935.8 |     59.0
-strings       |     59.5 |     59.7 |     59.5 |    158.9 |     56.1
-structured    |    211.1 |    239.6 |    254.2 |    387.1 |    271.4
-errors        |   1398.5 |    333.1 |   4239.3 |    364.0 |    373.0
-async         |     55.5 |     37.8 |     29.8 |    548.8 |     29.9
-timers        |     49.6 |     29.7 |    234.2 |     35.6 |    104.2
-url           |     35.2 |     31.0 |     99.3 |    117.7 |     89.9
-url_setter    |    133.7 |     85.7 |    183.6 |    111.7 |    182.5
-urlpattern    |    387.5 |    465.8 |   5048.5 |      n/a |    808.9
-encoding      |     68.2 |     17.5 |     68.2 |     67.8 |     67.5
-encoding_large|    330.7 |     69.1 |    150.5 |    255.9 |    106.4
-base64        |      7.1 |     10.9 |      7.7 |     34.0 |     23.2
-buffers       |     14.0 |     16.3 |     14.0 |     70.3 |     12.6
-headers       |    423.1 |    218.7 |   1527.3 |      n/a |    417.5
-formdata      |    269.8 |     19.2 |    376.2 |   4254.3 |     91.3
-date_intl     |    123.4 |     79.8 |    134.8 |      n/a |    134.7
-streams       |     10.9 |      5.5 |     10.5 |     91.5 |     10.4
-compression   |    285.3 |     26.5 |     76.7 |      n/a |     70.7
-sha256        |    488.8 |    398.0 |    415.3 |    330.1 |    336.5
-crypto        |    185.6 |     81.4 |     90.7 |     35.5 |     35.1
-crypto_asym   |    380.2 |    190.4 |   2203.1 |   1017.9 |   1826.3
-crypto_kdf    |     71.3 |     63.3 |     70.8 |     95.9 |     99.1
-hash_hex      |    161.1 |    175.6 |    182.2 |    316.0 |    314.6
-hash_chunks   |   1470.6 |   1661.2 |   1655.1 |   3076.4 |   3081.7
-hash_fast     |      n/a |     46.5 |      n/a |      n/a |     65.4
-fetch         |     95.7 |     17.4 |     35.8 |     18.0 |     41.5
-fetch_upload  |    103.6 |     37.4 |     37.2 |   8599.9 |     40.0
-http          |    374.5 |     48.6 |    106.0 |      n/a |    116.0
-websocket     |    587.6 |    422.9 |    560.4 |      n/a |    762.6
-udp_echo      |    306.9 |    163.8 |    461.6 |    345.5 |    329.8
-udp_send      |    230.2 |    178.9 |    253.8 |    759.5 |    206.7
-fsread_small  |    105.6 |     35.5 |     38.9 |     26.0 |     45.4
-fsread_large  |     58.6 |     17.3 |     67.0 |      7.0 |     27.7
-fswrite_small |    146.0 |     12.5 |     88.8 |     94.6 |     86.0
-fswrite_large |     57.5 |     22.1 |     40.4 |     51.4 |     35.6
-fsappend_small|     94.6 |     30.8 |     39.7 |      n/a |     38.1
-fsappend_large|     23.8 |      8.0 |     16.1 |      n/a |      8.5
-fsstat_small  |     67.9 |     49.0 |     88.6 |     38.3 |     56.2
-fsstat_many   |    255.5 |    203.0 |    368.1 |    155.2 |    247.0
-fsexists_small|     56.2 |      7.7 |     90.6 |     47.0 |     42.3
-fsexists_many |    221.3 |     31.8 |    368.7 |    185.2 |    191.8
-glob          |    190.3 |     25.7 |      n/a |      n/a |     47.4
-spawn         |    208.6 |     99.5 |    109.5 |     95.3 |     82.8
-jsonl_stream  |    607.6 |    843.5 |    681.8 |      n/a |    623.5
-jsonc_large   |    174.8 |     62.5 |    265.4 |   2695.4 |     66.8
-json5_large   |   1222.3 |    146.8 |   1083.9 |   9785.6 |     96.7
-xml_small     |    471.2 |    511.5 |    417.7 |     56.1 |    157.1
-xml_large     |    954.8 |    903.4 |    866.5 |    114.6 |    314.6
-yaml_small    |    191.9 |     96.0 |    179.8 |   4151.5 |    214.4
-yaml_large    |    391.1 |    196.1 |    375.5 |   8522.2 |    422.2
-toml_small    |    199.8 |     53.3 |    233.0 |   3785.3 |    154.6
-toml_large    |    398.2 |    102.4 |    482.6 |   7589.6 |    316.8
-msgpack_small |     41.2 |     47.6 |     37.9 |    793.0 |     54.8
-msgpack_large |     43.1 |     46.6 |     40.3 |    802.5 |     58.0
-cbor_small    |     41.0 |     50.1 |    297.6 |      n/a |    108.0
-cbor_large    |     41.9 |     46.8 |    321.7 |      n/a |    109.4
-csv_small     |     93.0 |    137.1 |     74.8 |      n/a |     34.9
-csv_large     |    170.2 |    176.7 |    160.8 |      n/a |     69.2
-csv_stream    |    978.9 |   1165.7 |    571.5 |      n/a |    486.9
-protobuf_small|     60.1 |     79.2 |     72.0 |   1032.5 |     78.4
-protobuf_large|    332.3 |    357.4 |    408.1 |   5106.5 |    404.1
-wasm_compile  |     45.8 |     64.4 |     37.0 |      n/a |     39.3
-wasm_call     |     92.6 |    157.3 |     81.2 |      n/a |     82.6
-wasm_mem      |    207.6 |    381.1 |    246.3 |      n/a |    258.3
-wasi_start    |    284.8 |    404.7 |     48.5 |      n/a |     44.7
-wasi_syscall  |     44.7 |     14.3 |     18.1 |      n/a |     57.6
-rss           |     43.0 |     12.0 |     29.0 |     11.0 |     26.0
-rss_loaded    |    136.0 |    141.0 |    124.0 |    165.0 |    110.0
+startup       |     21.3 |      4.1 |     12.8 |      3.5 |      8.8
+bigscript     |     31.0 |     14.2 |     21.3 |     11.2 |     20.3
+modules       |     91.1 |     11.9 |     30.9 |     15.1 |     33.2
+compute       |    193.8 |    110.4 |    231.3 |   1686.7 |    189.5
+json          |    193.8 |    144.7 |    189.9 |    617.5 |    189.2
+jsonbig       |    495.6 |    372.9 |    497.5 |   1526.0 |    465.2
+regex         |     63.8 |     12.3 |     61.8 |    926.9 |     57.6
+strings       |     52.4 |     57.4 |     59.0 |    156.9 |     55.3
+structured    |    194.6 |    222.4 |    249.0 |    380.5 |    265.5
+errors        |   1263.8 |    274.9 |   4194.1 |    362.5 |    366.8
+async         |     46.3 |     38.0 |     29.6 |    540.1 |     30.0
+timers        |     35.6 |     29.1 |    234.1 |     35.3 |    101.0
+url           |     31.8 |     30.5 |     97.1 |    117.1 |     86.9
+url_setter    |    116.1 |     84.0 |    181.2 |    111.4 |    182.9
+urlpattern    |    324.5 |    420.9 |   5026.5 |      n/a |    802.2
+encoding      |     70.5 |     16.3 |     66.9 |     67.0 |     62.7
+encoding_large|     73.5 |     68.4 |    142.0 |    240.5 |    100.0
+base64        |      7.1 |      9.7 |      7.3 |     33.1 |     22.1
+buffers       |     13.4 |     16.5 |     13.0 |     69.2 |     12.5
+headers       |    400.9 |    167.7 |   1496.8 |      n/a |    421.9
+formdata      |    227.4 |     20.3 |    372.3 |   4170.4 |     88.0
+date_intl     |    127.4 |     75.4 |    137.0 |      n/a |    136.5
+streams       |      7.7 |      5.6 |     10.4 |     90.4 |      9.8
+compression   |    279.2 |     26.7 |     77.6 |      n/a |     71.5
+sha256        |    492.1 |    400.1 |    400.2 |    323.7 |    331.2
+crypto        |    142.1 |     82.1 |    100.4 |     34.4 |     34.0
+crypto_asym   |    305.9 |    188.2 |   2164.7 |   1000.4 |   1816.8
+crypto_kdf    |     71.3 |     62.7 |     69.9 |     95.4 |     97.3
+hash_hex      |    159.4 |    173.0 |    179.1 |    314.5 |    311.0
+hash_chunks   |   1457.8 |   1640.2 |   1641.1 |   3033.9 |   3036.2
+hash_fast     |      n/a |     46.1 |      n/a |      n/a |     69.4
+fetch         |     88.5 |     15.8 |     32.7 |     15.6 |     40.1
+fetch_upload  |     94.0 |     37.9 |     33.3 |   8631.9 |     39.2
+http          |    332.5 |     49.5 |    104.9 |      n/a |    113.8
+websocket     |    586.5 |    418.4 |    557.4 |      n/a |    815.3
+udp_echo      |    263.7 |    168.1 |    405.1 |    329.5 |    337.9
+udp_send      |    228.2 |    182.9 |    251.9 |    788.7 |    208.5
+fsread_small  |     46.4 |     37.5 |     42.0 |     26.7 |     44.9
+fsread_large  |     63.0 |     17.3 |     56.9 |      7.0 |     27.4
+fswrite_small |     90.4 |     12.4 |     80.0 |     89.4 |     80.0
+fswrite_large |     46.4 |     18.3 |     38.8 |     38.7 |     36.8
+fsappend_small|     52.7 |     29.9 |     38.5 |      n/a |     37.4
+fsappend_large|     16.1 |      6.3 |     15.6 |      n/a |      8.7
+fsstat_small  |     68.1 |     48.7 |     89.3 |     38.4 |     55.0
+fsstat_many   |    276.1 |    199.4 |    357.2 |    154.0 |    242.5
+fsexists_small|     56.4 |      7.3 |     88.5 |     46.6 |     42.1
+fsexists_many |    234.2 |     30.1 |    361.9 |    183.2 |    190.0
+glob          |    185.7 |     24.7 |      n/a |      n/a |     47.8
+spawn         |    183.0 |     98.5 |    107.9 |     94.9 |     81.5
+jsonl_stream  |    583.1 |    846.7 |    658.1 |      n/a |    598.7
+jsonc_large   |    189.5 |     61.6 |    273.6 |   2713.9 |     68.1
+json5_large   |   1070.4 |    118.0 |   1071.0 |   9785.6 |     94.4
+xml_small     |    467.3 |    410.3 |    412.9 |     56.1 |    153.5
+xml_large     |    962.7 |    887.1 |    850.0 |    112.7 |    310.5
+yaml_small    |    196.8 |     96.6 |    181.7 |   4129.4 |    209.3
+yaml_large    |    382.2 |    188.1 |    364.4 |   8294.1 |    403.7
+toml_small    |    200.2 |     51.6 |    224.2 |   3728.6 |    152.1
+toml_large    |    442.0 |    100.4 |    469.5 |   7572.9 |    312.8
+msgpack_small |     38.4 |     44.7 |     37.5 |    792.2 |     52.6
+msgpack_large |     38.7 |     44.9 |     39.9 |    788.8 |     55.5
+cbor_small    |     39.2 |     49.3 |    291.2 |      n/a |    109.0
+cbor_large    |     40.6 |     46.9 |    315.7 |      n/a |    107.7
+csv_small     |     92.5 |    123.8 |     73.8 |      n/a |     34.2
+csv_large     |    156.8 |    178.6 |    160.5 |      n/a |     68.0
+csv_stream    |    924.2 |   1078.1 |    561.3 |      n/a |    439.6
+protobuf_small|     57.6 |     72.3 |     70.9 |    964.2 |     74.8
+protobuf_large|    324.4 |    391.7 |    401.6 |   4902.5 |    394.6
+wasm_compile  |     38.7 |     62.4 |     35.8 |      n/a |     38.2
+wasm_call     |     77.4 |    149.0 |     78.9 |      n/a |     78.9
+wasm_mem      |    199.7 |    363.2 |    237.9 |      n/a |    249.1
+wasi_start    |    361.3 |    389.8 |     46.0 |      n/a |     44.5
+wasi_syscall  |     42.8 |     13.9 |     18.1 |      n/a |     55.4
+rss           |     43.0 |     13.0 |     30.0 |     11.0 |     26.0
+rss_loaded    |    139.0 |    136.0 |    129.0 |    165.0 |    110.0
 ```
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.113+deb13-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.21.0, bun 1.4.3, deno 2.9.7, llrt v0.9.0-beta, esrun 0.45.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v26.13.0, bun 1.4.4, deno 2.9.7, llrt v0.9.0-beta, esrun 0.45.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 
@@ -878,7 +878,7 @@ runtime) instead of the drivers — see `http-seed.mjs`.
 
 ```sh
 docker run -d --name esrun-pg-bench -e POSTGRES_PASSWORD=esrun \
-  -e POSTGRES_DB=esrun_test -p 5433:5432 postgres:16 -c max_connections=200
+  -e POSTGRES_DB=esrun_test -p 5433:5432 postgres:18.6 -c max_connections=200
 PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test node bench/db/pg/http-seed.mjs
 PG_URL=... bench/db/pg/qps-run.sh                        # human table
 PG_URL=... SECTIONS=pg_qps bench/gen-bench-data.sh       # publish
