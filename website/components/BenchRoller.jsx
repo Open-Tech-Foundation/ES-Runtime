@@ -38,7 +38,11 @@ export default function BenchRoller() {
           className="bench-roll-toggle rounded-md p-2 text-zinc-700 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            {paused ? <path d="m8 5 12 7-12 7V5Z" /> : <path d="M8 5v14M16 5v14" />}
+            <path
+              d={paused ? "m8 5 12 7-12 7V5Z" : "M8 5v14M16 5v14"}
+              fill={paused ? "currentColor" : "none"}
+              stroke={paused ? "none" : "currentColor"}
+            />
           </svg>
         </button>
       </div>

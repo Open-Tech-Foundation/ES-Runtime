@@ -122,6 +122,9 @@ button:not(:disabled),
 .bench-roll-track.is-paused {
   animation-play-state: paused;
 }
+.bench-roll-container:hover .bench-roll-track {
+  animation-play-state: paused;
+}
 /* Fade the top/bottom edges so cards enter and leave softly. */
 .bench-roll-container {
   -webkit-mask-image: linear-gradient(
@@ -428,13 +431,20 @@ button:not(:disabled),
   animation: edw-reload 1.1s ease-in-out both;
 }
 
-/* Reduced motion: no travelling dots and no fades. The frames still advance —
- * they are the content — and each frame's colours carry what happened. */
+/* Reduced motion: hold the commit/restart markers still at their endpoints and
+ * remove fades. The frames still advance, and each frame's colours carry what
+ * happened. */
 @media (prefers-reduced-motion: reduce) {
   .edw-commit,
   .edw-reload {
     animation: none;
-    opacity: 0;
+    opacity: 1;
+  }
+  .edw-commit {
+    transform: translateX(660px);
+  }
+  .edw-reload {
+    transform: translateX(724px);
   }
   .edw-t,
   .edw-o {

@@ -31,6 +31,8 @@ namespace) is unstable and may change between minor releases until the API freez
 - Benchmark charts expose row and column relationships to assistive technology;
   animated benchmarks can be paused from the keyboard, and selector controls
   announce their pressed state.
+- The durable-worker diagram keeps commit and restart markers visible without
+  motion and improves the storage-link contrast.
 
 ## [0.45.0] - 2026-10-28
 

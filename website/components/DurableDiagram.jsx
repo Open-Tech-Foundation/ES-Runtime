@@ -300,7 +300,7 @@ export default function DurableDiagram() {
           y1="302"
           x2={DISK_X - 56}
           y2="302"
-          className={"edw-t " + (at(step).commit || at(step).restart ? "stroke-emerald-400" : "stroke-zinc-700")}
+          className={"edw-t " + (at(step).commit || at(step).restart ? "stroke-emerald-400" : "stroke-zinc-500")}
           stroke-width="1.5"
         />
         <circle cx="0" cy="302" r="5" className={"fill-emerald-400 " + (at(step).commit ? "edw-commit" : "edw-still")} />
