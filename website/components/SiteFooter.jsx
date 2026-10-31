@@ -1,12 +1,13 @@
 import BuiltWithBadge from "./BuiltWithBadge.jsx";
 
 const OTF_ORG = "https://opentechf.org";
+const OTF_POLICIES = `${OTF_ORG}/policies`;
 
-// Site footer: org link (logo + name) on the left, AFW badge on the right.
+// The centered policy link is positioned independently of the footer contents.
 export default function SiteFooter() {
   return (
     <footer className="afwd-footer border-t border-zinc-800 bg-zinc-950 text-zinc-400">
-      <div className="afwd-footer-inner">
+      <div className="afwd-footer-inner site-footer-inner">
         <div className="site-footer-org">
           <a
             href={OTF_ORG}
@@ -23,9 +24,23 @@ export default function SiteFooter() {
             />
             <span>© Open Tech Foundation</span>
           </a>
-          <span className="site-footer-license text-zinc-500">— Apache-2.0</span>
+          <span className="site-footer-license">· Apache-2.0</span>
+        </div>
+        <div className="site-footer-center">
+          <a
+            href={OTF_POLICIES}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="site-footer-policy-link"
+            aria-label="Open organization policies in a new tab"
+          >
+            Organization policies ↗
+          </a>
         </div>
         <BuiltWithBadge />
+      </div>
+      <div className="site-footer-bottomline">
+        No trackers, no analytics.
       </div>
     </footer>
   );

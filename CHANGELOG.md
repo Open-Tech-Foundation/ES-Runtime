@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- The site footer centers a visibly external Foundation policies link without
+  changing the AFW badge's position.
+- The footer states that the site uses no trackers or analytics.
+- Footer text colors meet WCAG AA contrast against the dark footer background.
+- The AFW footer badge icon uses black strokes.
+
 - The site's benchmark data is re-measured with esrun 0.45.0 (esdev 0.24.0,
   node 26.13.0, bun 1.4.4, deno 2.9.7, llrt 0.9.0-beta, PostgreSQL 18.6) — the
   previous full run published 0.43.0 against node 24 and PostgreSQL 16 — and

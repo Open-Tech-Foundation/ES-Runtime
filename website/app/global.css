@@ -450,11 +450,14 @@ button:not(:disabled),
   align-items: center;
   gap: 0.45rem;
 }
+.site-footer-inner {
+  position: relative;
+}
 .site-footer-org-link {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  color: #a1a1aa;
+  color: #e4e4e7;
   text-decoration: none;
   transition: color 0.2s ease;
 }
@@ -473,9 +476,42 @@ button:not(:disabled),
   flex-shrink: 0;
 }
 .site-footer-license {
-  color: #71717a;
+  color: #a1a1aa;
 }
-
+.site-footer-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+.site-footer-policy-link {
+  color: #d4d4d8;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  transition: color 0.2s ease;
+}
+.site-footer-policy-link:hover {
+  color: #ffffff;
+}
+.site-footer-policy-link:focus-visible {
+  outline: 2px solid var(--afw-accent);
+  outline-offset: 3px;
+  border-radius: 0.25rem;
+}
+.site-footer-bottomline {
+  color: #a1a1aa;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  padding: 0 1rem 0.75rem;
+  text-align: right;
+}
 /* Footer "Built with AFW" badge (right side). */
 .site-footer-badge {
   display: inline-flex;
