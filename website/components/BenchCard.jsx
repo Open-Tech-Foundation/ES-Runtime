@@ -90,16 +90,19 @@ export default function BenchCard({ metric }) {
       </div>
 
       {/* Column Headers */}
-      <div className="mb-2 grid grid-cols-12 gap-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-        <div className="col-span-3">Runtime</div>
-        <div className={hasRss ? "col-span-5 text-left" : "col-span-9 text-left"}>
+      <div role="table" aria-label={metric.label}>
+      <div role="rowgroup" className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+        <div role="row" className="grid grid-cols-12 gap-2">
+        <div role="columnheader" className="col-span-3">Runtime</div>
+        <div role="columnheader" className={hasRss ? "col-span-5 text-left" : "col-span-9 text-left"}>
           Perf ({betterLabel(metric.key)})
         </div>
-        {hasRss ? <div className="col-span-4 text-left">Memory (lower ↓)</div> : null}
+        {hasRss ? <div role="columnheader" className="col-span-4 text-left">Memory (lower ↓)</div> : null}
+        </div>
       </div>
 
       {/* Rows */}
-      <div className="space-y-1.5">
+      <div role="rowgroup" className="space-y-1.5">
         {runtimes.map((rt) => {
           const v = row[rt];
           const rssVal = rssRow ? rssRow[rt] : null;
@@ -116,15 +119,15 @@ export default function BenchCard({ metric }) {
           };
 
           return (
-            <div className="grid grid-cols-12 items-center gap-2">
+            <div role="row" className="grid grid-cols-12 items-center gap-2">
               {/* Runtime Label */}
-              <div className="col-span-3 flex items-center gap-1.5 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+              <div role="cell" className="col-span-3 flex items-center gap-1.5 truncate text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
                 <RuntimeIcon name={rt} />
                 <span className="truncate">{LABELS[rt]}</span>
               </div>
 
               {/* Performance Metric Bar & Value */}
-              <div className={(hasRss ? "col-span-5" : "col-span-9") + " flex items-center gap-1.5 pr-1"}>
+              <div role="cell" className={(hasRss ? "col-span-5" : "col-span-9") + " flex items-center gap-1.5 pr-1"}>
                 <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                   <div
                     className={"h-full rounded-full " + brand.bar}
@@ -138,7 +141,7 @@ export default function BenchCard({ metric }) {
 
               {/* Memory RSS Bar & Value */}
               {hasRss ? (
-                <div className="col-span-4 flex items-center gap-1.5">
+                <div role="cell" className="col-span-4 flex items-center gap-1.5">
                   <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                     <div
                       className={"h-full rounded-full opacity-80 " + brand.bar}
@@ -153,6 +156,7 @@ export default function BenchCard({ metric }) {
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

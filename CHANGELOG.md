@@ -28,6 +28,9 @@ namespace) is unstable and may change between minor releases until the API freez
   `website/src/versions.js` is regenerated to match. Eleven esrun rows are more
   than 10% faster; `crypto_asym` (ECDSA P-256 sign + verify) is 55% slower,
   the cost of the move to the 0.14 NIST curves for RUSTSEC-2026-0387.
+- Benchmark charts expose row and column relationships to assistive technology;
+  animated benchmarks can be paused from the keyboard, and selector controls
+  announce their pressed state.
 
 ## [0.45.0] - 2026-10-28
 

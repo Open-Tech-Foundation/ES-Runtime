@@ -21,19 +21,42 @@ import { cardRows } from "../src/bench-rows.js";
 const METRICS = cardRows();
 
 export default function BenchRoller() {
+  let paused = $state(false);
+
   return (
-    <div className="bench-roll-container relative overflow-hidden" style={{ height: "50vh" }}>
-      <div className="bench-roll-track">
-        {METRICS.map((m) => (
-          <div className="pb-4">
-            <BenchCard metric={m} />
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          Benchmarks
+        </h2>
+        <button
+          type="button"
+          aria-pressed={paused}
+          aria-label={paused ? "Resume benchmark motion" : "Pause benchmark motion"}
+          title={paused ? "Resume benchmark motion" : "Pause benchmark motion"}
+          onclick={() => (paused = !paused)}
+          className="bench-roll-toggle rounded-md p-2 text-zinc-700 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            {paused ? <path d="m8 5 12 7-12 7V5Z" /> : <path d="M8 5v14M16 5v14" />}
+          </svg>
+        </button>
+      </div>
+      <div className="bench-roll-container relative overflow-hidden" style={{ height: "50vh" }}>
+        <div className={paused ? "bench-roll-track is-paused" : "bench-roll-track"}>
+          {METRICS.map((m) => (
+            <div className="pb-4">
+              <BenchCard metric={m} />
+            </div>
+          ))}
+          <div aria-hidden="true">
+            {METRICS.map((m) => (
+              <div className="pb-4">
+                <BenchCard metric={m} />
+              </div>
+            ))}
           </div>
-        ))}
-        {METRICS.map((m) => (
-          <div className="pb-4">
-            <BenchCard metric={m} />
-          </div>
-        ))}
+        </div>
       </div>
     </div>
   );

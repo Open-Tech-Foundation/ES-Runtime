@@ -23,17 +23,17 @@ export default function FrameworkTabs() {
   return (
     <div>
       <div className="mb-8 flex justify-center">
-        <div className="flex items-center gap-1 rounded-full bg-zinc-100 p-1 dark:bg-zinc-800/80">
-          <button type="button" onclick={() => (tab = "req")} className={tabClass(tab === "req")}>
+        <div role="group" aria-label="Benchmark views" className="flex items-center gap-1 rounded-full bg-zinc-100 p-1 dark:bg-zinc-800/80">
+          <button type="button" aria-pressed={tab === "req"} onclick={() => (tab = "req")} className={tabClass(tab === "req")}>
             Request throughput
           </button>
-          <button type="button" onclick={() => (tab = "dev")} className={tabClass(tab === "dev")}>
+          <button type="button" aria-pressed={tab === "dev"} onclick={() => (tab = "dev")} className={tabClass(tab === "dev")}>
             Dev server
           </button>
-          <button type="button" onclick={() => (tab = "build")} className={tabClass(tab === "build")}>
+          <button type="button" aria-pressed={tab === "build"} onclick={() => (tab = "build")} className={tabClass(tab === "build")}>
             Build time
           </button>
-          <button type="button" onclick={() => (tab = "db")} className={tabClass(tab === "db")}>
+          <button type="button" aria-pressed={tab === "db"} onclick={() => (tab = "db")} className={tabClass(tab === "db")}>
             Database QPS
           </button>
         </div>

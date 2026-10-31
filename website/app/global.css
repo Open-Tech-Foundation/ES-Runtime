@@ -104,8 +104,9 @@ button:not(:disabled),
 }
 
 /* Benchmark roller (home page): a seamless vertical marquee. The track holds the
-   card set twice and scrolls up by exactly half its height, so the loop is
-   continuous. Pause on hover; honor reduced-motion (becomes a normal scroll). */
+  card set twice and scrolls up by exactly half its height, so the loop is
+  continuous. A keyboard-operable control pauses it; reduced-motion becomes a
+  normal scroll. */
 @keyframes bench-roll {
   from {
     transform: translateY(0);
@@ -118,7 +119,7 @@ button:not(:disabled),
   animation: bench-roll var(--bench-roll-duration, 55s) linear infinite;
   will-change: transform;
 }
-.bench-roll-container:hover .bench-roll-track {
+.bench-roll-track.is-paused {
   animation-play-state: paused;
 }
 /* Fade the top/bottom edges so cards enter and leave softly. */
@@ -146,6 +147,9 @@ button:not(:disabled),
     overflow-y: auto;
     -webkit-mask-image: none;
     mask-image: none;
+  }
+  .bench-roll-toggle {
+    display: none;
   }
 }
 

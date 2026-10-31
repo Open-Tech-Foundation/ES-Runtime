@@ -270,11 +270,6 @@ export default function HomePage() {
           {/* Benchmark card hugs the right edge; the text column hugs the left. */}
           <div className="w-full lg:max-w-md lg:justify-self-end">
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="mb-5 flex items-baseline justify-between">
-                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  Benchmarks
-                </h2>
-              </div>
               <BenchRoller />
               <a
                 href="/docs/benchmarks"

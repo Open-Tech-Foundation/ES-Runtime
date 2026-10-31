@@ -50,10 +50,11 @@ export default function CodeTabs() {
 
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
-      <div className="flex items-center gap-1 border-b border-zinc-800 px-2 pt-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div role="group" aria-label="Code examples" className="flex items-center gap-1 border-b border-zinc-800 px-2 pt-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {EXAMPLES.map((ex) => (
           <button
             type="button"
+            aria-pressed={activeId === ex.id}
             onclick={() => (activeId = ex.id)}
             className={
               TAB_BASE +
