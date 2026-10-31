@@ -106,16 +106,15 @@ const VIEWS = {
 const SPAN = { 2: ["col-span-2", "col-span-5"], 3: ["col-span-3", "col-span-3"] };
 
 export default function DevServerChart({ large = false, view = "startup" }) {
-  if (!bench.dev_server) return null;
+  const devServerData = bench.dev_server ?? {};
   const { title, columns } = VIEWS[view] ?? VIEWS.startup;
   // A run from before a view existed has none of its numbers: show nothing
   // rather than a card of "n/a".
   const hasAny = ORDER.some((t) => columns.some((c) => typeof getVal(t, c.key) === "number"));
-  if (!hasAny) return null;
   const [nameSpan, colSpan] = SPAN[columns.length] ?? SPAN[3];
   const sortKey = columns[0].key;
   // Fastest first by the view's first column; a tool without a number sinks.
-  const tools = ORDER.filter((t) => bench.dev_server[t])
+  const tools = ORDER.filter((t) => devServerData[t])
     .slice()
     .sort((a, b) => {
       const va = getVal(a, sortKey);
@@ -138,7 +137,7 @@ export default function DevServerChart({ large = false, view = "startup" }) {
   const barCls = large ? "h-4 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" : "h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800";
   const valCls = large ? "shrink-0 text-right text-sm tabular-nums " : "shrink-0 text-right text-[11px] tabular-nums ";
 
-  return (
+  return bench.dev_server && hasAny ? (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <span className={titleCls}>{title}</span>
@@ -191,5 +190,5 @@ export default function DevServerChart({ large = false, view = "startup" }) {
         })}
       </div>
     </div>
-  );
+  ) : null;
 }

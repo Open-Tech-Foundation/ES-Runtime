@@ -10,3 +10,10 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+
+minimumReleaseAgeExclude:
+  - '@opentf/afw-cli@1.32.0'
+  - '@opentf/afw-compiler@0.21.0'
+  - '@opentf/afw-docs@0.31.0'
+  - '@opentf/afw@0.33.0'
+  - '@opentf/esdev-plugin-afw@0.5.0'

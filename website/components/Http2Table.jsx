@@ -21,21 +21,22 @@ const PLAIN = "text-zinc-600 dark:text-zinc-400";
 const KEYS = ["wide_h1", "wide_h2", "narrow_h1", "narrow_h2"];
 
 export default function Http2Table({ data }) {
-  if (!data) return null;
-  const rows = ORDER.filter((rt) => data[rt]);
+  const hasData = Boolean(data);
+  const tableData = data ?? {};
+  const rows = ORDER.filter((rt) => tableData[rt]);
   // Fastest value per throughput column; a missing cell never wins.
   const best = {};
   for (const k of KEYS) {
     let top = -Infinity;
     for (const rt of rows) {
-      const v = data[rt][k];
+      const v = tableData[rt][k];
       if (typeof v === "number" && v > top) top = v;
     }
     best[k] = top;
   }
   // Winner check per cell, inline so the compiler still sees plain <td>s.
-  const won = (rt, k) => typeof data[rt][k] === "number" && data[rt][k] === best[k];
-  return (
+  const won = (rt, k) => typeof tableData[rt][k] === "number" && tableData[rt][k] === best[k];
+  return hasData ? (
     <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <table className="w-full text-left text-sm">
         <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
@@ -61,7 +62,7 @@ export default function Http2Table({ data }) {
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {rows.map((rt) => {
-            const d = data[rt];
+            const d = tableData[rt];
             const mark = d.split_server ? "†" : "";
             return (
               <tr>
@@ -92,5 +93,5 @@ export default function Http2Table({ data }) {
         </tbody>
       </table>
     </div>
-  );
+  ) : null;
 }

@@ -99,9 +99,9 @@ const COLUMNS = [
 ];
 
 export default function BuildChart({ large = false }) {
-  if (!bench.build_time) return null;
+  const buildData = bench.build_time ?? {};
   // Fastest build first; a tool without a number sinks to the bottom.
-  const tools = ORDER.filter((t) => bench.build_time[t])
+  const tools = ORDER.filter((t) => buildData[t])
     .slice()
     .sort((a, b) => {
       const va = getVal(a, "build_ms");
@@ -124,7 +124,7 @@ export default function BuildChart({ large = false }) {
   const barCls = large ? "h-4 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" : "h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800";
   const valCls = large ? "shrink-0 text-right text-sm tabular-nums " : "shrink-0 text-right text-[11px] tabular-nums ";
 
-  return (
+  return bench.build_time ? (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <span className={titleCls}>
@@ -179,5 +179,5 @@ export default function BuildChart({ large = false }) {
         })}
       </div>
     </div>
-  );
+  ) : null;
 }

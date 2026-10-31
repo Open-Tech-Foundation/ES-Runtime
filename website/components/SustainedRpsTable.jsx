@@ -36,22 +36,23 @@ function change(burst, held) {
 export default function SustainedRpsTable() {
   const burst = bench.results_rps?.hono;
   const held = bench.results_rps?.hono_sustained;
-  if (!burst || !held) return null;
+  const burstData = burst ?? {};
+  const heldData = held ?? {};
 
   const windowLabel = bench.rps_method?.hono_sustained?.duration || "held";
 
   const runtimes = [];
-  for (const rt of ORDER) if (burst[rt] != null || held[rt] != null) runtimes.push(rt);
+  for (const rt of ORDER) if (burstData[rt] != null || heldData[rt] != null) runtimes.push(rt);
 
   // Fastest burst and sustained values; a missing cell never wins.
   let topBurst = -Infinity;
   let topHeld = -Infinity;
   for (const rt of runtimes) {
-    if (typeof burst[rt] === "number" && burst[rt] > topBurst) topBurst = burst[rt];
-    if (typeof held[rt] === "number" && held[rt] > topHeld) topHeld = held[rt];
+    if (typeof burstData[rt] === "number" && burstData[rt] > topBurst) topBurst = burstData[rt];
+    if (typeof heldData[rt] === "number" && heldData[rt] > topHeld) topHeld = heldData[rt];
   }
 
-  return (
+  return burst && held ? (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
@@ -64,21 +65,21 @@ export default function SustainedRpsTable() {
         </thead>
         <tbody>
           {runtimes.map((rt) => {
-            const pct = change(burst[rt], held[rt]);
+            const pct = change(burstData[rt], heldData[rt]);
             const burstTone =
-              typeof burst[rt] === "number" && burst[rt] === topBurst
+              typeof burstData[rt] === "number" && burstData[rt] === topBurst
                 ? WIN
                 : "text-zinc-500";
             const heldTone =
-              typeof held[rt] === "number" && held[rt] === topHeld ? WIN : "text-zinc-500";
+              typeof heldData[rt] === "number" && heldData[rt] === topHeld ? WIN : "text-zinc-500";
             return (
               <tr className="border-b border-zinc-100 dark:border-zinc-800">
                 <td className="px-3 py-2">{LABELS[rt]}</td>
                 <td className={"px-3 py-2 text-right tabular-nums " + burstTone}>
-                  {fmt(burst[rt])}
+                  {fmt(burstData[rt])}
                 </td>
                 <td className={"px-3 py-2 text-right tabular-nums " + heldTone}>
-                  {fmt(held[rt])}
+                  {fmt(heldData[rt])}
                 </td>
                 <td
                   className={
@@ -97,5 +98,5 @@ export default function SustainedRpsTable() {
         </tbody>
       </table>
     </div>
-  );
+  ) : null;
 }

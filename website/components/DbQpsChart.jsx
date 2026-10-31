@@ -83,9 +83,9 @@ function fmtMb(v) {
 }
 
 export default function DbQpsChart({ db = "pg", large = false }) {
-  const qps = qpsOf(db);
+  const qpsSource = qpsOf(db);
+  const qps = qpsSource ?? {};
   const rss = rssOf(db);
-  if (!qps) return null;
   const getQps = (rt) => qps[rt] ?? null;
   const getRss = (rt) => rss?.[rt] ?? null;
   // Ranked fastest first; a runtime without a number sinks to the bottom.
@@ -98,7 +98,6 @@ export default function DbQpsChart({ db = "pg", large = false }) {
       if (typeof vb !== "number") return -1;
       return vb - va;
     });
-  if (runtimes.length === 0) return null;
 
   const titleCls = large
     ? "text-sm font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400"
@@ -115,7 +114,7 @@ export default function DbQpsChart({ db = "pg", large = false }) {
   const qpsWin = getWinner(getQps, runtimes, true);
   const rssWin = getWinner(getRss, runtimes, false);
 
-  return (
+  return qpsSource && runtimes.length > 0 ? (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <span className={titleCls}>{TITLES[db] ?? db} · 100 rows × 100 in flight</span>
@@ -167,5 +166,5 @@ export default function DbQpsChart({ db = "pg", large = false }) {
         })}
       </div>
     </div>
-  );
+  ) : null;
 }

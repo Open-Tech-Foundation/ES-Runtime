@@ -44,16 +44,15 @@ const TONE = {
 
 export default function MemorySafetyTable() {
   const data = bench.memory_safety;
-  if (!data) return null;
+  const tableData = data ?? {};
 
   const runtimes = [];
   for (const rt of ORDER) if (bench.runtimes[rt]) runtimes.push(rt);
 
   const rowKeys = [];
-  for (const k of Object.keys(ROWS)) if (data[k]) rowKeys.push(k);
-  if (rowKeys.length === 0) return null;
+  for (const k of Object.keys(ROWS)) if (tableData[k]) rowKeys.push(k);
 
-  return (
+  return data && rowKeys.length > 0 ? (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
@@ -69,8 +68,8 @@ export default function MemorySafetyTable() {
             <tr className="border-b border-zinc-100 dark:border-zinc-800">
               <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{ROWS[k]}</td>
               {runtimes.map((rt) => (
-                <td className={"px-3 py-2 text-right " + TONE[verdict(data[k][rt]).tone]}>
-                  {verdict(data[k][rt]).text}
+                <td className={"px-3 py-2 text-right " + TONE[verdict(tableData[k][rt]).tone]}>
+                  {verdict(tableData[k][rt]).text}
                 </td>
               ))}
             </tr>
@@ -78,5 +77,5 @@ export default function MemorySafetyTable() {
         </tbody>
       </table>
     </div>
-  );
+  ) : null;
 }

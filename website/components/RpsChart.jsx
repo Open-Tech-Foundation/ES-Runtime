@@ -123,12 +123,11 @@ function getFormattedRss(server, rt) {
 export default function RpsChart({ server = "hono", title = "Hono hello-world · Speed & Memory", large = false, sort = null }) {
   let mode = $state("burst");
 
-  const httpRps = bench.results_rps ? bench.results_rps[server] : null;
-  if (!httpRps) return null;
+  const httpRpsSource = bench.results_rps ? bench.results_rps[server] : null;
+  const httpRps = httpRpsSource ?? {};
 
   const sustainedRps = bench.results_rps ? bench.results_rps[server + "_sustained"] : null;
   let runtimes = ORDER.filter((rt) => typeof httpRps[rt] === "number");
-  if (runtimes.length === 0) return null;
   // Opt-in ranking for the Benchmarks section cards (fastest first, by the
   // visible mode). Everywhere else keeps runtimes.js's alphabetical order.
   if (sort === "rps") {
@@ -155,7 +154,7 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
   const barCls = large ? "h-4 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" : "h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800";
   const valCls = large ? "shrink-0 text-right text-sm tabular-nums " : "shrink-0 text-right text-[11px] tabular-nums ";
 
-  return (
+  return httpRpsSource && runtimes.length > 0 ? (
     <div>
       {/* Title & Mode Switcher */}
       <div className="mb-3 flex items-center justify-between">
@@ -257,7 +256,7 @@ export default function RpsChart({ server = "hono", title = "Hono hello-world ·
         })}
       </div>
     </div>
-  );
+  ) : null;
 }
 
 
