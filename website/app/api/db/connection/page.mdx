@@ -51,7 +51,7 @@ and the URL over the `PG*` environment variables, which are read only with the
 | --- | --- | --- |
 | `host`, `port`, `user`, `password`, `database` | `string`, `number` | What the URL carries. Default `localhost:5432`, user `postgres`. |
 | `sslmode` | `"prefer" \| "require" \| "disable"` | Ask for TLS (default), insist on it, or never ask. |
-| `sslRootCert` | `string \| Uint8Array` | A PEM certificate authority to trust besides the public roots. |
+| `sslRootCert` | `string \| Uint8Array` | A PEM certificate authority to trust for this connection, in addition to the process store (the bundled roots, or what [`--tls-ca`](/api/cli#tls-trust) lists). |
 | `connectTimeout` | `number` | Milliseconds for the connection and its handshake. Default `10000`; `0` waits forever. The URL's `connect_timeout` is in seconds. |
 | `statementTimeout` | `number` | Milliseconds, enforced by the server on every statement. |
 | `preparedStatementCacheSize` | `number` | Prepared statements kept per connection. Default `100`; `0` prepares every query. |

@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use es_runtime_providers::{
     BoxFuture, ProviderError, SocketInfo, UpgradedIo, WebSocketInfo, WebSocketProvider, WsIncoming,
@@ -26,9 +26,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -170,9 +168,9 @@ pub struct SystemWebSocket {
     /// checked out, so closing cannot reach it through the registry.
     server_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
     next_id: Arc<AtomicU64>,
-    /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
-    /// tests inject a custom store via [`SystemWebSocket::with_tls_roots`].
-    tls_roots: Option<Arc<RootCertStore>>,
+    /// The process trust store (D197): the bundled Mozilla roots unless
+    /// `--tls-ca` replaced them.
+    trust: crate::TrustStore,
     /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
     allow: Option<Arc<crate::HostAllowlist>>,
 }
@@ -193,48 +191,22 @@ impl SystemWebSocket {
         self
     }
 
-    /// Like [`new`](Self::new), but trusting `roots` for `wss:` TLS instead of
-    /// the bundled Mozilla set — the test seam for a hermetic self-signed server.
-    #[cfg(test)]
-    fn with_tls_roots(roots: Arc<RootCertStore>) -> Self {
-        Self {
-            tls_roots: Some(roots),
-            ..Self::default()
-        }
+    /// Verifies `wss:` servers against `trust` — the process store
+    /// `--tls-ca` describes (D197) — instead of the bundled Mozilla roots.
+    #[must_use]
+    pub fn with_trust(mut self, trust: crate::TrustStore) -> Self {
+        self.trust = trust;
+        self
     }
 
     fn id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// TLS trust anchors: the test override if set, else the bundled Mozilla
-    /// roots (built once). Shares the rationale of `SystemNet::tls_roots` (D28).
-    fn tls_roots(&self) -> Arc<RootCertStore> {
-        if let Some(roots) = &self.tls_roots {
-            return roots.clone();
-        }
-        static WEBPKI: OnceLock<Arc<RootCertStore>> = OnceLock::new();
-        WEBPKI
-            .get_or_init(|| {
-                let mut store = RootCertStore::empty();
-                store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                Arc::new(store)
-            })
-            .clone()
-    }
-
-    /// A TLS client connector for `wss:`. The `aws-lc-rs` provider is selected
-    /// explicitly (both ring and aws-lc-rs are linked, so the process default is
-    /// ambiguous and `ClientConfig::builder()` would panic — DECISIONS D28). No
-    /// ALPN is offered: the WebSocket upgrade rides plain HTTP/1.1.
-    fn tls_connector(&self) -> Result<TlsConnector, ProviderError> {
-        let provider = Arc::new(aws_lc_rs::default_provider());
-        let config = ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(err)?
-            .with_root_certificates(self.tls_roots())
-            .with_no_client_auth();
-        Ok(TlsConnector::from(Arc::new(config)))
+    /// A TLS client connector for `wss:`, verifying against the process
+    /// store. No ALPN is offered: the WebSocket upgrade rides plain HTTP/1.1.
+    fn tls_connector(&self) -> TlsConnector {
+        TlsConnector::from(Arc::new(self.trust.client_config(&[])))
     }
 
     /// Spawns the actor task owning `ws` and returns its channel ends. Generic
@@ -444,7 +416,7 @@ impl WebSocketProvider for SystemWebSocket {
                 let server_name = ServerName::try_from(host.clone())
                     .map_err(|_| err("invalid TLS server name"))?;
                 let tls = this
-                    .tls_connector()?
+                    .tls_connector()
                     .connect(server_name, tcp)
                     .await
                     .map_err(err)?;
@@ -939,12 +911,34 @@ mod tests {
         server.await.unwrap();
     }
 
+    // D197: `wss:` verifies against the process store. A server its private
+    // CA signed is refused by the bundled roots and by a store holding a
+    // different CA.
+    #[tokio::test]
+    async fn wss_refuses_a_server_the_trust_store_does_not_hold() {
+        use crate::trust::test_pki::{Ca, tls_server};
+        let ca = Ca::new("Private CA");
+        let other = Ca::new("Other CA");
+        for client in [
+            SystemWebSocket::new(),
+            SystemWebSocket::new().with_trust(other.trust()),
+        ] {
+            let (port, server) = tls_server(ca.leaf(&["localhost"]), &[], b"").await;
+            let result = client
+                .connect(format!("wss://localhost:{port}/"), vec![])
+                .await;
+            server.abort();
+            assert!(result.is_err(), "an untrusted wss: server was accepted");
+        }
+    }
+
     // The same round-trip over `wss:` against a hermetic self-signed TLS server,
     // reusing the rustls stack from D28 (aws-lc-rs provider, test-injected roots).
     #[tokio::test]
     async fn wss_echoes_over_tls() {
         use tokio_rustls::TlsAcceptor;
         use tokio_rustls::rustls::ServerConfig;
+        use tokio_rustls::rustls::crypto::aws_lc_rs;
         use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 
         let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
@@ -969,9 +963,8 @@ mod tests {
         });
 
         // Trust only the self-signed cert; SNI "localhost" matches it.
-        let mut roots = RootCertStore::empty();
-        roots.add(cert).unwrap();
-        let client = SystemWebSocket::with_tls_roots(Arc::new(roots));
+        let client = SystemWebSocket::new()
+            .with_trust(crate::TrustStore::from_certificates([cert]).unwrap());
         let (id, _info) = client
             .connect(format!("wss://localhost:{port}/"), vec![])
             .await

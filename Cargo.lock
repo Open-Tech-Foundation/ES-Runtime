@@ -1588,6 +1588,7 @@ dependencies = [
  "oxc_react_compiler",
  "oxc_resolver",
  "ratatui",
+ "rcgen",
  "regex",
  "reqwest",
  "rolldown",
@@ -1606,7 +1607,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
- "webpki-roots",
 ]
 
 [[package]]

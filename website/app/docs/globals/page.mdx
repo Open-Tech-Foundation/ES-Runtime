@@ -216,6 +216,11 @@ await fetch("https://example.com/upload", { method: "POST", body });
 await fetch(url, { signal: AbortSignal.timeout(5000) }); // TimeoutError
 ```
 
+## Certificates
+
+`fetch` verifies HTTPS servers against the process trust store: the bundled
+Mozilla roots, or what [`--tls-ca`](/api/cli#tls-trust) lists.
+
 ## Proxies
 
 `fetch` connects to the host in the URL. `HTTP_PROXY`, `HTTPS_PROXY`,

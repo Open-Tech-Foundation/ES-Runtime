@@ -17,7 +17,8 @@ use es_runtime_default_providers::{
     Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
     ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, WorkerProcess, path,
+    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, TrustStore, WorkerProcess,
+    path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 
@@ -670,6 +671,32 @@ impl ModuleLoader for TransformingLoader {
     }
 }
 
+/// The JavaScript runtimes' CA variables esrun does not read (D197). Named
+/// once at startup, so a deployment migrated from Node or Deno learns why its
+/// CA is not trusted rather than meeting a handshake failure. `SSL_CERT_FILE`
+/// and `SSL_CERT_DIR` are left out: base images set them for other tools.
+const IGNORED_CA_VARIABLES: [&str; 4] = [
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_USE_SYSTEM_CA",
+    "DENO_CERT",
+    "DENO_TLS_CA_STORE",
+];
+
+fn warn_ignored_ca_variables(bin: &str) {
+    let set: Vec<&str> = IGNORED_CA_VARIABLES
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect();
+    if !set.is_empty() {
+        eprintln!(
+            "{bin}: warning: {} is ignored; {bin} reads no CA settings from the environment. \
+             Name the certificates to trust with --tls-ca=<file> (add --tls-ca=bundled to keep \
+             the public roots).",
+            set.join(", ")
+        );
+    }
+}
+
 /// Runs `config` to completion. `bin` names the calling binary in the messages
 /// only it can be responsible for (the shutdown drain notice).
 pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
@@ -781,7 +808,15 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // something the policy should care about.
     let allow_net = address_scope(&config.scopes, Capability::Net)?;
     let allow_listen = address_scope(&config.scopes, Capability::NetListen)?;
-    let transport = ReqwestTransport::new().map_err(|e| format!("http transport: {e}"))?;
+    // One trust store for every TLS client the program can reach (D197): the
+    // bundled Mozilla roots, or exactly what `--tls-ca` lists. Loaded before
+    // anything runs, so a CA file that cannot be trusted stops the process
+    // rather than a handshake in production.
+    let trust = TrustStore::load(&options.tls_ca)?;
+    warn_ignored_ca_variables(bin);
+    let transport = ReqwestTransport::new()
+        .map_err(|e| format!("http transport: {e}"))?
+        .with_trust(trust.clone());
     let net = Arc::new(match allow_net.clone() {
         Some(allow) => transport.with_allowlist(allow),
         None => transport,
@@ -875,7 +910,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Some(allow) => SystemHttpServer::new().with_listen_allowlist(allow),
         None => SystemHttpServer::new(),
     });
-    let mut system_net = SystemNet::new();
+    let mut system_net = SystemNet::new().with_trust(trust.clone());
     if let Some(allow) = allow_net.clone() {
         system_net = system_net.with_allowlist(allow);
     }
@@ -888,7 +923,8 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     let web_socket = match allow_net {
         Some(allow) => SystemWebSocket::new().with_allowlist(allow),
         None => SystemWebSocket::new(),
-    };
+    }
+    .with_trust(trust.clone());
     let commands = match config.scopes.get(&Capability::Run) {
         Some(programs) => SystemCommands::new().with_allowlist(programs.clone()),
         None => SystemCommands::new(),
@@ -938,7 +974,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             ..es_runtime::diagnostics::Filter::default()
         };
         providers = providers.with_telemetry(
-            Arc::new(OtlpHttpSink::new(endpoint.clone())),
+            Arc::new(OtlpHttpSink::new(endpoint.clone()).with_trust(&trust)),
             es_runtime::TelemetryConfig {
                 sink: None,
                 // The entry's file name is a better default than a constant:

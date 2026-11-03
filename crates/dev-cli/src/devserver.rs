@@ -153,6 +153,8 @@ pub struct DevServer {
     /// Path prefixes forwarded to another server (`dev.server.proxy`, D150),
     /// longest first. Asked after esdev's own paths and before the files.
     pub proxy: Vec<crate::proxy::Rule>,
+    /// What an `https` proxy target is verified against (D197).
+    pub trust: es_runtime_default_providers::TrustStore,
     /// What a request for a file that is not there gets.
     pub miss: Miss,
 }
@@ -247,7 +249,7 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
     // Matched on the path as the page wrote it, which is what the prefix in
     // esdev.json was written against, and forwarded with its query.
     if let Some(rule) = crate::proxy::matching(&server.proxy, target_path) {
-        crate::proxy::forward(stream, &head, rule).await;
+        crate::proxy::forward(stream, &head, rule, &server.trust).await;
         return;
     }
     // Errors below honour HEAD like everything else: the same headers a GET

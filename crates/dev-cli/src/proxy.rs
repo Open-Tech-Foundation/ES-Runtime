@@ -24,6 +24,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use es_runtime_default_providers::TrustStore;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -94,10 +95,11 @@ pub fn matching<'a>(rules: &'a [Rule], path: &str) -> Option<&'a Rule> {
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Forwards one request, whose head has already been read, and everything
-/// after it on the connection.
-pub async fn forward(mut client: TcpStream, head: &str, rule: &Rule) {
+/// after it on the connection. An `https` target is verified against `trust`,
+/// the store `--tls-ca` describes (D197).
+pub async fn forward(mut client: TcpStream, head: &str, rule: &Rule, trust: &TrustStore) {
     let request_target = crate::inspect::request_path(head).unwrap_or_else(|| "/".to_string());
-    let upstream = match connect(rule).await {
+    let upstream = match connect(rule, trust).await {
         Ok(upstream) => upstream,
         Err(e) => {
             eprintln!(
@@ -138,7 +140,7 @@ enum Upstream {
     Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
 
-async fn connect(rule: &Rule) -> Result<Upstream, String> {
+async fn connect(rule: &Rule, trust: &TrustStore) -> Result<Upstream, String> {
     let address = format!("{}:{}", rule.host(), rule.port());
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&address))
         .await
@@ -150,31 +152,11 @@ async fn connect(rule: &Rule) -> Result<Upstream, String> {
     }
     let name = tokio_rustls::rustls::pki_types::ServerName::try_from(rule.host().to_string())
         .map_err(|e| format!("{} is not a name TLS can verify: {e}", rule.host()))?;
-    let stream = tokio_rustls::TlsConnector::from(tls_config())
+    let stream = tokio_rustls::TlsConnector::from(Arc::new(trust.client_config(&[])))
         .connect(name, stream)
         .await
         .map_err(|e| format!("TLS: {e}"))?;
     Ok(Upstream::Tls(Box::new(stream)))
-}
-
-/// A client configuration verifying against the bundled Mozilla roots, as
-/// `fetch` does. Built once.
-fn tls_config() -> Arc<tokio_rustls::rustls::ClientConfig> {
-    static CONFIG: std::sync::OnceLock<Arc<tokio_rustls::rustls::ClientConfig>> =
-        std::sync::OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let mut roots = tokio_rustls::rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
-            let config = tokio_rustls::rustls::ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()
-                .expect("the default protocol versions are supported")
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            Arc::new(config)
-        })
-        .clone()
 }
 
 /// Writes the rewritten head, then copies both ways until either side is done.

@@ -26,6 +26,12 @@ is the point, since none of the three has any business in a deployment.
 
 ### Security
 
+- `--tls-ca=<file|bundled>` (DECISIONS D197) is taken by every command that
+  runs a program, and by `esdev start` and `esdev preview`, which use it for
+  the server they start and for an `https` `dev.server.proxy` target. As under
+  esrun, the program's `fetch` now verifies against the bundled roots or what
+  `--tls-ca` lists, not the operating system's store.
+
 - A program run by esdev no longer sends `fetch` requests or `--otel` spans
   through a proxy named by `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`, the
   same as under esrun.

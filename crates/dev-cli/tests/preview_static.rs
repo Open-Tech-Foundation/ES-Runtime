@@ -1043,3 +1043,123 @@ fn a_path_prefix_is_forwarded_to_the_api_server() {
 
     let _ = std::fs::remove_file(&config);
 }
+
+/// An HTTPS server, run by esdev, whose certificate a fresh private CA signed
+/// for `localhost`. Returns it (killed on drop), its port, and the CA's PEM.
+struct TlsUpstream(Child);
+
+impl Drop for TlsUpstream {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn tls_upstream(dir: &Path) -> (TlsUpstream, u16, String) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.distinguished_name.push(DnType::CommonName, "Private CA");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_pem = ca.self_signed(&ca_key).unwrap().pem();
+    let key = KeyPair::generate().unwrap();
+    let cert = CertificateParams::new(vec!["localhost".to_string()])
+        .unwrap()
+        .signed_by(&key, &Issuer::from_params(&ca, &ca_key))
+        .unwrap();
+    let app = dir.with_extension("upstream.mjs");
+    std::fs::write(
+        &app,
+        r#"import { serve } from "runtime:http";
+import { env } from "runtime:process";
+const server = serve(
+  { hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: env.KEY },
+  () => new Response("secure"),
+);
+console.log("PORT " + (await server.addr).port);
+"#,
+    )
+    .expect("write the upstream");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .arg(&app)
+        .current_dir(app.parent().expect("a parent"))
+        .env("CERT", cert.pem())
+        .env("KEY", key.serialize_pem())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn the upstream");
+    let stdout = child.stdout.take().expect("stdout");
+    let port = BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| line.strip_prefix("PORT ").and_then(|p| p.parse().ok()))
+        .expect("the upstream never named its port");
+    (TlsUpstream(child), port, ca_pem)
+}
+
+/// An `https` proxy target is verified against the store `--tls-ca`
+/// describes (D197): refused by the bundled roots, forwarded once the
+/// private CA is named.
+#[test]
+fn an_https_proxy_target_is_verified_against_tls_ca() {
+    const NAME: &str = "proxy_tls_ca";
+    let dir = fixture(NAME);
+    let (_upstream, api, ca) = tls_upstream(&dir);
+    let config = dir.with_extension("esdev.json");
+    std::fs::write(
+        &config,
+        format!(
+            r#"{{ "dev": {{ "server": {{ "proxy": {{ "/api": "https://localhost:{api}" }} }} }},
+                "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }} }}"#
+        ),
+    )
+    .expect("config");
+    let ca_path = dir.with_extension("ca.pem");
+    std::fs::write(&ca_path, ca).expect("CA");
+
+    {
+        let (preview, port) = start_with(&dir, &[format!("--config={}", config.display())]);
+        let refused = get(port, &req("GET", "/api/x", &[]));
+        assert_eq!(status(&refused), "502", "{}", refused.status);
+        assert!(
+            String::from_utf8_lossy(&refused.body).contains("TLS"),
+            "{}",
+            String::from_utf8_lossy(&refused.body)
+        );
+        drop(preview);
+    }
+
+    let dir = fixture(NAME);
+    let (_preview, port) = start_with(
+        &dir,
+        &[
+            format!("--config={}", config.display()),
+            format!("--tls-ca={}", ca_path.display()),
+        ],
+    );
+    let trusted = get(port, &req("GET", "/api/x", &[]));
+    assert_eq!(status(&trusted), "200", "{}", trusted.status);
+    assert_eq!(trusted.body, b"secure");
+}
+
+#[test]
+fn preview_refuses_a_tls_ca_it_cannot_trust() {
+    let dir = fixture("preview_tls_ca_missing");
+    let out = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .args([
+            "preview".to_string(),
+            format!("--dir={}", dir.display()),
+            "--port=0".to_string(),
+            "--tls-ca=no-such-ca.pem".to_string(),
+        ])
+        .output()
+        .expect("spawn esdev preview");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!out.status.success(), "the preview started");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--tls-ca=no-such-ca.pem: cannot read it"),
+        "{err}"
+    );
+}

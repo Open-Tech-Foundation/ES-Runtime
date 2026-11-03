@@ -65,6 +65,10 @@ pub struct ReqwestTransport {
     /// Addresses `fetch` may reach. `None` ⇒ any (`esrun --allow-net` without a
     /// list, or an embedder that scopes nothing).
     allow: Option<Arc<HostAllowlist>>,
+    /// The process trust store (D197). Handed to reqwest as a finished rustls
+    /// config, so `fetch` verifies against the same anchors as every other TLS
+    /// client rather than reqwest's own choice, the operating system's store.
+    trust: crate::TrustStore,
 }
 
 /// A redirect refused by the allowlist, boxed into reqwest's redirect error so
@@ -88,6 +92,7 @@ impl ReqwestTransport {
             following: OnceLock::new(),
             manual: OnceLock::new(),
             allow: None,
+            trust: crate::TrustStore::bundled(),
         })
     }
 
@@ -107,6 +112,14 @@ impl ReqwestTransport {
         self
     }
 
+    /// Verifies HTTPS servers against `trust` — the process store `--tls-ca`
+    /// describes (D197) — instead of the bundled Mozilla roots.
+    #[must_use]
+    pub fn with_trust(mut self, trust: crate::TrustStore) -> Self {
+        self.trust = trust;
+        self
+    }
+
     /// The shared client for `mode`, built on first use (cheap to clone: an
     /// `Arc` inside).
     fn client(&self, mode: RedirectMode) -> Result<reqwest::Client, ProviderError> {
@@ -121,6 +134,9 @@ impl ReqwestTransport {
                 // variable route every request through a host the deployment
                 // never named. Outbound traffic goes where the program asked.
                 .no_proxy()
+                // HTTP/2 when the server offers it, as reqwest's own config
+                // would; the anchors are the process store's.
+                .tls_backend_preconfigured(self.trust.client_config(&["h2", "http/1.1"]))
                 .redirect(policy)
                 .user_agent(USER_AGENT)
                 .connect_timeout(CONNECT_TIMEOUT)
@@ -413,6 +429,104 @@ mod tests {
             let _ = sock.flush().await;
         });
         (port, task)
+    }
+
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok";
+
+    /// `fetch` over TLS to a server a private CA signed, verifying against
+    /// `trust`. `Ok(status)` or the error code.
+    async fn fetch_tls(
+        trust: crate::TrustStore,
+        leaf: crate::trust::test_pki::Leaf,
+        host: &str,
+    ) -> Result<u16, Option<ErrorCode>> {
+        let (port, server) = crate::trust::test_pki::tls_server(leaf, &["http/1.1"], OK).await;
+        let transport = ReqwestTransport::new().unwrap().with_trust(trust);
+        let result = transport
+            .fetch(request(&format!("https://{host}:{port}/")))
+            .await;
+        server.abort();
+        result.map(|response| response.status).map_err(|e| e.code())
+    }
+
+    // D197: `fetch` verifies against the process store, never reqwest's own
+    // choice (the operating system's). A private CA the store does not hold is
+    // refused; the same server verifies once the store holds it.
+    #[tokio::test]
+    async fn fetch_refuses_a_server_the_trust_store_does_not_hold() {
+        let ca = crate::trust::test_pki::Ca::new("Private CA");
+        let refused = fetch_tls(
+            crate::TrustStore::bundled(),
+            ca.leaf(&["localhost"]),
+            "localhost",
+        )
+        .await;
+        assert_eq!(refused, Err(Some(ErrorCode::Tls)));
+        let trusted = fetch_tls(ca.trust(), ca.leaf(&["localhost"]), "localhost").await;
+        assert_eq!(trusted, Ok(200));
+    }
+
+    // Trusting a CA is not trusting every name it signs for: the hostname
+    // check still applies.
+    #[tokio::test]
+    async fn fetch_checks_the_hostname_against_a_trusted_ca() {
+        let ca = crate::trust::test_pki::Ca::new("Private CA");
+        let wrong_name = fetch_tls(ca.trust(), ca.leaf(&["other.test"]), "localhost").await;
+        assert_eq!(wrong_name, Err(Some(ErrorCode::Tls)));
+    }
+
+    // A leaf from another CA is refused even when one CA is trusted: a store
+    // `--tls-ca=<file>` built trusts that file and nothing else.
+    #[tokio::test]
+    async fn fetch_refuses_a_server_signed_by_another_ca() {
+        let trusted = crate::trust::test_pki::Ca::new("Trusted CA");
+        let other = crate::trust::test_pki::Ca::new("Other CA");
+        let result = fetch_tls(trusted.trust(), other.leaf(&["localhost"]), "localhost").await;
+        assert_eq!(result, Err(Some(ErrorCode::Tls)));
+    }
+
+    #[tokio::test]
+    async fn fetch_refuses_an_expired_server_certificate() {
+        let ca = crate::trust::test_pki::Ca::new("Private CA");
+        let expired = fetch_tls(
+            ca.trust(),
+            ca.leaf_valid(&["localhost"], 2001, 2002),
+            "localhost",
+        )
+        .await;
+        assert_eq!(expired, Err(Some(ErrorCode::Tls)));
+        let future = fetch_tls(
+            ca.trust(),
+            ca.leaf_valid(&["localhost"], 2080, 2090),
+            "localhost",
+        )
+        .await;
+        assert_eq!(future, Err(Some(ErrorCode::Tls)));
+    }
+
+    // Handing reqwest a finished rustls config must not cost HTTP/2: the
+    // config offers `h2`, so a server that speaks only h2 negotiates it.
+    #[tokio::test]
+    async fn fetch_still_offers_h2_over_alpn() {
+        let ca = crate::trust::test_pki::Ca::new("Private CA");
+        let (port, server) =
+            crate::trust::test_pki::tls_server(ca.leaf(&["localhost"]), &["h2"], b"").await;
+        let transport = ReqwestTransport::new().unwrap().with_trust(ca.trust());
+        let _ = transport
+            .fetch(request(&format!("https://localhost:{port}/")))
+            .await;
+        assert_eq!(server.await.unwrap(), Some(Some(b"h2".to_vec())));
+    }
+
+    // Both clients build with a preconfigured store. A build failure would
+    // surface as an error rather than a fallback to reqwest's defaults, but it
+    // would be a broken `fetch`, so it is checked here, where it is cheap.
+    #[test]
+    fn both_redirect_clients_build_with_the_trust_store() {
+        let ca = crate::trust::test_pki::Ca::new("Private CA");
+        let transport = ReqwestTransport::new().unwrap().with_trust(ca.trust());
+        assert!(transport.client(RedirectMode::Follow).is_ok());
+        assert!(transport.client(RedirectMode::Manual).is_ok());
     }
 
     /// A name that cannot resolve is `ERR_DNS`, not the catch-all `ERR_IO`.

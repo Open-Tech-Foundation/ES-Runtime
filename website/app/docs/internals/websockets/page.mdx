@@ -89,7 +89,8 @@ failure branch every time.
 
 TLS reuses the same stack as `runtime:net`: rustls with the `aws-lc-rs` provider
 named explicitly (both it and `ring` are linked, so the process default is
-ambiguous and would panic) and bundled webpki-roots.
+ambiguous and would panic), verifying against the process trust store
+([TLS trust](/docs/internals/tls)).
 
 The handshake is completed **here**, and the established stream handed to the
 WebSocket client — which means no TLS feature of `tokio-tungstenite` is compiled

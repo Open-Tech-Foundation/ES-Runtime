@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- `runtime:net` `connect`'s `ca` says it adds to the process trust store, the
+  bundled roots or what `--tls-ca` lists (D197).
+
 ## [0.20.0] - 2026-10-28
 
 ### Added

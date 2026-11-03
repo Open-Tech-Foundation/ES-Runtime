@@ -1,0 +1,96 @@
+---
+title: "Internals: TLS trust"
+description: Whom every TLS client verifies a server against — one store per process, the bundled Mozilla roots or exactly what --tls-ca lists — and why nothing else changes it.
+---
+
+# Internals: TLS trust
+
+Every TLS client in a process verifies a server against one set of trust
+anchors: `fetch`, `runtime:net` (and the database drivers that connect through
+it), `WebSocket`, the `--otel` exporter, and esdev's dev proxy. This page is
+about why it is one set, where it comes from, and what it costs. For the flag,
+see [`--tls-ca`](/api/cli#tls-trust).
+
+## One store, built once
+
+The store is built when the process starts, before the program runs, and handed
+to every client. Two clients cannot disagree about a server: a private CA is
+trusted by all of them or by none.
+
+They used to disagree. `fetch` went through its HTTP client's own choice, the
+operating system's store, while sockets and WebSockets used the bundled roots.
+A CA installed in the OS was trusted by `fetch` and refused by `connect`, and a
+container without a CA package broke `fetch` alone.
+
+## The bundled Mozilla roots
+
+The default is the Mozilla root set, compiled into the binary. It is the same on
+every machine, so a deployment trusts the same servers in a container, on a VM
+and on a laptop; and it is fixed per release, so what a version trusts can be
+read off its source.
+
+The cost is that the set ages with the binary. When Mozilla removes a root, the
+removal reaches a deployment with its next esrun release, not with an OS update.
+In October 2026 Mozilla removed three eMudhra roots after the compromise of
+eight eMudhra intermediate keys; the release carrying that change is the only
+way an existing install stops trusting them. Keep esrun current.
+
+## `--tls-ca` replaces, and `bundled` keeps
+
+`--tls-ca` lists exactly what the process trusts. `--tls-ca=internal.pem` trusts
+one CA and nothing else, which is the right shape for a service that only ever
+talks to internal hosts. `--tls-ca=bundled --tls-ca=corp.pem` keeps the public
+roots and adds a corporate one, without anyone maintaining a copy of the public
+set that would miss the next removal.
+
+A flag that could only add would have no way to say "only this". A flag that
+could only replace would make "public plus corporate" a hand-built bundle.
+
+## A bad file stops the process
+
+The files are read and checked before the program starts. A file that cannot be
+read, has no certificate, holds anything else (a private key, a CSR, a CRL), or
+has a certificate outside its validity period stops startup, with the flag and
+the file named. The message never quotes the file, so a key pasted into the
+wrong file does not end up in a log.
+
+Carrying on would leave a process trusting something other than what its
+operator wrote, and the first sign would be a handshake failure in production.
+
+A certificate does not have to be a CA. Trusting a self-signed server
+certificate as its own anchor trusts less than a CA would, and is the ordinary
+case for an internal service.
+
+## Per connection, trust is only added
+
+`runtime:net`'s `ca`, the drivers' `sslRootCert` and MongoDB's `ca` add a CA for
+one connection. The hostname and validity checks still apply, so a program can
+widen whom one connection trusts but cannot turn verification off. There is no
+option anywhere that skips it.
+
+## What is not read
+
+No environment variable changes trust: not `SSL_CERT_FILE` or `SSL_CERT_DIR`,
+and not `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `DENO_CERT` or
+`DENO_TLS_CA_STORE`. A variable is inherited by every child and set by base
+images and CI runners, which would let something nobody reviewed change whom a
+deployment trusts. When one of the JavaScript runtimes' variables is set, esrun
+prints one warning naming `--tls-ca`.
+
+The operating system's store is not read either. Reading it on macOS and
+Windows needs platform-binding crates, and it would make trust a property of the
+machine rather than of the command line. On Linux the distribution's bundle is a
+file, and `--tls-ca=/etc/ssl/certs/ca-certificates.crt` uses it.
+
+For the same reason, `fetch` and the exporter ignore `HTTP_PROXY`,
+`HTTPS_PROXY` and `ALL_PROXY`.
+
+## What it costs
+
+The store is parsed once. Each client builds its TLS configuration from it on
+first use: `fetch` once per redirect mode, `runtime:net` once per ALPN list and
+per-connection `ca`, cached after that. A run that makes no TLS connection pays
+for the bundled set's parse and nothing else.
+
+The decision and the alternatives rejected are
+[D197](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).

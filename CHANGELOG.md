@@ -13,6 +13,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **Every TLS client verifies against one trust store** (DECISIONS D197).
+  `fetch` and the `--otel` exporter checked the operating system's store
+  while `runtime:net`, the database drivers and `WebSocket` checked the
+  bundled Mozilla roots, so a CA one API trusted another refused, and
+  `SSL_CERT_FILE` changed whom `fetch` alone trusted. All of them now use the
+  bundled Mozilla roots, or exactly what the new `--tls-ca` lists. **A private
+  CA installed only in the operating system is no longer trusted by `fetch`:
+  name it with `--tls-ca=bundled --tls-ca=<file>`.**
+- `--tls-ca=<file|bundled>` (repeatable) sets the process trust store. A file
+  that cannot be read, holds no certificate, holds a private key or any other
+  non-certificate block, or has a certificate outside its validity period stops
+  startup, naming the file but never quoting it. No environment variable
+  changes trust; esrun warns when `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`,
+  `DENO_CERT` or `DENO_TLS_CA_STORE` is set.
+
 - `fetch` and the `--otel` exporter no longer read `HTTP_PROXY`,
   `HTTPS_PROXY`, `ALL_PROXY` or the operating system's proxy settings. The
   HTTP client enabled them by default, so an inherited environment variable
@@ -23,8 +38,7 @@ namespace) is unstable and may change between minor releases until the API freez
   "emSign Root CA - C1" or "emSign ECC Root CA - C3". Mozilla removed them
   after the October 2026 compromise of eight eMudhra intermediate CA keys;
   "emSign ECC Root CA - G3", the root that signed those intermediates, was
-  already dropped in 1.0.10. Applies to `runtime:net` TLS and `WebSocket`
-  (`wss:`); `fetch` checks the operating system's trust store.
+  already dropped in 1.0.10. Applies to every TLS client.
 
 ### Fixed
 

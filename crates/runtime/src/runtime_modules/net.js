@@ -233,8 +233,8 @@ function connect(address, options = {}) {
   // the negotiated one comes back as SocketInfo.alpn). Empty string == no SNI.
   const sni = options.sni == null ? "" : String(options.sni);
   const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
-  // `ca`: extra trust anchors, as PEM. Added to the built-in roots rather than
-  // replacing them, so naming a private authority does not quietly stop the
+  // `ca`: extra trust anchors, as PEM. Added to the process trust store
+  // (`--tls-ca`, D197) rather than replacing it, so naming a private authority does not quietly stop the
   // program trusting every public one — and it can only make verification
   // accept more certificates, never skip it. A private CA is the ordinary case
   // for an internal database or service mesh, and without this there is no way

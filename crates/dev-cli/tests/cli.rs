@@ -20834,3 +20834,76 @@ fn subresource_integrity_pins_every_script_and_stylesheet_a_release_html_build_w
             .contains("`build.subresourceIntegrity` is true or false")
     );
 }
+
+/// `(ca, cert, key)` PEM: a private CA and a `localhost` server it signed.
+fn private_ca() -> (String, String, String) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.distinguished_name.push(DnType::CommonName, "Private CA");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_pem = ca.self_signed(&ca_key).unwrap().pem();
+    let key = KeyPair::generate().unwrap();
+    let cert = CertificateParams::new(vec!["localhost".to_string()])
+        .unwrap()
+        .signed_by(&key, &Issuer::from_params(&ca, &ca_key))
+        .unwrap();
+    (ca_pem, cert.pem(), key.serialize_pem())
+}
+
+// esdev takes `--tls-ca` like esrun (D197): the program's `fetch` trusts the
+// CA it names, and without it the same server is refused.
+#[test]
+fn esdev_trusts_exactly_what_tls_ca_names() {
+    let dir = build_dir("t_tls_ca");
+    let (ca, cert, key) = private_ca();
+    let ca_path = write_in(&dir, "ca.pem", &ca);
+    let app = write_in(
+        &dir,
+        "app.mjs",
+        r#"import { serve } from "runtime:http";
+import { env } from "runtime:process";
+const server = serve(
+  { hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: env.KEY },
+  () => new Response("ok"),
+);
+const { port } = await server.addr;
+try { console.log("FETCH:" + await (await fetch(`https://localhost:${port}/`)).text()); }
+catch { console.log("FETCH:refused"); }
+await server.stop();
+"#,
+    );
+    let run = |flags: &[String]| {
+        esdev()
+            .current_dir(&dir)
+            .args(flags)
+            .arg(&app)
+            .env("CERT", &cert)
+            .env("KEY", &key)
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("NODE_EXTRA_CA_CERTS")
+            .output()
+            .expect("spawn esdev")
+    };
+    let refused = run(&[]);
+    assert!(refused.status.success(), "stderr: {}", stderr(&refused));
+    assert!(
+        stdout(&refused).contains("FETCH:refused"),
+        "{}",
+        stdout(&refused)
+    );
+    let trusted = run(&[format!("--tls-ca={}", ca_path.display())]);
+    assert!(trusted.status.success(), "stderr: {}", stderr(&trusted));
+    assert!(
+        stdout(&trusted).contains("FETCH:ok"),
+        "{}",
+        stdout(&trusted)
+    );
+    let missing = run(&["--tls-ca=no-such-ca.pem".to_string()]);
+    assert!(!missing.status.success(), "a missing CA file was accepted");
+    assert!(
+        stderr(&missing).contains("--tls-ca=no-such-ca.pem: cannot read it"),
+        "{}",
+        stderr(&missing)
+    );
+}

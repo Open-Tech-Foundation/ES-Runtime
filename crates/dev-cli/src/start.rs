@@ -61,6 +61,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use es_runtime_default_providers::{TrustSource, TrustStore};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Event, RecursiveMode, Watcher};
@@ -247,11 +248,28 @@ pub struct StartConfig {
     /// How long a child gets to drain before it is killed — `--shutdown-grace`,
     /// the same number production uses.
     pub grace: Duration,
+    /// `--tls-ca`: what the server child and the dev proxy trust (D197).
+    pub tls_ca: Vec<TrustSource>,
 }
 
 /// Runs the dev loop until the user interrupts it.
 pub async fn start(config: StartConfig) -> Result<(), String> {
     let started = std::time::Instant::now();
+    // Loaded here as well as in the child: the dev proxy verifies with it, and
+    // a CA file that cannot be trusted should stop the loop before a build.
+    let trust = TrustStore::load(&config.tls_ca)?;
+    // The child runs from the project root, so a relative file is made
+    // absolute against the directory the flag was typed in.
+    let tls_ca: Vec<String> = config
+        .tls_ca
+        .iter()
+        .map(|source| match source {
+            TrustSource::Bundled => Ok("--tls-ca=bundled".to_string()),
+            TrustSource::File(path) => std::path::absolute(path)
+                .map(|path| format!("--tls-ca={}", path.display()))
+                .map_err(|e| format!("--tls-ca={}: {e}", path.display())),
+        })
+        .collect::<Result<_, String>>()?;
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;
 
@@ -292,6 +310,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             reload: reload.clone(),
             error: error.clone(),
             proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+            trust,
             miss: crate::devserver::Miss::Spa,
         }),
     ));
@@ -407,7 +426,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         ),
     }
     let mut child = match (&output, built) {
-        (Some(output), true) => spawn(&exe, output, &root, app.as_ref().map(|a| a.port))?,
+        (Some(output), true) => spawn(&exe, output, &root, app.as_ref().map(|a| a.port), &tls_ca)?,
         _ => None,
     };
     // What the page loads: the dev build's whole output.
@@ -508,7 +527,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 crate::watch::stop(process, config.grace).await;
             }
             if let Some(output) = &output {
-                child = spawn(&exe, output, &root, app.as_ref().map(|a| a.port))?;
+                child = spawn(&exe, output, &root, app.as_ref().map(|a| a.port), &tls_ca)?;
             }
         }
         // **Waited for, not assumed.** `spawn` returns when the process starts,
@@ -664,6 +683,7 @@ fn spawn(
     output: &Path,
     root: &Path,
     port: Option<u16>,
+    tls_ca: &[String],
 ) -> Result<Option<Child>, String> {
     let mut command = Command::new(exe);
     // Set rather than merely allowed: the child reads `PORT` and falls back to
@@ -675,6 +695,7 @@ fn spawn(
         command.env("PORT", port.to_string());
     }
     let child = command
+        .args(tls_ca)
         .arg(output)
         .current_dir(root)
         .spawn()

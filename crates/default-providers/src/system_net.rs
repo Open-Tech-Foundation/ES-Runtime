@@ -23,7 +23,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use es_runtime_common::ErrorCode;
@@ -37,9 +37,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
@@ -130,11 +128,11 @@ pub struct SystemNet {
     /// holds the only `AcceptRx` out of the map) resolve to `None`.
     listener_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
     next_id: Arc<AtomicU64>,
-    /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
-    /// tests inject a custom store via [`SystemNet::with_tls_roots`].
-    tls_roots: Option<Arc<RootCertStore>>,
+    /// The process trust store (D197): the bundled Mozilla roots unless
+    /// `--tls-ca` replaced them.
+    trust: crate::TrustStore,
     /// Memoized TLS client connectors, keyed by the offered ALPN list (the only
-    /// per-connect input to the config). Building a [`ClientConfig`] re-parses
+    /// per-connect input to the config). Building a `ClientConfig` re-parses
     /// the whole root store, so this is shared across clones and reused for every
     /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
     /// cache hit is a refcount bump.
@@ -245,78 +243,28 @@ impl SystemNet {
         })
     }
 
-    /// Like [`new`](Self::new), but trusting `roots` for TLS instead of the
-    /// bundled Mozilla set. Test seam for hermetic TLS against a self-signed
-    /// server (no public CA involved).
-    #[cfg(test)]
-    fn with_tls_roots(roots: Arc<RootCertStore>) -> Self {
-        Self {
-            tls_roots: Some(roots),
-            ..Self::default()
-        }
+    /// Verifies TLS servers against `trust` — the process store `--tls-ca`
+    /// describes (D197) — instead of the bundled Mozilla roots.
+    #[must_use]
+    pub fn with_trust(mut self, trust: crate::TrustStore) -> Self {
+        self.trust = trust;
+        self
     }
 
     fn id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// TLS trust anchors: the test override if set, else the bundled Mozilla
-    /// roots (built once). webpki-roots needs no platform I/O, so runs are
-    /// portable and deterministic.
-    fn tls_roots(&self) -> Arc<RootCertStore> {
-        if let Some(roots) = &self.tls_roots {
-            return roots.clone();
-        }
-        static WEBPKI: OnceLock<Arc<RootCertStore>> = OnceLock::new();
-        WEBPKI
-            .get_or_init(|| {
-                let mut store = RootCertStore::empty();
-                store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                Arc::new(store)
-            })
-            .clone()
-    }
-
-    /// A TLS client connector trusting [`tls_roots`](Self::tls_roots) and
-    /// offering `alpn`, memoized by ALPN set (see [`tls_connectors`](Self::tls_connectors)).
-    /// The `aws-lc-rs` provider is chosen explicitly because the process-default
-    /// crypto provider is ambiguous (both ring and aws-lc-rs are linked, so
-    /// `ClientConfig::builder()` would panic).
+    /// A TLS client connector trusting the process store plus `ca`, and
+    /// offering `alpn`, memoized by both (see [`tls_connectors`](Self::tls_connectors)).
     fn tls_connector(&self, alpn: &[String], ca: &[u8]) -> Result<TlsConnector, ProviderError> {
         let key: ConnectorKey = (alpn.to_vec(), ca.to_vec());
         if let Some(connector) = self.tls_connectors.lock().unwrap().get(&key) {
             return Ok(connector.clone());
         }
-        let provider = Arc::new(aws_lc_rs::default_provider());
-        let roots = if ca.is_empty() {
-            self.tls_roots()
-        } else {
-            // Added to the defaults, never instead of them: a caller naming a
-            // private authority is saying "trust this as well", and a build
-            // that quietly stopped trusting the public roots would break every
-            // other host the same program talks to.
-            use tokio_rustls::rustls::pki_types::CertificateDer;
-            use tokio_rustls::rustls::pki_types::pem::PemObject;
-            let mut store = (*self.tls_roots()).clone();
-            let mut added = 0usize;
-            for cert in CertificateDer::pem_slice_iter(ca) {
-                store.add(cert.map_err(err)?).map_err(err)?;
-                added += 1;
-            }
-            if added == 0 {
-                return Err(ProviderError::Coded {
-                    code: ErrorCode::Tls,
-                    message: "the supplied CA contains no PEM certificate".to_string(),
-                });
-            }
-            Arc::new(store)
-        };
-        let mut config = ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(err)?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
+        let roots = self.trust.roots_with(ca)?;
+        let alpn: Vec<&str> = alpn.iter().map(String::as_str).collect();
+        let config = crate::trust::client_config(roots, &alpn);
         let connector = TlsConnector::from(Arc::new(config));
         self.tls_connectors
             .lock()
@@ -1429,6 +1377,7 @@ mod tests {
     use super::*;
     use crate::HostAllowlist;
     use tokio::net::TcpListener;
+    use tokio_rustls::rustls::crypto::aws_lc_rs;
     // The production paths build their server-side TLS through `crate::tls`;
     // these tests stand up their own peer, so they need the types directly.
     use tokio_rustls::TlsAcceptor;
@@ -1468,9 +1417,7 @@ mod tests {
 
     /// A `SystemNet` trusting only `cert` (so the self-signed server verifies).
     pub(super) fn net_trusting(cert: CertificateDer<'static>) -> SystemNet {
-        let mut roots = RootCertStore::empty();
-        roots.add(cert).unwrap();
-        SystemNet::with_tls_roots(Arc::new(roots))
+        SystemNet::new().with_trust(crate::TrustStore::from_certificates([cert]).unwrap())
     }
 
     // A real TLS handshake over loopback: SNI + ALPN negotiation and an
@@ -1586,6 +1533,84 @@ mod tests {
                 .is_err(),
             "the same server must be refused when its authority is not named"
         );
+    }
+
+    /// `connect` to a one-shot TLS server presenting `leaf`, with SNI `name`,
+    /// through `net`, naming `ca` for this connection.
+    async fn connect_tls(
+        net: &SystemNet,
+        leaf: crate::trust::test_pki::Leaf,
+        name: &str,
+        ca: &str,
+    ) -> Result<(), ProviderError> {
+        let (port, server) = crate::trust::test_pki::tls_server(leaf, &[], b"").await;
+        let opts = ConnectOptions {
+            secure: true,
+            sni: Some(name.to_string()),
+            alpn: Vec::new(),
+            ca: ca.as_bytes().to_vec(),
+        };
+        let result = net.connect("localhost".to_string(), port, opts).await;
+        server.abort();
+        let (id, _) = result?;
+        net.close(id).await
+    }
+
+    // D197: the process store `--tls-ca` built is what `connect` verifies
+    // against, and a per-connection `ca` adds to it for that connection only —
+    // it neither replaces the process store nor leaks into the next connection.
+    #[tokio::test]
+    async fn a_per_connection_ca_adds_to_the_process_store() {
+        use crate::trust::test_pki::Ca;
+        let process = Ca::new("Process CA");
+        let extra = Ca::new("Connection CA");
+        let net = SystemNet::new().with_trust(process.trust());
+
+        connect_tls(&net, process.leaf(&["localhost"]), "localhost", "")
+            .await
+            .expect("the process store's CA is trusted");
+        connect_tls(&net, extra.leaf(&["localhost"]), "localhost", &extra.pem)
+            .await
+            .expect("the connection's CA is trusted");
+        connect_tls(&net, process.leaf(&["localhost"]), "localhost", &extra.pem)
+            .await
+            .expect("naming a CA does not drop the process store");
+        let leaked = connect_tls(&net, extra.leaf(&["localhost"]), "localhost", "").await;
+        assert_eq!(leaked.err().and_then(|e| e.code()), Some(ErrorCode::Tls));
+    }
+
+    // Naming a CA widens whom a connection trusts; it never turns a check off.
+    #[tokio::test]
+    async fn a_per_connection_ca_still_checks_the_name_and_the_dates() {
+        use crate::trust::test_pki::Ca;
+        let ca = Ca::new("Connection CA");
+        let net = SystemNet::new();
+        let wrong_name = connect_tls(&net, ca.leaf(&["other.test"]), "localhost", &ca.pem).await;
+        assert_eq!(
+            wrong_name.err().and_then(|e| e.code()),
+            Some(ErrorCode::Tls)
+        );
+        let expired = connect_tls(
+            &net,
+            ca.leaf_valid(&["localhost"], 2001, 2002),
+            "localhost",
+            &ca.pem,
+        )
+        .await;
+        assert_eq!(expired.err().and_then(|e| e.code()), Some(ErrorCode::Tls));
+    }
+
+    // A store built from one CA refuses a server another CA signed, even one
+    // the bundled roots would not have trusted either: nothing outside the
+    // store is consulted.
+    #[tokio::test]
+    async fn a_file_only_store_refuses_every_other_ca() {
+        use crate::trust::test_pki::Ca;
+        let trusted = Ca::new("Trusted CA");
+        let other = Ca::new("Other CA");
+        let net = SystemNet::new().with_trust(trusted.trust());
+        let result = connect_tls(&net, other.leaf(&["localhost"]), "localhost", "").await;
+        assert_eq!(result.err().and_then(|e| e.code()), Some(ErrorCode::Tls));
     }
 
     /// A CA argument that parses to nothing is a mistake worth naming: silently

@@ -328,3 +328,86 @@ fn the_loop_never_calls_finish() {
         "the dev loop called finish"
     );
 }
+
+/// `(ca, cert, key)` PEM: a private CA and a `localhost` server it signed.
+fn private_ca() -> (String, String, String) {
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+    let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca.distinguished_name.push(DnType::CommonName, "Private CA");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().unwrap();
+    let ca_pem = ca.self_signed(&ca_key).unwrap().pem();
+    let key = KeyPair::generate().unwrap();
+    let cert = CertificateParams::new(vec!["localhost".to_string()])
+        .unwrap()
+        .signed_by(&key, &Issuer::from_params(&ca, &ca_key))
+        .unwrap();
+    (ca_pem, cert.pem(), key.serialize_pem())
+}
+
+/// A server that answers with what its `fetch` of its own HTTPS listener got:
+/// `secure` when the private CA is trusted, `refused` when it is not.
+const TLS_CLIENT_SERVER: &str = r#"import { serve } from "runtime:http";
+import { env } from "runtime:process";
+const tls = serve(
+  { hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: env.KEY },
+  () => new Response("secure"),
+);
+const secure = (await tls.addr).port;
+serve({ port: Number(env.PORT ?? "8080") }, async () => {
+  try { return new Response(await (await fetch(`https://localhost:${secure}/`)).text()); }
+  catch { return new Response("refused"); }
+});
+"#;
+
+/// Runs the loop over `TLS_CLIENT_SERVER` with `flags`, returning what the
+/// app answered.
+fn fetch_through_the_loop(name: &str, flags: &[&str]) -> String {
+    let (ca, cert, key) = private_ca();
+    let dir = project(name, &server_project(None));
+    std::fs::write(dir.join("src/server.ts"), TLS_CLIENT_SERVER).expect("write the server");
+    std::fs::write(dir.join("ca.pem"), ca).expect("write the CA");
+    let child = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .arg("start")
+        .args(flags)
+        .current_dir(&dir)
+        .env("CERT", cert)
+        .env("KEY", key)
+        .env_remove("SSL_CERT_FILE")
+        .env_remove("NODE_EXTRA_CA_CERTS")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn esdev start");
+    let mut dev = Loop { child, dir };
+    let port = dev.wait_for_app();
+    get(port)
+}
+
+// `esdev start --tls-ca` reaches the server it runs (D197): the child's
+// `fetch` trusts the named CA, and without the flag refuses it.
+#[test]
+fn the_dev_child_trusts_what_tls_ca_names() {
+    let trusted = fetch_through_the_loop("tls-ca-trusted", &["--tls-ca=ca.pem"]);
+    assert!(trusted.ends_with("secure"), "{trusted}");
+    let refused = fetch_through_the_loop("tls-ca-refused", &[]);
+    assert!(refused.ends_with("refused"), "{refused}");
+}
+
+// A CA file that cannot be trusted stops the loop before it builds anything.
+#[test]
+fn a_bad_tls_ca_stops_the_loop_before_it_starts() {
+    let dir = project("tls-ca-missing", &server_project(None));
+    let out = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .args(["start", "--tls-ca=no-such-ca.pem"])
+        .current_dir(&dir)
+        .output()
+        .expect("spawn esdev start");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!out.status.success(), "the loop started");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--tls-ca=no-such-ca.pem: cannot read it"),
+        "{err}"
+    );
+}

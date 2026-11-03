@@ -58,6 +58,7 @@ mod timers;
 mod tls;
 #[cfg(test)]
 mod trace_capture;
+mod trust;
 mod worker;
 
 /// The DNS response reader, for `fuzz/` only (DECISIONS D188).
@@ -95,4 +96,5 @@ pub use system_websocket::SystemWebSocket;
 pub use task::TokioTaskSpawner;
 pub use telemetry::OtlpHttpSink;
 pub use timers::TokioTimers;
+pub use trust::{TrustSource, TrustStore};
 pub use worker::{ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory};

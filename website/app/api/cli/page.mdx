@@ -34,6 +34,9 @@ esrun --env-file=<path>     Load env vars from a .env file
 esrun --env-override        Let --env-file values override the OS environment
 esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
                             ^C/SIGTERM (default 10000)
+esrun --tls-ca=<file|bundled>
+                            Trust exactly these CAs for every TLS client;
+                            repeatable (default: the bundled Mozilla roots)
 esrun upgrade               Update esrun to the latest release
 esrun -h, --help            Show this help
 esrun -v, --version         Show the version
@@ -74,6 +77,7 @@ script that genuinely wants a flag esrun also knows.
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
+| `--tls-ca=<file\|bundled>` | The certificate authorities every TLS client trusts; repeatable. Default: the bundled Mozilla roots. See [TLS trust](#tls-trust). |
 | `--otel[=<url>]` | Export OpenTelemetry traces to a collector. Bare, it uses `http://localhost:4318`. The **runtime** exports — your program needs no capability and no code. See [Telemetry](#telemetry). |
 | `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
 | `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |
@@ -285,6 +289,38 @@ tidiness: ignoring one leaves a run wider than the command line claims.
   list, readable as [`args` from runtime:process](/api/process). The runtime
   binary and the script path are excluded.
 </Callout>
+
+## TLS trust
+
+`fetch`, `runtime:net`, `WebSocket`, the database drivers and the `--otel`
+exporter verify servers against one set of certificate authorities.
+
+| | |
+| --- | --- |
+| No `--tls-ca` | The bundled Mozilla roots |
+| `--tls-ca=<file>` | Exactly the certificates in the PEM file, and nothing else |
+| `--tls-ca=bundled` | The bundled Mozilla roots, listed alongside files |
+
+```sh
+esrun --tls-ca=/etc/pki/internal-ca.pem server.js          # only the internal CA
+esrun --tls-ca=bundled --tls-ca=corp.pem server.js         # public roots and a corporate CA
+esrun --tls-ca=/etc/ssl/certs/ca-certificates.crt app.js   # the distribution's bundle
+```
+
+A path is relative to the working directory; a file named `bundled` is written
+`./bundled`. The file is read before the program starts and needs no
+`--allow-read`. Startup fails, naming the file, when it:
+
+- cannot be read, or holds no `CERTIFICATE` block;
+- holds a private key, a certificate request, a CRL or a public key;
+- has a certificate that is malformed, expired or not yet valid;
+- is given twice.
+
+Nothing else changes trust: no environment variable (`SSL_CERT_FILE`,
+`NODE_EXTRA_CA_CERTS`, `DENO_CERT` and the like are ignored, and esrun warns
+when one of the JavaScript runtimes' is set), no operating-system store, and no
+option to skip verification. A per-connection `ca` adds to the store for that
+connection. See [TLS trust internals](/docs/internals/tls).
 
 ## Memory
 

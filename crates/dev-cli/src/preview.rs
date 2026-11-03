@@ -46,6 +46,8 @@ pub struct PreviewConfig {
     pub config: Option<String>,
     /// `--spa`: answer a route-like miss with `index.html`.
     pub spa: bool,
+    /// `--tls-ca`: what an `https` proxy target is verified against (D197).
+    pub tls_ca: Vec<es_runtime_default_providers::TrustSource>,
 }
 
 /// The port a preview opens when none was named.
@@ -109,6 +111,7 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         reload,
         error,
         proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+        trust: es_runtime_default_providers::TrustStore::load(&config.tls_ca)?,
         miss: if config.spa {
             crate::devserver::Miss::Spa
         } else {

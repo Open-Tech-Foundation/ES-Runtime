@@ -41,19 +41,39 @@ impl OtlpHttpSink {
     pub fn new(endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
         OtlpHttpSink {
-            client: reqwest::Client::builder()
-                // Not through a proxy the environment names, for the same
-                // reason `fetch` is not: spans go to the `--otel` collector.
-                .no_proxy()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_default(),
+            client: client(&crate::TrustStore::bundled()),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             warned: Arc::new(AtomicBool::new(false)),
             in_flight: Arc::new(AtomicUsize::new(0)),
             idle: Arc::new(Notify::new()),
         }
     }
+}
+
+impl OtlpHttpSink {
+    /// Verifies an `https` collector against `trust` — the process store
+    /// `--tls-ca` describes (D197).
+    #[must_use]
+    pub fn with_trust(mut self, trust: &crate::TrustStore) -> Self {
+        self.client = client(trust);
+        self
+    }
+}
+
+/// The exporter's HTTP client, verifying against `trust`.
+fn client(trust: &crate::TrustStore) -> reqwest::Client {
+    reqwest::Client::builder()
+        // Not through a proxy the environment names, for the same reason
+        // `fetch` is not: spans go to the `--otel` collector.
+        .no_proxy()
+        .tls_backend_preconfigured(trust.client_config(&["h2", "http/1.1"]))
+        .timeout(Duration::from_secs(10))
+        .build()
+        // Never `unwrap_or_default`: reqwest's default client verifies against
+        // the operating system's store, so falling back would quietly change
+        // whom the exporter trusts. The build only fails if reqwest and
+        // tokio-rustls stop sharing one rustls, which the test below catches.
+        .expect("the exporter's HTTP client builds with the process trust store")
 }
 
 impl TelemetrySink for OtlpHttpSink {
@@ -111,5 +131,19 @@ impl TelemetrySink for OtlpHttpSink {
             })
             .await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The exporter's client is built with the process store; a failure would
+    // panic at startup rather than fall back to the OS store, so make sure it
+    // never does.
+    #[test]
+    fn the_exporter_client_builds_with_any_trust_store() {
+        let _ = super::OtlpHttpSink::new("http://127.0.0.1:4318")
+            .with_trust(&crate::TrustStore::bundled());
+        let _ = super::OtlpHttpSink::new("http://127.0.0.1:4318")
+            .with_trust(&crate::trust::test_pki::Ca::new("Collector CA").trust());
     }
 }

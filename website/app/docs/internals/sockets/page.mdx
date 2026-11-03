@@ -69,11 +69,9 @@ rather than needing a state machine.
 handed back, so a guest never sees a half-open TLS socket. The address
 information is read off the raw TCP stream *before* the handshake consumes it.
 
-Trust anchors are the bundled Mozilla set (webpki-roots), built once per process
-and shared. That means no platform certificate store is read and no I/O is done
-to find one — a run is portable and deterministic in a way a system-store lookup
-would not be. The trade is that a corporate root installed on the machine is not
-trusted; an embedder overrides the store, a CLI user cannot yet.
+Certificates are verified against the process trust store that every TLS
+client shares; see [TLS trust](/docs/internals/tls). A `ca` passed to `connect`
+adds to it for that connection.
 
 Two details that exist for reasons worth stating:
 

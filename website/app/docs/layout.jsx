@@ -165,6 +165,7 @@ const NAV = [
       },
       { title: "Sockets", path: "/docs/internals/sockets" },
       { title: "The fetch client", path: "/docs/internals/fetch" },
+      { title: "TLS trust", path: "/docs/internals/tls" },
       { title: "WebSockets", path: "/docs/internals/websockets" },
       { title: "Workers", path: "/docs/internals/workers" },
       { title: "Durable workers", path: "/docs/internals/durable-workers" },

@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use es_runtime_default_providers::TrustSource;
+
 use crate::permissions::Permissions;
 
 /// How long a graceful shutdown waits for in-flight HTTP requests before giving
@@ -60,6 +62,10 @@ pub struct RunOptions {
     /// reports what keeps the loop alive (`esdev test --detect-async-leaks`).
     /// Never set by esrun.
     pub track_pending_work: bool,
+    /// The process trust store's sources, via `--tls-ca=<file|bundled>`
+    /// (repeatable, DECISIONS D197). Empty trusts the bundled Mozilla roots;
+    /// otherwise exactly what is listed.
+    pub tls_ca: Vec<TrustSource>,
 }
 
 impl Default for RunOptions {
@@ -76,6 +82,7 @@ impl Default for RunOptions {
             otel_service: None,
             otel_min_duration_ms: None,
             otel_sample: None,
+            tls_ca: Vec::new(),
         }
     }
 }
@@ -130,6 +137,10 @@ impl RunOptions {
             "--env-file" => {
                 self.env_file = Some(require_value(flag, value)?.to_string());
             }
+            "--tls-ca" => {
+                self.tls_ca
+                    .push(TrustSource::parse(require_value(flag, value)?)?);
+            }
             "--env-override" => {
                 reject_value(flag, value)?;
                 self.env_override = true;
@@ -167,6 +178,7 @@ impl RunOptions {
                 | "--env-override"
                 | "--max-heap"
                 | "--shutdown-grace"
+                | "--tls-ca"
         )
     }
 }
@@ -248,4 +260,39 @@ pub fn reject_value(flag: &str, value: Option<&str>) -> Result<(), String> {
     // error that has to explain itself. `--deny-all` does — it is a mode switch
     // rather than a capability, so scoping could never apply to it.
     Err(format!("{flag} takes no value (got {flag}={value})"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_ca_accumulates_in_order() {
+        let mut options = RunOptions::default();
+        assert!(
+            options.tls_ca.is_empty(),
+            "the default is the bundled roots"
+        );
+        assert!(options.try_flag("--tls-ca", Some("corp.pem")).unwrap());
+        assert!(options.try_flag("--tls-ca", Some("bundled")).unwrap());
+        assert_eq!(
+            options.tls_ca,
+            [TrustSource::File("corp.pem".into()), TrustSource::Bundled]
+        );
+    }
+
+    #[test]
+    fn tls_ca_needs_a_value() {
+        let mut options = RunOptions::default();
+        assert!(options.try_flag("--tls-ca", None).is_err());
+        assert!(options.try_flag("--tls-ca", Some("")).is_err());
+        assert!(options.tls_ca.is_empty());
+    }
+
+    // A shared flag, so a binary refuses it after the script rather than
+    // passing it to the program and trusting the defaults.
+    #[test]
+    fn tls_ca_is_a_shared_flag() {
+        assert!(RunOptions::is_shared_flag("--tls-ca"));
+    }
 }

@@ -54,8 +54,9 @@ declare module "runtime:net" {
     /**
      * Extra trust anchors, as PEM certificates (a string or bytes).
      *
-     * **Added** to the built-in roots, never instead of them: naming a private
-     * certificate authority does not stop the program trusting the public ones,
+     * **Added** to the process trust store (the bundled roots, or what
+     * `--tls-ca` lists), never instead of it: naming a private certificate
+     * authority does not stop the program trusting the ones the process does,
      * and it can only make verification accept more certificates — the hostname
      * and chain checks still run. A server matching neither is still refused.
      */
