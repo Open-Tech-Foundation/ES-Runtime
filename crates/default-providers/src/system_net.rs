@@ -28,8 +28,9 @@ use std::task::{Context, Poll};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, ConnectOptions, Datagram, DatagramOption, DatagramOptions, DnsQuery, DnsRecord,
-    ListenOptions, MulticastMembership, NetProvider, OutgoingDatagram, ProviderError, SocketInfo,
+    BoxFuture, ClientIdentity, ConnectOptions, Datagram, DatagramOption, DatagramOptions, DnsQuery,
+    DnsRecord, ListenOptions, MulticastMembership, NetProvider, OutgoingDatagram, ProviderError,
+    SecureContext, SocketInfo,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -42,10 +43,12 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 
-/// What a memoized TLS client connector is keyed by: the ALPN list offered and
-/// the extra trust anchors supplied, since each produces a different config and
-/// two connects agreeing on one but not the other must not share.
-type ConnectorKey = (Vec<String>, Vec<u8>);
+/// What a memoized TLS client connector is keyed by: the ALPN list offered,
+/// the extra trust anchors supplied, and a digest of the client certificate
+/// presented (D201), since each produces a different config and two connects
+/// agreeing on one but not the others must not share. A digest, so the cache
+/// holds no second copy of a private key.
+type ConnectorKey = (Vec<String>, Vec<u8>, [u8; 32]);
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
@@ -137,6 +140,8 @@ pub struct SystemNet {
     /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
     /// cache hit is a refcount bump.
     tls_connectors: Arc<Mutex<HashMap<ConnectorKey, TlsConnector>>>,
+    /// Each TLS listener's replaceable configuration, by listener id (D200).
+    tls_listeners: Arc<Mutex<HashMap<u64, crate::tls::ServerTls>>>,
     /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
     allow_connect: Option<Arc<crate::HostAllowlist>>,
     /// Addresses `listen` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
@@ -257,14 +262,23 @@ impl SystemNet {
 
     /// A TLS client connector trusting the process store plus `ca`, and
     /// offering `alpn`, memoized by both (see [`tls_connectors`](Self::tls_connectors)).
-    fn tls_connector(&self, alpn: &[String], ca: &[u8]) -> Result<TlsConnector, ProviderError> {
-        let key: ConnectorKey = (alpn.to_vec(), ca.to_vec());
+    fn tls_connector(
+        &self,
+        alpn: &[String],
+        ca: &[u8],
+        identity: &ClientIdentity,
+    ) -> Result<TlsConnector, ProviderError> {
+        use sha2::Digest;
+        let mut digest = sha2::Sha256::new();
+        digest.update((identity.cert.len() as u64).to_be_bytes());
+        digest.update(&identity.cert);
+        digest.update(&identity.key);
+        let key: ConnectorKey = (alpn.to_vec(), ca.to_vec(), digest.finalize().into());
         if let Some(connector) = self.tls_connectors.lock().unwrap().get(&key) {
             return Ok(connector.clone());
         }
-        let roots = self.trust.roots_with(ca)?;
         let alpn: Vec<&str> = alpn.iter().map(String::as_str).collect();
-        let config = crate::trust::client_config(roots, &alpn);
+        let config = self.trust.client_config_for(ca, identity, &alpn)?;
         let connector = TlsConnector::from(Arc::new(config));
         self.tls_connectors
             .lock()
@@ -495,6 +509,7 @@ fn unix_info(
         local_address: name(local),
         local_port: 0,
         alpn: None,
+        peer_certificate: None,
     }
 }
 
@@ -513,6 +528,7 @@ fn info_of(local: Option<SocketAddr>, remote: Option<SocketAddr>) -> SocketInfo 
         local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
         local_port: local.map(|a| a.port()).unwrap_or(0),
         alpn: None,
+        peer_certificate: None,
     }
 }
 
@@ -561,7 +577,7 @@ impl NetProvider for SystemNet {
                 let server_name =
                     ServerName::try_from(name).map_err(|_| err("invalid TLS server name"))?;
                 let tls = this
-                    .tls_connector(&opts.alpn, &opts.ca)?
+                    .tls_connector(&opts.alpn, &opts.ca, &opts.identity)?
                     .connect(server_name, tcp)
                     .await
                     .map_err(tls_err)?;
@@ -671,10 +687,18 @@ impl NetProvider for SystemNet {
             let acceptor = if opts.cert.is_empty() && opts.key.is_empty() {
                 None
             } else {
-                Some(crate::tls::server_acceptor(
-                    &opts.cert, &opts.key, &opts.alpn,
+                Some(crate::tls::ServerTls::new(
+                    crate::tls::ServerTlsMaterial {
+                        cert: opts.cert,
+                        key: opts.key,
+                        client_ca: opts.client_ca,
+                        crl: opts.crl,
+                        request_cert: opts.request_cert,
+                    },
+                    &opts.alpn,
                 )?)
             };
+            let site = acceptor.clone();
             // Shared with `runtime:http`, so the two bind on identical terms —
             // including `SO_REUSEPORT` when it was asked for.
             let listener = crate::listener::bind(host.as_str(), port, opts.reuse_port).await?;
@@ -721,8 +745,9 @@ impl NetProvider for SystemNet {
                                         break; // listener closed (rx dropped)
                                     }
                                 }
-                                Some(acceptor) => {
-                                    let acceptor = acceptor.clone();
+                                Some(site) => {
+                                    // The configuration current now (D200).
+                                    let acceptor = site.acceptor();
                                     handshakes.push(async move {
                                         match acceptor.accept(tcp).await {
                                             Ok(tls) => Some((tls, remote)),
@@ -778,6 +803,9 @@ impl NetProvider for SystemNet {
             let id = this.id();
             this.listeners.lock().unwrap().insert(id, rx);
             this.listener_tasks.lock().unwrap().insert(id, task);
+            if let Some(site) = site {
+                this.tls_listeners.lock().unwrap().insert(id, site);
+            }
             Ok((id, info_of(local, None)))
         })
     }
@@ -820,6 +848,12 @@ impl NetProvider for SystemNet {
                             info.alpn = conn
                                 .alpn_protocol()
                                 .map(|p| String::from_utf8_lossy(p).into_owned());
+                            // Verified by the handshake, when the listener
+                            // requires one (D201).
+                            info.peer_certificate = conn
+                                .peer_certificates()
+                                .and_then(<[_]>::first)
+                                .map(|der| Arc::new(crate::trust::peer_certificate(der)));
                             (SystemNet::spawn_socket(*tls), info)
                         }
                     };
@@ -841,8 +875,10 @@ impl NetProvider for SystemNet {
         let listeners = self.listeners.clone();
         let listener_tasks = self.listener_tasks.clone();
         let socket_files = self.socket_files.clone();
+        let tls_listeners = self.tls_listeners.clone();
         Box::pin(async move {
             listeners.lock().unwrap().remove(&id);
+            tls_listeners.lock().unwrap().remove(&id);
             // Abort the accept task so its sender drops, unblocking any parked
             // accept with `None` (the rx may be out of the map in a parked accept,
             // so removing it above isn't enough on its own).
@@ -958,12 +994,24 @@ impl NetProvider for SystemNet {
         })
     }
 
+    fn set_secure_context(&self, id: u64, context: SecureContext) -> Result<(), ProviderError> {
+        let site = self
+            .tls_listeners
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| err("setSecureContext: not a listening TLS socket"))?;
+        site.set(context)
+    }
+
     fn start_tls(
         &self,
         id: u64,
         server_name: String,
         alpn: Vec<String>,
         ca: Vec<u8>,
+        identity: ClientIdentity,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
@@ -1011,7 +1059,7 @@ impl NetProvider for SystemNet {
             let name =
                 ServerName::try_from(server_name).map_err(|_| err("invalid TLS server name"))?;
             let tls = this
-                .tls_connector(&alpn, &ca)?
+                .tls_connector(&alpn, &ca, &identity)?
                 .connect(name, stream)
                 .await
                 .map_err(err)?;
@@ -1456,6 +1504,7 @@ mod tests {
             sni: Some("localhost".to_string()),
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
             ca: Vec::new(),
+            identity: Default::default(),
         };
         let (id, info) = net
             .connect("localhost".to_string(), port, opts)
@@ -1514,6 +1563,7 @@ mod tests {
             sni: Some("localhost".to_string()),
             alpn: Vec::new(),
             ca: pem.into_bytes(),
+            identity: Default::default(),
         };
         let (id, _info) = net
             .connect("localhost".to_string(), port, with_ca)
@@ -1526,6 +1576,7 @@ mod tests {
             sni: Some("localhost".to_string()),
             alpn: Vec::new(),
             ca: Vec::new(),
+            identity: Default::default(),
         };
         assert!(
             net.connect("localhost".to_string(), port, without_ca)
@@ -1549,6 +1600,7 @@ mod tests {
             sni: Some(name.to_string()),
             alpn: Vec::new(),
             ca: ca.as_bytes().to_vec(),
+            identity: Default::default(),
         };
         let result = net.connect("localhost".to_string(), port, opts).await;
         server.abort();
@@ -1638,6 +1690,7 @@ mod tests {
                     sni: None,
                     alpn: Vec::new(),
                     ca: b"not a certificate".to_vec(),
+                    identity: Default::default(),
                 },
             )
             .await;
@@ -1722,6 +1775,7 @@ mod tests {
                 "localhost".to_string(),
                 vec!["h2".to_string()],
                 Vec::new(),
+                Default::default(),
             )
             .await
             .unwrap();
@@ -1732,9 +1786,15 @@ mod tests {
 
         // The upgraded (already-TLS) socket cannot be upgraded again.
         assert!(
-            net.start_tls(tls_id, "localhost".to_string(), vec![], Vec::new())
-                .await
-                .is_err(),
+            net.start_tls(
+                tls_id,
+                "localhost".to_string(),
+                vec![],
+                Vec::new(),
+                Default::default()
+            )
+            .await
+            .is_err(),
             "a TLS socket has no reclaimable raw stream"
         );
 
@@ -1748,9 +1808,15 @@ mod tests {
     async fn start_tls_on_an_unknown_socket_errors() {
         let net = SystemNet::new();
         assert!(
-            net.start_tls(999, "localhost".to_string(), vec![], Vec::new())
-                .await
-                .is_err()
+            net.start_tls(
+                999,
+                "localhost".to_string(),
+                vec![],
+                Vec::new(),
+                Default::default()
+            )
+            .await
+            .is_err()
         );
     }
 
@@ -1843,6 +1909,7 @@ mod tests {
                     key: key_pem,
                     alpn: vec!["h2".to_string(), "http/1.1".to_string()],
                     reuse_port: false,
+                    ..Default::default()
                 },
             )
             .await
@@ -1865,6 +1932,7 @@ mod tests {
             sni: Some("localhost".to_string()),
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
             ca: Vec::new(),
+            identity: Default::default(),
         };
         let (cid, cinfo) = net
             .connect("localhost".to_string(), port, opts)
@@ -1895,6 +1963,7 @@ mod tests {
                         .to_vec(),
                     alpn: vec![],
                     reuse_port: false,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2662,6 +2731,7 @@ mod tracing_tests {
                     key: ck.signing_key.serialize_pem().into_bytes(),
                     alpn: vec![],
                     reuse_port: false,
+                    ..Default::default()
                 },
             )
             .await

@@ -250,6 +250,8 @@ pub struct StartConfig {
     pub grace: Duration,
     /// `--tls-ca`: what the server child and the dev proxy trust (D197).
     pub tls_ca: Vec<TrustSource>,
+    /// `--tls-crl`: the CRLs they check servers against (D202).
+    pub tls_crl: Vec<PathBuf>,
 }
 
 /// Runs the dev loop until the user interrupts it.
@@ -257,7 +259,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     let started = std::time::Instant::now();
     // Loaded here as well as in the child: the dev proxy verifies with it, and
     // a CA file that cannot be trusted should stop the loop before a build.
-    let trust = TrustStore::load(&config.tls_ca)?;
+    let trust = TrustStore::load(&config.tls_ca)?.with_crl_files(&config.tls_crl)?;
     // The child runs from the project root, so a relative file is made
     // absolute against the directory the flag was typed in.
     let tls_ca: Vec<String> = config
@@ -269,6 +271,11 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 .map(|path| format!("--tls-ca={}", path.display()))
                 .map_err(|e| format!("--tls-ca={}: {e}", path.display())),
         })
+        .chain(config.tls_crl.iter().map(|path| {
+            std::path::absolute(path)
+                .map(|path| format!("--tls-crl={}", path.display()))
+                .map_err(|e| format!("--tls-crl={}: {e}", path.display()))
+        }))
         .collect::<Result<_, String>>()?;
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;

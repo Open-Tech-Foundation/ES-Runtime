@@ -66,6 +66,9 @@ pub struct RunOptions {
     /// (repeatable, DECISIONS D197). Empty trusts the bundled Mozilla roots;
     /// otherwise exactly what is listed.
     pub tls_ca: Vec<TrustSource>,
+    /// PEM CRL files every TLS client checks servers against, via
+    /// `--tls-crl=<file>` (repeatable, DECISIONS D202).
+    pub tls_crl: Vec<std::path::PathBuf>,
 }
 
 impl Default for RunOptions {
@@ -83,6 +86,7 @@ impl Default for RunOptions {
             otel_min_duration_ms: None,
             otel_sample: None,
             tls_ca: Vec::new(),
+            tls_crl: Vec::new(),
         }
     }
 }
@@ -141,6 +145,9 @@ impl RunOptions {
                 self.tls_ca
                     .push(TrustSource::parse(require_value(flag, value)?)?);
             }
+            "--tls-crl" => {
+                self.tls_crl.push(require_value(flag, value)?.into());
+            }
             "--env-override" => {
                 reject_value(flag, value)?;
                 self.env_override = true;
@@ -179,6 +186,7 @@ impl RunOptions {
                 | "--max-heap"
                 | "--shutdown-grace"
                 | "--tls-ca"
+                | "--tls-crl"
         )
     }
 }

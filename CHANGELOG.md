@@ -13,6 +13,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **Mutual TLS** (DECISIONS D201). `serve` and `listen` take `requestCert`,
+  `ca` and `crl` to require client certificates, always verified — there is
+  no `rejectUnauthorized`. The handler's `info.peerCertificate` and an
+  accepted socket's `opened.peerCertificate` carry the verified certificate
+  (`subject`, `subjectaltname`, `fingerprint256`, `raw`, `validFrom`,
+  `validTo`). Clients present one with `cert`/`key` on `runtime:net`
+  `connect`, `sslCert`/`sslKey` on the PostgreSQL and MySQL drivers,
+  `cert`/`key` or `tlsCertificateKeyFile` on MongoDB (with `MONGODB-X509`
+  authentication), and Bun's `tls: { ca, cert, key }` on `fetch`, which gets a
+  connection pool of its own.
+- **Certificate rotation** (D200): `server.setSecureContext({ cert, key })` on
+  a TLS `serve` server or `listen` listener replaces its credentials for new
+  connections without dropping open ones, and refuses a key that does not
+  belong to the certificate.
+- **Revocation** (D202): `--tls-crl=<file>` checks every TLS client's servers
+  against operator-supplied CRLs, and `crl` does the same for client
+  certificates. A CRL past its `nextUpdate` refuses what it covers; nothing is
+  fetched over the network.
+
 - TLS prefers the hybrid post-quantum key exchange X25519MLKEM768 in every
   client and server (DECISIONS D199). The build had turned rustls's
   preference off, so handshakes used plain X25519 first.

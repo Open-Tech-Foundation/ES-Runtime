@@ -149,7 +149,21 @@ await fetch(url, { signal: AbortSignal.timeout(5000) });
 
 `fetch` verifies HTTPS servers against the process trust store shared by every
 TLS client: the bundled Mozilla roots, or exactly what `--tls-ca` lists
-(DECISIONS D197). The operating system's store is not consulted.
+(DECISIONS D197), checked against `--tls-crl`. The operating system's store is
+not consulted.
+
+A request can bring its own TLS material with the non-standard `tls` member of
+its init — Bun's name (D201):
+
+```js
+await fetch("https://billing.internal/", { tls: { ca, cert, key } });
+```
+
+`ca` is trusted in addition to the process store; `cert` and `key` (together)
+are a client certificate to present. A request with `tls` gets a connection
+pool of its own, so a connection that presented a certificate is never reused
+for a request that did not. `rejectUnauthorized` and any other member are a
+`TypeError`.
 
 ### Proxies
 
@@ -2197,8 +2211,8 @@ const tlsServer = listen({
 
 | Export                       | Type                                  | Description                                                        |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, ca?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `ca` is a PEM certificate authority trusted for this connection in addition to the process store (`--tls-ca`); `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
-| `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, reusePort? }) => Listener` | Bind a listening socket. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols; `reusePort` shares the port with other processes (see below). `NetListen`. |
+| `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, ca?, cert?, key?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `ca` is a PEM certificate authority trusted for this connection in addition to the process store (`--tls-ca`); `cert` + `key` are a client certificate to present (D201); `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
+| `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, reusePort? }) => Listener` | Bind a listening socket. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols; `requestCert: true` requires a client certificate that chains to `ca`, checked against `crl` (D201, D202); `reusePort` shares the port with other processes (see below). `NetListen`. |
 | `connect({ path }, options?)` / `listen({ path })` | `({ path }, { allowHalfOpen? }) => Socket` / `({ path }) => UnixListener` | A **Unix domain stream socket** at an absolute `path`, given alone (no `hostname`/`port`), plaintext only. The path must be named — `--allow-net=unix:<path>` to connect, `--allow-listen=unix:<path>` to listen; a bare `--allow-net`/`--allow-listen` covers no path (`--allow-all` covers all). `SocketInfo` addresses are the path (an unnamed end is `""`), ports `0`; `UnixListener.addr` is `{ path }`. A taken path is `ERR_ADDRESS_IN_USE`; `close()` removes the file the listener created. A relative path is `ERR_INVALID_PATH`. Unix only — refused on Windows. `Net` / `NetListen`. |
 | `bind(options)`              | `({ hostname?, port, reusePort?, reuseAddress?, broadcast?, ttl?, multicastTtl?, multicastLoopback? }) => DatagramSocket` | Bind a UDP socket (see [UDP](#udp)). `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for loopback-only; a locked-down host may refuse a wildcard bind). `NetListen` to bind, `Net` to send. |
 
@@ -2209,12 +2223,17 @@ const tlsServer = listen({
 writable half-closes (FIN); `allowHalfOpen` (a `connect` option, default
 `false`) keeps the writable usable after the peer's FIN.
 **`SocketInfo`** (from `opened`): `{ remoteAddress, remotePort, localAddress,
-localPort, alpn }` — `remoteAddress`/`localAddress` are WinterTC `"host:port"`
-strings (IPv6 host bracketed); `alpn` is the negotiated protocol for a TLS
-socket, else `null`.
+localPort, alpn, peerCertificate }` — `remoteAddress`/`localAddress` are WinterTC
+`"host:port"` strings (IPv6 host bracketed); `alpn` is the negotiated protocol
+for a TLS socket, else `null`; `peerCertificate` is the verified client
+certificate on a socket a `requestCert` listener accepted, else `null` (shape
+below, under `runtime:http`).
 
 **`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
-`accept()`, `close()`.
+`accept()`, `close()`, and on a TLS listener `setSecureContext({ cert?, key?,
+ca?, crl? }): Promise<void>` — new credentials for connections accepted from
+now on (D200); it rejects, keeping the current ones, when the certificate does
+not load or the key does not match.
 
 **Errors** — socket failures (bad options, connect/TLS/I/O errors) surface as a
 `TypeError` whose message is prefixed `"SocketError: "` (WinterTC `SocketError`),
@@ -2333,7 +2352,7 @@ await server.stop();
 | `CookieMap`                       | `class`                                       | Cookies by name, from a `Cookie` header; records `Set-Cookie` changes. See [Cookies](#cookies). |
 | `CSRF`                            | `object`                                      | `generate`/`verify` CSRF tokens bound to a session. See [CSRF](#csrf). |
 | `Webhook`, `WebhookVerificationError` | `class`                                  | Sign and verify Standard Webhooks deliveries. See [Webhooks](#webhooks). |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
@@ -2497,8 +2516,22 @@ const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim()
 On HTTP/2 every request multiplexed onto one connection reports the same peer,
 because they are one connection.
 
+`info.peerCertificate` is the client certificate the server verified when it
+was started with `requestCert: true` and `ca` (D201), and `null` otherwise:
+`{ subject: { CN?, O?, OU?, C?, ST?, L? }, subjectaltname, fingerprint256, raw,
+validFrom, validTo }` — Node's field names, `subjectaltname` as
+`"DNS:a, URI:spiffe://b, IP Address:10.0.0.1, email:c"`, `fingerprint256` as
+colon-separated upper-case hex, `raw` the DER, the dates in epoch milliseconds.
+A client without a certificate `ca` signed (and `crl` does not revoke) fails the
+handshake; there is no `rejectUnauthorized`.
+
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
-`finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
+`finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`,
+and on a TLS server `setSecureContext({ cert?, key?, ca?, crl? }):
+Promise<void>` — new credentials for connections accepted from now on, open
+connections untouched (D200). It rejects with a `TypeError` (`ERR_TLS`),
+keeping the current certificate, when the new one does not load or the key does
+not belong to it.
 
 #### HTTPS
 

@@ -240,6 +240,25 @@ pub struct HttpRequest {
     pub body: RequestBody,
     /// What to do with a redirect response.
     pub redirect: RedirectMode,
+    /// TLS material for this request only (D201): a CA trusted in addition to
+    /// the process store, and a client certificate. Empty ⇒ the defaults.
+    pub tls: RequestTls,
+}
+
+/// A request's own TLS material (D201) — `fetch`'s `tls` member.
+#[derive(Clone, Debug, Default)]
+pub struct RequestTls {
+    /// PEM CA certificates trusted in addition to the process store.
+    pub ca: Vec<u8>,
+    /// A client certificate to present.
+    pub identity: ClientIdentity,
+}
+
+impl RequestTls {
+    /// Whether the request asks for nothing beyond the defaults.
+    pub fn is_empty(&self) -> bool {
+        self.ca.is_empty() && self.identity.is_empty()
+    }
 }
 
 /// What a [`NetTransport`] does when the server answers with a redirect.
@@ -1128,6 +1147,61 @@ pub struct SocketInfo {
     /// Negotiated ALPN protocol for a TLS connection (`None` for plaintext, a
     /// failed negotiation, or a listener). Surfaces as WinterTC `SocketInfo.alpn`.
     pub alpn: Option<String>,
+    /// The certificate the peer presented and the server verified — set only
+    /// on a connection accepted by a listener that requires client
+    /// certificates (D201).
+    pub peer_certificate: Option<Arc<PeerCertificate>>,
+}
+
+/// A verified peer certificate, as a program reads it (D201). Node's field
+/// names where it has one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PeerCertificate {
+    /// The certificate, DER-encoded.
+    pub raw: Vec<u8>,
+    /// SHA-256 of `raw` as colon-separated upper-case hex.
+    pub fingerprint256: String,
+    /// The subject's attributes by short name (`CN`, `O`, `OU`, `C`, `ST`,
+    /// `L`), in the order the certificate lists them.
+    pub subject: Vec<(String, String)>,
+    /// The subject alternative names, `"DNS:a, URI:b, IP Address:c, email:d"`.
+    pub subjectaltname: String,
+    /// `notBefore`, epoch milliseconds.
+    pub valid_from: f64,
+    /// `notAfter`, epoch milliseconds.
+    pub valid_to: f64,
+}
+
+/// A certificate a TLS client presents (D201): a PEM chain, leaf first, and
+/// its PEM private key. Both empty ⇒ none.
+#[derive(Clone, Debug, Default)]
+pub struct ClientIdentity {
+    /// PEM certificate chain, leaf first.
+    pub cert: Vec<u8>,
+    /// PEM private key belonging to the leaf.
+    pub key: Vec<u8>,
+}
+
+impl ClientIdentity {
+    /// Whether no certificate is presented.
+    pub fn is_empty(&self) -> bool {
+        self.cert.is_empty() && self.key.is_empty()
+    }
+}
+
+/// A replacement for a running TLS server's credentials (D200). A field left
+/// `None` keeps its current value.
+#[derive(Clone, Debug, Default)]
+pub struct SecureContext {
+    /// PEM certificate chain, leaf first.
+    pub cert: Option<Vec<u8>>,
+    /// PEM private key.
+    pub key: Option<Vec<u8>>,
+    /// PEM CA client certificates must chain to (a server with
+    /// `requestCert`).
+    pub ca: Option<Vec<u8>>,
+    /// PEM CRLs client certificates are checked against.
+    pub crl: Option<Vec<u8>>,
 }
 
 /// Options for [`NetProvider::connect`], mirroring the TLS-relevant members of
@@ -1149,6 +1223,8 @@ pub struct ConnectOptions {
     pub sni: Option<String>,
     /// ALPN protocols to offer, in preference order (empty ⇒ none).
     pub alpn: Vec<String>,
+    /// A client certificate to present (D201). Empty ⇒ none.
+    pub identity: ClientIdentity,
 }
 
 /// A DNS question for [`NetProvider::resolve_dns`].
@@ -1221,6 +1297,12 @@ pub struct ListenOptions {
     pub key: Vec<u8>,
     /// ALPN protocols to advertise, in preference order (empty ⇒ none).
     pub alpn: Vec<String>,
+    /// Require a client certificate on every connection (`requestCert`, D201).
+    pub request_cert: bool,
+    /// PEM CA client certificates must chain to. Required with `request_cert`.
+    pub client_ca: Vec<u8>,
+    /// PEM CRLs client certificates are checked against (D202).
+    pub crl: Vec<u8>,
     /// Allow several processes to bind this same address, letting the kernel
     /// balance new connections across them (`SO_REUSEPORT`).
     ///
@@ -1416,9 +1498,19 @@ pub trait NetProvider: Send + Sync {
         server_name: String,
         alpn: Vec<String>,
         ca: Vec<u8>,
+        identity: ClientIdentity,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
-        let _ = (id, server_name, alpn, ca);
+        let _ = (id, server_name, alpn, ca, identity);
         Box::pin(async { Err(ProviderError::Other("startTls is not supported".into())) })
+    }
+
+    /// Replaces TLS listener `id`'s credentials for the connections it
+    /// accepts from now on (D200). The default errors.
+    fn set_secure_context(&self, id: u64, context: SecureContext) -> Result<(), ProviderError> {
+        let _ = (id, context);
+        Err(ProviderError::Other(
+            "setSecureContext is not supported".into(),
+        ))
     }
 
     /// Opens a Unix domain stream socket to `path` (D140); resolves to (socket
@@ -2145,6 +2237,10 @@ pub struct HttpServerRequest {
     /// The peer's port, or `0` when unknown. Mirrors
     /// [`SocketInfo`](SocketInfo::remote_port)'s convention.
     pub remote_port: u16,
+    /// The client certificate the connection presented and the server
+    /// verified (D201); `None` unless the server requires one. Shared by
+    /// every request on the connection.
+    pub peer_certificate: Option<Arc<PeerCertificate>>,
 }
 
 /// The response a guest hands back for one [`HttpServerRequest`].
@@ -2333,6 +2429,12 @@ pub struct HttpServerTls {
     /// `["h2", "http/1.1"]` — ALPN order is the server's preference — which is
     /// what `runtime:http` `serve` sends when the guest names no `alpn`.
     pub alpn: Vec<String>,
+    /// Require a client certificate on every connection (`requestCert`, D201).
+    pub request_cert: bool,
+    /// PEM CA client certificates must chain to. Required with `request_cert`.
+    pub client_ca: Vec<u8>,
+    /// PEM CRLs client certificates are checked against (D202).
+    pub crl: Vec<u8>,
 }
 
 /// An HTTP server backing `runtime:http` (the `serve((req) => res)` shape).
@@ -2381,6 +2483,15 @@ pub trait HttpServerProvider: Send + Sync {
         request_id: u64,
         response: HttpServerResponse,
     ) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Replaces TLS server `id`'s credentials for the connections it accepts
+    /// from now on (D200). The default errors.
+    fn set_secure_context(&self, id: u64, context: SecureContext) -> Result<(), ProviderError> {
+        let _ = (id, context);
+        Err(ProviderError::Other(
+            "setSecureContext is not supported".into(),
+        ))
+    }
 
     /// Watches request `request_id` for its client going away *before* a
     /// response was handed over — what backs the handler's `request.signal`, so

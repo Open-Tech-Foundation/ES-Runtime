@@ -111,6 +111,9 @@ pub(crate) fn install(
                 // its own — and it can only ever make verification accept
                 // *more* certificates, never skip it.
                 ca: arg_bytes(&args, 5),
+                // A client certificate (D201): presented, never a way around
+                // verifying the server.
+                identity: identity(&args, 6),
             };
             Box::pin(async move {
                 let (id, info) = require(&n)?
@@ -136,10 +139,11 @@ pub(crate) fn install(
         let server_name = arg_str(&args, 1);
         let alpn = arg_str_vec(&args, 2);
         let ca = arg_bytes(&args, 3);
+        let identity = identity(&args, 4);
         Box::pin(async move {
             let id = owned.check(id)?;
             let (new_id, info) = require(&n)?
-                .start_tls(id, server_name, alpn, ca)
+                .start_tls(id, server_name, alpn, ca, identity)
                 .await
                 .map_err(map_err)?;
             owned.release(id);
@@ -228,6 +232,11 @@ pub(crate) fn install(
                 alpn: arg_str_vec(&args, 4),
                 // `SO_REUSEPORT`: several processes sharing one listening port.
                 reuse_port: matches!(args.get(5), Some(Value::Bool(true))),
+                // Client certificates (D201, D202): required, the CA they must
+                // chain to, and the CRLs that revoke them.
+                request_cert: arg_bool(&args, 6),
+                client_ca: arg_bytes(&args, 7),
+                crl: arg_bytes(&args, 8),
             };
             Box::pin(async move {
                 let (id, info) = require(&n)?
@@ -278,6 +287,19 @@ pub(crate) fn install(
                 .map_err(map_err)?;
             Ok(Value::Undefined)
         })
+    }))?;
+
+    // Replaces a TLS listener's credentials for connections it accepts from
+    // now on (D200). No capability: the listener is already this agent's, and
+    // the material is inline, as at bind.
+    let n = net.clone();
+    let owned = listeners.clone();
+    engine.register_op(OpDecl::sync("net_set_secure_context", move |args| {
+        let id = owned.check(arg_u64(&args, 0))?;
+        require(&n)?
+            .set_secure_context(id, secure_context(&args, 1))
+            .map_err(map_err)?;
+        Ok(Value::Undefined)
     }))?;
 
     // Unix domain sockets (D140): the same capabilities as their TCP
@@ -785,5 +807,64 @@ fn socket_value(id: u64, info: &SocketInfo) -> Value {
             "alpn".to_string(),
             info.alpn.clone().map(Value::String).unwrap_or(Value::Null),
         ),
+        (
+            "peerCertificate".to_string(),
+            info.peer_certificate
+                .as_deref()
+                .map_or(Value::Null, peer_certificate_value),
+        ),
     ])
+}
+
+/// A verified peer certificate as the guest reads it (D201): Node's field
+/// names, with the validity as epoch milliseconds.
+pub(crate) fn peer_certificate_value(cert: &es_runtime_providers::PeerCertificate) -> Value {
+    Value::Object(vec![
+        (
+            "subject".to_string(),
+            Value::Object(
+                cert.subject
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                    .collect(),
+            ),
+        ),
+        (
+            "subjectaltname".to_string(),
+            Value::String(cert.subjectaltname.clone()),
+        ),
+        (
+            "fingerprint256".to_string(),
+            Value::String(cert.fingerprint256.clone()),
+        ),
+        ("raw".to_string(), Value::Bytes(cert.raw.clone())),
+        ("validFrom".to_string(), Value::Number(cert.valid_from)),
+        ("validTo".to_string(), Value::Number(cert.valid_to)),
+    ])
+}
+
+/// The client certificate in `args[at]` (cert) and `args[at + 1]` (key).
+pub(crate) fn identity(args: &[Value], at: usize) -> es_runtime_providers::ClientIdentity {
+    es_runtime_providers::ClientIdentity {
+        cert: arg_bytes(args, at),
+        key: arg_bytes(args, at + 1),
+    }
+}
+
+/// A `setSecureContext` update from `args[at..at + 4]`: cert, key, ca, crl,
+/// each `null` to keep the current value.
+pub(crate) fn secure_context(args: &[Value], at: usize) -> es_runtime_providers::SecureContext {
+    // PEM arrives as a string from `runtime:http` and as bytes from
+    // `runtime:net`; `null` keeps the current value.
+    let field = |i: usize| match args.get(at + i) {
+        Some(Value::Bytes(bytes)) => Some(bytes.clone()),
+        Some(Value::String(text)) => Some(text.as_bytes().to_vec()),
+        _ => None,
+    };
+    es_runtime_providers::SecureContext {
+        cert: field(0),
+        key: field(1),
+        ca: field(2),
+        crl: field(3),
+    }
 }

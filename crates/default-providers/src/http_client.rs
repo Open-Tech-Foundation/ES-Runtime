@@ -173,8 +173,25 @@ impl HttpClient {
         Self::with_connect_timeout(trust, CONNECT_TIMEOUT)
     }
 
+    /// A client for requests that bring their own TLS material (D201):
+    /// `ca` trusted in addition to `trust`, and `identity` presented. Its pool
+    /// is its own, so a connection that presented a client certificate is
+    /// never reused for a request that did not ask for one.
+    pub fn with_tls(
+        trust: &TrustStore,
+        ca: &[u8],
+        identity: &es_runtime_providers::ClientIdentity,
+    ) -> Result<Self, ProviderError> {
+        let config = trust.client_config_for(ca, identity, &["h2", "http/1.1"])?;
+        Ok(Self::from_config(config, CONNECT_TIMEOUT))
+    }
+
     /// As [`new`](Self::new), with a different connect deadline.
     pub fn with_connect_timeout(trust: &TrustStore, timeout: Duration) -> Self {
+        Self::from_config(trust.client_config(&["h2", "http/1.1"]), timeout)
+    }
+
+    fn from_config(config: tokio_rustls::rustls::ClientConfig, timeout: Duration) -> Self {
         let mut http = HttpConnector::new();
         // `https` URIs are this connector's to wrap in TLS, below.
         http.enforce_http(false);
@@ -185,7 +202,7 @@ impl HttpClient {
         // The deadline covers DNS, TCP and TLS together, around the whole
         // connector; this one would bound only the TCP connect.
         http.set_connect_timeout(None);
-        let tls = TlsConnector::from(Arc::new(trust.client_config(&["h2", "http/1.1"])));
+        let tls = TlsConnector::from(Arc::new(config));
         let connector = Connector { http, tls, timeout };
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(POOL_IDLE)

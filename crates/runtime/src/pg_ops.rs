@@ -93,6 +93,8 @@ pub(crate) fn install(
                     cache_limit: arg_u64(&args, 6) as usize,
                     binary_oids: numbers(args.get(7)),
                     nonce,
+                    // `sslCert`/`sslKey` (D201), after the ticket.
+                    identity: crate::net_ops::identity(&args, 9),
                 };
                 Box::pin(async move {
                     filled.map_err(|e| OpError::new(ExceptionClass::Error, e.to_string()))?;
@@ -102,6 +104,7 @@ pub(crate) fn install(
                         port: options.port,
                         sslmode: options.sslmode,
                         ca: options.ca.clone(),
+                        identity: options.identity.clone(),
                         process_id: 0,
                         secret_key: 0,
                     };

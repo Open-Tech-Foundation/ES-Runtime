@@ -37,6 +37,7 @@ esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
 esrun --tls-ca=<file|bundled>
                             Trust exactly these CAs for every TLS client;
                             repeatable (default: the bundled Mozilla roots)
+esrun --tls-crl=<file>      Check servers against these CRLs; repeatable
 esrun upgrade               Update esrun to the latest release
 esrun -h, --help            Show this help
 esrun -v, --version         Show the version
@@ -78,6 +79,7 @@ script that genuinely wants a flag esrun also knows.
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
 | `--tls-ca=<file\|bundled>` | The certificate authorities every TLS client trusts; repeatable. Default: the bundled Mozilla roots. See [TLS trust](#tls-trust). |
+| `--tls-crl=<file>` | CRLs every TLS client checks servers against; repeatable. See [TLS trust](#tls-trust). |
 | `--otel[=<url>]` | Export OpenTelemetry traces to a collector. Bare, it uses `http://localhost:4318`. The **runtime** exports — your program needs no capability and no code. See [Telemetry](#telemetry). |
 | `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
 | `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |
@@ -315,6 +317,13 @@ A path is relative to the working directory; a file named `bundled` is written
 - holds a private key, a certificate request, a CRL or a public key;
 - has a certificate that is malformed, expired or not yet valid;
 - is given twice.
+
+`--tls-crl=<file>` (repeatable, PEM `X509 CRL` blocks) adds revocation. A
+certificate whose issuer has a CRL in the set is refused when the CRL lists it,
+or when the CRL is past its `nextUpdate`; certificates from other issuers are
+not affected. The file is checked at startup like a `--tls-ca` file, including
+a CRL already past its `nextUpdate`. Nothing is fetched over the network: no
+OCSP, no CRL distribution points.
 
 Nothing else changes trust: no environment variable (`SSL_CERT_FILE`,
 `NODE_EXTRA_CA_CERTS`, `DENO_CERT` and the like are ignored, and esrun warns

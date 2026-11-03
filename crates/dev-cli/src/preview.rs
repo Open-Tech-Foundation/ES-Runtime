@@ -48,6 +48,8 @@ pub struct PreviewConfig {
     pub spa: bool,
     /// `--tls-ca`: what an `https` proxy target is verified against (D197).
     pub tls_ca: Vec<es_runtime_default_providers::TrustSource>,
+    /// `--tls-crl`: the CRLs that target is checked against (D202).
+    pub tls_crl: Vec<std::path::PathBuf>,
 }
 
 /// The port a preview opens when none was named.
@@ -111,7 +113,8 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         reload,
         error,
         proxy: crate::proxy::Rule::from_config(&project.start.proxy),
-        trust: es_runtime_default_providers::TrustStore::load(&config.tls_ca)?,
+        trust: es_runtime_default_providers::TrustStore::load(&config.tls_ca)?
+            .with_crl_files(&config.tls_crl)?,
         miss: if config.spa {
             crate::devserver::Miss::Spa
         } else {

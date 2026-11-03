@@ -85,6 +85,50 @@ file, and `--tls-ca=/etc/ssl/certs/ca-certificates.crt` uses it.
 For the same reason, `fetch` and the exporter ignore `HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY`.
 
+## Replacing a certificate while serving
+
+Certificate lifetimes are shrinking: the CA/Browser Forum's ballot SC-081 takes
+the maximum from 398 days to 47 by 2029, so renewal is routine rather than an
+event. A server's TLS configuration therefore sits behind a lock, read once
+per accepted connection. `setSecureContext` builds the replacement, checks that
+the key belongs to the certificate, and swaps it in; a connection that is
+already open keeps the configuration it started with, so nothing is dropped.
+A replacement that fails the check changes nothing.
+
+The new files are read by the program, under its own read grant, and passed
+inline — the runtime never watches a path, because a file read halfway through
+its renewal would be served.
+
+## Client certificates
+
+A server with `requestCert` verifies every client against the `ca` it was given
+and nothing else. The public roots are never a default here: client identities
+belong to a private PKI, and accepting any certificate a public CA signed would
+admit anyone who owns a domain. There is no `rejectUnauthorized` and no optional
+mode, because a certificate that was not verified identifies nobody.
+
+The verified certificate reaches the program with Node's field names. Its
+subject and alternative names are read by the same bounded DER reader the
+trust store uses for validity dates, not by an X.509 library.
+
+On the client side, a connection that presents a certificate is never shared
+with one that does not: `runtime:net` keys its cached configurations by the
+certificate's digest, and a `fetch` with a `tls` member gets a connection pool
+of its own.
+
+## Revocation
+
+Revocation is checked offline, against CRLs the operator supplies:
+`--tls-crl` for every client, and `crl` on a server that requires client
+certificates. Only issuers with a CRL in the set are checked, so naming a
+private CA's list does not refuse every public site. A CRL past its
+`nextUpdate` refuses what it covers — an outdated list cannot say a certificate
+is still good — and one already outdated at startup stops the process.
+
+Nothing is fetched over the network. OCSP tells a CA every destination and
+fails open or closed when the responder is down, and public CAs are retiring
+it: Let's Encrypt shut its responders down in August 2025.
+
 ## Post-quantum key exchange
 
 Every client and server prefers the hybrid X25519MLKEM768 key exchange — X25519

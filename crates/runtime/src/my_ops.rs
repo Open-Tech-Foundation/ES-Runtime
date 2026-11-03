@@ -79,6 +79,8 @@ pub(crate) fn install(
                     allow_public_key_retrieval: matches!(args.get(8), Some(Value::Bool(true))),
                     cache_limit: arg_u64(&args, 9) as usize,
                     statement_timeout_ms: args.get(10).and_then(Value::as_number).map(|n| n as u64),
+                    // `sslCert`/`sslKey` (D201), after the ticket.
+                    identity: crate::net_ops::identity(&args, 12),
                 };
                 let ticket = arg_u64(&args, 11);
                 Box::pin(async move {

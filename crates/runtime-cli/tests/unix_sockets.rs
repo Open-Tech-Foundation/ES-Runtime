@@ -151,6 +151,8 @@ fn the_program_must_give_an_absolute_plaintext_path_alone() {
           ['relative', () => listen({ path: 'app.sock' }).addr],\
           ['with port', () => listen({ path: '/tmp/x.sock', port: 80 }).addr],\
           ['with tls', () => connect({ path: '/tmp/x.sock' }, { secureTransport: 'on' }).opened],\
+          ['with a client certificate', () => connect({ path: '/tmp/x.sock' }, { cert: 'a', key: 'b' }).opened],\
+          ['with requestCert', () => listen({ path: '/tmp/x.sock', requestCert: true }).addr],\
           ['empty', () => connect({ path: '' }).opened],\
         ];\
         for (const [what, fn] of tries) {\
@@ -169,6 +171,11 @@ fn the_program_must_give_an_absolute_plaintext_path_alone() {
     );
     assert!(text.contains("with port TypeError - true"), "{text}");
     assert!(text.contains("with tls TypeError - true"), "{text}");
+    assert!(
+        text.contains("with a client certificate TypeError - true"),
+        "{text}"
+    );
+    assert!(text.contains("with requestCert TypeError - true"), "{text}");
     assert!(text.contains("empty TypeError - true"), "{text}");
 }
 

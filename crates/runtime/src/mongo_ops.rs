@@ -145,6 +145,8 @@ pub(crate) fn install(
                     mechanism: args.get(9).and_then(Value::as_str).map(str::to_string),
                     app_name: args.get(10).and_then(Value::as_str).map(str::to_string),
                     max_pool: usize::try_from(arg_u64(&args, 11)).unwrap_or(1).max(1),
+                    // `cert`/`key` (D201), after the ticket.
+                    identity: crate::net_ops::identity(&args, 15),
                 };
                 let heartbeat = i64::try_from(arg_u64(&args, 12)).unwrap_or(10_000);
                 #[expect(clippy::cast_precision_loss, reason = "milliseconds")]

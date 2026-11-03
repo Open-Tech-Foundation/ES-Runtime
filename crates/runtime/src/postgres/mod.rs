@@ -39,6 +39,8 @@ pub(crate) struct Options {
     pub sslmode: SslMode,
     /// Extra trust anchors (PEM); empty ⇒ the provider's roots.
     pub ca: Vec<u8>,
+    /// A client certificate to present (D201).
+    pub identity: es_runtime_providers::ClientIdentity,
     /// The startup packet's parameters, `user` and `database` among them.
     pub params: Vec<(String, String)>,
     /// Already normalized (NFKC) by the driver.
@@ -137,6 +139,8 @@ pub(crate) struct CancelTarget {
     pub port: u16,
     pub sslmode: SslMode,
     pub ca: Vec<u8>,
+    /// A client certificate to present (D201).
+    pub identity: es_runtime_providers::ClientIdentity,
     pub process_id: i32,
     pub secret_key: i32,
 }
@@ -187,9 +191,7 @@ impl Connection {
                 options.port,
                 ConnectOptions {
                     secure: false,
-                    ca: Vec::new(),
-                    sni: None,
-                    alpn: Vec::new(),
+                    ..ConnectOptions::default()
                 },
             )
             .await
@@ -244,6 +246,7 @@ impl Connection {
                         options.host.clone(),
                         Vec::new(),
                         options.ca.clone(),
+                        options.identity.clone(),
                     )
                     .await
                     .map_err(|e| self.die(provider_message(&e)))?;
@@ -850,9 +853,7 @@ pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> R
             target.port,
             ConnectOptions {
                 secure: false,
-                ca: Vec::new(),
-                sni: None,
-                alpn: Vec::new(),
+                ..ConnectOptions::default()
             },
         )
         .await
@@ -871,7 +872,13 @@ pub(crate) async fn cancel(net: Arc<dyn NetProvider>, target: CancelTarget) -> R
             };
             if answer == b'S' {
                 socket = net
-                    .start_tls(socket, target.host.clone(), Vec::new(), target.ca.clone())
+                    .start_tls(
+                        socket,
+                        target.host.clone(),
+                        Vec::new(),
+                        target.ca.clone(),
+                        target.identity.clone(),
+                    )
                     .await
                     .map_err(|e| Failure::Lost(provider_message(&e)))?
                     .0;

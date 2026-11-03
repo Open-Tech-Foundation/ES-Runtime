@@ -45,6 +45,9 @@ pub(crate) struct Options {
     pub tls: bool,
     /// Extra trust anchors, PEM.
     pub ca: Vec<u8>,
+    /// A client certificate to present (D201), and the identity
+    /// `MONGODB-X509` authenticates as.
+    pub identity: es_runtime_providers::ClientIdentity,
     pub user: Option<String>,
     /// The password as given, for SCRAM-SHA-1's digest.
     pub password: String,
@@ -114,8 +117,8 @@ impl Connection {
                 ConnectOptions {
                     secure: options.tls,
                     ca: options.ca.clone(),
-                    sni: None,
-                    alpn: Vec::new(),
+                    identity: options.identity.clone(),
+                    ..ConnectOptions::default()
                 },
             )
             .await
@@ -172,6 +175,13 @@ impl Connection {
         }
         if let Some(max) = int(&doc, "maxMessageSizeBytes").and_then(|n| usize::try_from(n).ok()) {
             self.max_message = max;
+        }
+        // X.509 authenticates as the certificate the TLS handshake presented,
+        // with no password and the user name optional (the server reads it
+        // from the certificate's subject).
+        if authenticate && options.mechanism.as_deref() == Some("MONGODB-X509") {
+            self.authenticate_x509(options).await?;
+            return Ok(Server { hello });
         }
         if let (true, Some(user)) = (authenticate, &options.user) {
             let offered = strings(&doc, "saslSupportedMechs");
@@ -261,6 +271,37 @@ impl Connection {
             }
         }
         Ok(())
+    }
+
+    /// `MONGODB-X509`: one `authenticate` command against `$external`.
+    async fn authenticate_x509(&mut self, options: &Options) -> Result<(), Failure> {
+        if !options.tls || options.identity.is_empty() {
+            return Err(Failure::Auth(
+                "MONGODB-X509 authenticates with a client certificate: pass tls with cert and key"
+                    .into(),
+            ));
+        }
+        let bad = |e: es_runtime_bson::Error| Failure::Unsupported(e.to_string());
+        let mut w = Writer::new();
+        w.start_document().map_err(bad)?;
+        w.key(kind::INT32, "authenticate").map_err(bad)?;
+        w.int32(1);
+        w.key(kind::STRING, "mechanism").map_err(bad)?;
+        w.string("MONGODB-X509").map_err(bad)?;
+        if let Some(user) = &options.user {
+            w.key(kind::STRING, "user").map_err(bad)?;
+            w.string(user).map_err(bad)?;
+        }
+        w.key(kind::STRING, "$db").map_err(bad)?;
+        w.string("$external").map_err(bad)?;
+        w.end_document().map_err(bad)?;
+        let reply = self.command(&w.finish().map_err(bad)?, None).await?;
+        let doc = Document::new(&reply)
+            .map_err(|e| Failure::Lost(format!("an authenticate reply is malformed: {e}")))?;
+        match check_ok(&doc) {
+            Err(Failure::Server { message, .. }) => Err(Failure::Auth(message)),
+            other => other,
+        }
     }
 
     async fn sasl(&mut self, command: &[u8]) -> Result<Sasl, Failure> {
@@ -517,6 +558,7 @@ mod tests {
             port: 27017,
             tls: false,
             ca: Vec::new(),
+            identity: Default::default(),
             user: user.map(str::to_string),
             password: String::new(),
             password_prepared: String::new(),

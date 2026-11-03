@@ -221,6 +221,20 @@ await fetch(url, { signal: AbortSignal.timeout(5000) }); // TimeoutError
 `fetch` verifies HTTPS servers against the process trust store: the bundled
 Mozilla roots, or what [`--tls-ca`](/api/cli#tls-trust) lists.
 
+A request can bring its own TLS material with `tls` (Bun's name):
+
+```js
+await fetch("https://billing.internal/", { tls: { ca, cert, key } });
+```
+
+| Member | |
+| --- | --- |
+| `ca` | PEM CA trusted for this request, in addition to the process store |
+| `cert`, `key` | A client certificate to present; together or not at all |
+
+A request with `tls` uses connections of its own. `rejectUnauthorized` is a
+`TypeError`: verification cannot be turned off.
+
 ## Proxies
 
 `fetch` connects to the host in the URL. `HTTP_PROXY`, `HTTPS_PROXY`,

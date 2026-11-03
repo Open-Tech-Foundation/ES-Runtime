@@ -28,7 +28,7 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ByteStream, HttpRequest, NetTransport, ProviderError, RedirectMode, RequestBody,
+    ByteStream, HttpRequest, NetTransport, ProviderError, RedirectMode, RequestBody, RequestTls,
 };
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
@@ -361,8 +361,9 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
 
 /// Parses the `fetch` op arguments and resolves any streaming request body.
 ///
-/// Layout: `[method, url, body?, bodyStreamId?, abortId?, follow, name0, value0,
-/// …]` — `body` is the buffered bytes (or null), `bodyStreamId` is the id from
+/// Layout: `[method, url, body?, bodyStreamId?, abortId?, follow, ca?, cert?,
+/// key?, name0, value0, …]` — `body` is the buffered bytes (or null),
+/// `ca`/`cert`/`key` are the init's `tls` member (D201), `bodyStreamId` is the id from
 /// `fetch_request_body_new` (or null) whose receiver becomes the request stream,
 /// `abortId` is the id from `fetch_abort_new` (or null), and `follow` is whether
 /// the transport should follow redirects. `abortId` is read by the caller, not
@@ -408,8 +409,22 @@ fn parse_request(
         _ => RedirectMode::Follow,
     };
 
+    let bytes = |i: usize| {
+        args.get(i)
+            .and_then(Value::as_bytes)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+    };
+    let tls = RequestTls {
+        ca: bytes(6),
+        identity: es_runtime_providers::ClientIdentity {
+            cert: bytes(7),
+            key: bytes(8),
+        },
+    };
+
     let mut headers = Vec::new();
-    let mut i = 6;
+    let mut i = 9;
     while i + 1 < args.len() {
         if let (Some(name), Some(value)) = (args[i].as_str(), args[i + 1].as_str()) {
             headers.push((name.to_string(), value.to_string()));
@@ -422,6 +437,7 @@ fn parse_request(
         headers,
         body,
         redirect,
+        tls,
     }
 }
 

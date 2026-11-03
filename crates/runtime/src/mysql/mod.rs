@@ -58,6 +58,8 @@ pub(crate) struct Options {
     pub port: u16,
     pub sslmode: SslMode,
     pub ca: Vec<u8>,
+    /// A client certificate to present (D201).
+    pub identity: es_runtime_providers::ClientIdentity,
     pub user: String,
     pub password: String,
     pub database: Option<String>,
@@ -193,9 +195,7 @@ impl Connection {
                 options.port,
                 ConnectOptions {
                     secure: false,
-                    ca: Vec::new(),
-                    sni: None,
-                    alpn: Vec::new(),
+                    ..ConnectOptions::default()
                 },
             )
             .await
@@ -293,7 +293,13 @@ impl Connection {
             self.write(request.finish(seq)).await?;
             let (socket, _) = self
                 .net
-                .start_tls(self.socket, options.host.clone(), Vec::new(), options.ca.clone())
+                .start_tls(
+                    self.socket,
+                    options.host.clone(),
+                    Vec::new(),
+                    options.ca.clone(),
+                    options.identity.clone(),
+                )
                 .await
                 .map_err(|e| {
                     Failure::Lost(format!(

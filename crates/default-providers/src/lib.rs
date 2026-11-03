@@ -37,6 +37,8 @@ pub mod http_client;
 mod jail;
 mod listener;
 mod modules;
+#[cfg(test)]
+mod mtls_tests;
 mod net;
 mod node_modules;
 mod path_allowlist;

@@ -622,6 +622,9 @@ class PgConnection extends BaseConnection {
       options.preparedStatementCacheSize === undefined
         ? 100
         : Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+    // A client certificate (D201): `sslCert` and `sslKey`, PEM, together or
+    // not at all. The key is checked against the certificate before
+    // connecting.
     const ca =
       options.sslRootCert === undefined
         ? PG_NO_PARAMS
@@ -640,6 +643,7 @@ class PgConnection extends BaseConnection {
       cacheLimit,
       pgBinaryOids(this._temporal),
       ticket,
+      ...pgClientIdentity(options, PG_ENCODER),
     );
     if (result.error !== undefined) {
       this._aside(result);
@@ -996,3 +1000,13 @@ const postgres = defineDriver({
 });
 
 export { postgres };
+
+// `sslCert`/`sslKey` as the two trailing connect arguments (D201).
+function pgClientIdentity(options, encoder) {
+  if ((options.sslCert === undefined) !== (options.sslKey === undefined)) {
+    throw new TypeError("a client certificate needs both sslCert and sslKey");
+  }
+  if (options.sslCert === undefined) return [null, null];
+  const pem = (v) => (typeof v === "string" ? encoder.encode(v) : v);
+  return [pem(options.sslCert), pem(options.sslKey)];
+}

@@ -13,6 +13,15 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- Mutual TLS, rotation and revocation (D200–D202): `runtime:net`'s
+  `PeerCertificate`, `SecureContext` and `Pem`; `requestCert`, `ca` and `crl`
+  on `listen` and `serve`; `cert`/`key` on `connect`; `setSecureContext` on
+  `Listener` and `Server`; `peerCertificate` on `SocketInfo` and the `serve`
+  handler's info; `tls` on `RequestInit`; `sslCert`/`sslKey` and MongoDB's
+  `cert`, `key`, `tlsCertificateKeyFile` and `MONGODB-X509`.
+
 ### Changed
 
 - `runtime:net` `connect`'s `ca` says it adds to the process trust store, the

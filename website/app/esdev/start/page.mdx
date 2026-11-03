@@ -128,6 +128,7 @@ pin the endpoint.
 | `--allow-read=<paths>` | Also watch explicitly granted read paths |
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 | `--tls-ca=<file\|bundled>` | The CAs the server and an `https` [proxy](#forward-api-requests) target are verified against, as [esrun's](/api/cli#tls-trust); repeatable |
+| `--tls-crl=<file>` | CRLs they are checked against, as [esrun's](/api/cli#tls-trust); repeatable |
 
 ```json
 "dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 8080 }, "outDir": ".dev" }

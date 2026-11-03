@@ -80,6 +80,7 @@ OPTIONS:
     --tls-ca=<file|bundled>     Trust exactly these CAs for every TLS client
                                 (repeatable; `bundled` is the public roots).
                                 Default: the bundled Mozilla roots
+    --tls-crl=<file>            Check servers against these CRLs (repeatable)
 
 Nothing is granted by default: a run reaches what the command line that started
 it named, and nothing else. Widen it in one of two directions, never both, so

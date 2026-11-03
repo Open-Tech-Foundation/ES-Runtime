@@ -836,8 +836,46 @@
     }
   }
 
+  // Bun's `tls: { ca, cert, key }` member of a fetch init (D201): a private CA
+  // trusted in addition to the process store, and a client certificate to
+  // present. PEM strings or bytes. Validated before anything is sent; there is
+  // no member that turns verification off.
+  function fetchTls(init) {
+    const tls = init?.tls;
+    if (tls === undefined || tls === null) return [null, null, null];
+    if (typeof tls !== "object") throw new TypeError("fetch: tls must be an object of ca, cert and key");
+    for (const name of Object.keys(tls)) {
+      if (name === "rejectUnauthorized" || name === "checkServerIdentity") {
+        throw new TypeError(
+          `fetch: tls.${name} is not supported — a server is always verified; name its CA with tls.ca`,
+        );
+      }
+      if (name !== "ca" && name !== "cert" && name !== "key") {
+        throw new TypeError(`fetch: tls does not take ${name}`);
+      }
+    }
+    if ((tls.cert == null) !== (tls.key == null)) {
+      throw new TypeError("fetch: a client certificate needs both tls.cert and tls.key");
+    }
+    const pem = (v) => {
+      if (v == null) return null;
+      if (typeof v === "object" && v[Symbol.for("runtime.secret.redacted")] === true) {
+        throw new TypeError(
+          "fetch: tls material is a masked Secret from env; pass unmask(env.…) from runtime:process",
+        );
+      }
+      if (typeof v === "string") return encoder.encode(v);
+      if (v instanceof Uint8Array) return v;
+      if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      if (v instanceof ArrayBuffer) return new Uint8Array(v);
+      throw new TypeError("fetch: tls.ca, tls.cert and tls.key are PEM strings or bytes");
+    };
+    return [pem(tls.ca), pem(tls.cert), pem(tls.key)];
+  }
+
   async function fetch(input, init) {
     const request = new Request(input, init);
+    const tls = fetchTls(init);
     const state = request[BODY];
     const signal = request.signal;
 
@@ -913,6 +951,7 @@
       bodyStreamId,
       abortId,
       request.redirect === "follow",
+      ...tls,
     ];
     for (const [name, value] of request[REQUEST_HEADERS]()) args.push(name, value);
 

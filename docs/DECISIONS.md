@@ -4190,3 +4190,58 @@ Deno replaced reqwest in `fetch` with a hyper-util client of its own (deno#24237
 **Rejected:** making it an option (there is no deployment that is better off without it); offering only the hybrid (most servers on the internet do not support it yet, and refusing them is no protection).
 
 **Consequences:** a ClientHello carries an ML-KEM key share, about 1.2 KB more. A test pins the negotiated group between our client and server, and fails if the feature is lost again.
+
+### D200 — A TLS server's certificate is replaced in place, by `setSecureContext` · *Accepted (2026-11-03)*
+
+**Context:** `serve` and `listen` built their TLS configuration once, at bind time, so a renewed certificate took effect only after a restart. CA/Browser Forum ballot SC-081 shortens the maximum public certificate lifetime from 398 days to 200 (March 2026), 100 (March 2027) and 47 (March 2029), so renewal becomes routine, and every restart drops or drains connections. Node replaces a live server's credentials with `server.setSecureContext({ key, cert, ca })` without interrupting existing connections; Bun's `server.reload()` cannot change TLS; Deno has no equivalent.
+
+**Decision (maintainer, 2026-11-03):**
+- **`server.setSecureContext({ cert, key })`** on a TLS server from `runtime:http` `serve` and a TLS listener from `runtime:net` `listen` — Node's name and shape. A server that requires client certificates (D201) also takes `ca` and `crl` there; an option the call leaves out keeps its current value, and `alpn` never changes.
+- **New handshakes only.** Each accepted connection takes the configuration current when it arrives; connections already open keep theirs, so nothing is dropped.
+- **Checked before it replaces anything.** The chain and key must parse and the key must belong to the certificate (its public key matches the leaf's); otherwise the call throws a `TypeError` and the server keeps serving its current certificate. A plaintext server has no context to set and throws.
+- **Inline material, as at bind** (D28): the program reads the new files itself, through `runtime:fs` and its read grant, so rotation needs no capability beyond what serving already holds.
+
+**Rejected:**
+- **Watching the certificate files** (some proxies do): ambient file access the program was not granted, and a half-written file read mid-renewal would be served.
+- **Restart-to-rotate** as the only way: the cost rises as lifetimes fall.
+- **A `reload()` that re-takes every option** (Bun's shape, which excludes TLS anyway): only the credentials change at runtime; the port, ALPN and limits are fixed for the server's life.
+
+**Consequences:** each TLS server holds its configuration behind a lock read once per accepted connection. Documented in `api/http`, `api/net` and internals `tls`.
+
+### D201 — Mutual TLS: client certificates in both directions, always verified · *Accepted (2026-11-03)*
+
+**Context:** no TLS client could present a certificate and no TLS server could ask for one. Service meshes, PostgreSQL `clientcert`, MySQL `REQUIRE X509`, MongoDB X.509 authentication and most internal APIs authenticate machines this way. Node takes `cert`/`key` on the client and `ca` + `requestCert` on the server, with `rejectUnauthorized: false` to accept a client that failed verification; Deno takes `cert`/`key` on `connectTls`; Bun takes `ca` + `requestCert` on `Bun.serve` and `tls: { ca, cert, key }` on `fetch`.
+
+**Decision (maintainer, 2026-11-03):**
+- **Clients present one with `cert` and `key`** (PEM, the chain leaf first), together or not at all, the key checked against the certificate before connecting:
+  - `runtime:net` `connect` and `startTls` take `cert` and `key` beside `ca`;
+  - the database drivers take `sslCert`/`sslKey` (PostgreSQL, MySQL — the camel-cased libpq names, as `sslRootCert` already is) and `cert`/`key` (MongoDB);
+  - `fetch` takes Bun's non-standard `tls: { ca, cert, key }` member of its init. A request with any of them gets a connection pool of its own, keyed by that material: a connection that presented a client certificate is never reused for a request that did not ask for it, and the reverse.
+- **Servers require one with `requestCert: true` and `ca`** on `serve` and `listen`. `ca` is required — client identities are a private PKI's, and accepting any certificate a public CA signed would let anyone with a domain in. A client with no certificate, or one that does not chain to `ca`, fails the handshake; there is no `rejectUnauthorized` and no optional mode.
+- **The verified certificate reaches the program**: `info.peerCertificate` in a `serve` handler and `socket.opened`'s `peerCertificate` for an accepted socket, using Node's field names where they exist — `subject` (`CN`, `O`, `OU`, `C`, `ST`, `L`), `subjectaltname` (`"DNS:a, URI:spiffe://b, IP Address:10.0.0.1, email:c"`), `fingerprint256` (colon-separated hex), `raw` (DER) — plus `validFrom`/`validTo` as epoch milliseconds instead of Node's OpenSSL date strings. `null` when the connection presented none.
+
+**Rejected:**
+- **`rejectUnauthorized: false`** and a request-but-not-require mode: a certificate that was not verified identifies nobody, and the option exists in Node to be set by mistake.
+- **Public roots as the default `ca` for client certificates**: see above.
+- **Client certificates for the whole process** (`--tls-client-cert`): which identity to present depends on the destination.
+- **Deno's `createHttpClient` object for `fetch`**: a second API to learn; Bun's `tls` member is one property on the call the program already writes.
+- **Parsing the subject with an X.509 crate**: the fields above are read by the same bounded DER reader the trust store uses for dates (D197).
+
+**Consequences:** `ConnectOptions`, `ListenOptions` and `HttpServerTls` gain the material; `SocketInfo` and `HttpServerRequest` gain the peer certificate. Documented in `api/http`, `api/net`, `api/db/connection`, the globals page and internals `tls`.
+
+### D202 — Revocation: operator-supplied CRLs, checked offline · *Accepted (2026-11-03)*
+
+**Context:** nothing checked whether a certificate had been revoked. OCSP is being retired by public CAs — Let's Encrypt ended its OCSP service in 2025 and publishes CRLs — and browsers rely on pushed revocation sets rather than live queries, because a live check leaks every destination to the CA and fails open or fails closed when the responder is down. For a private PKI, a CRL the operator distributes is the revocation mechanism, and mutual TLS (D201) makes it necessary: a leaked client key must be revocable without reissuing the CA. Node takes PEM `crl` in a secure context.
+
+**Decision (maintainer, 2026-11-03):**
+- **`--tls-crl=<file>`** (repeatable, PEM `X509 CRL` blocks) gives every TLS client CRLs to check servers against, read and validated at startup with the same fail-closed rules as `--tls-ca`.
+- **`crl`** on `serve`/`listen` (and `setSecureContext`) gives a server requiring client certificates CRLs to check them against.
+- **Only issuers with a CRL are checked.** A certificate whose issuer has no CRL in the set is not refused for it, so naming a private CA's CRL does not break every public site.
+- **A CRL past its `nextUpdate` refuses the certificates it covers.** An outdated list cannot say a certificate is still good; the operator refreshes the file and restarts, or calls `setSecureContext`.
+- **No network fetches**: no OCSP, no CRL distribution points.
+
+**Rejected:**
+- **OCSP and fetching CRL distribution points**: see above — a privacy leak and an availability dependency, being retired by the CAs that offered them.
+- **Ignoring an expired CRL** (rustls's default): revocation that silently stops working is worse than none, because it looks like it works.
+
+**Consequences:** `TrustStore` carries CRLs beside its anchors, and verifiers are built with them. Documented in `api/cli` and internals `tls`.

@@ -57,6 +57,44 @@ impl Ca {
     fn localhost(&self) -> (String, String) {
         self.server(&["localhost"], 2020, 2090)
     }
+
+    /// `(cert, key)` PEM for a certificate with subject CN `cn` and serial
+    /// `serial`, valid for `localhost`.
+    fn named(&self, cn: &str, serial: u64) -> (String, String) {
+        let mut params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+        params.distinguished_name.push(DnType::CommonName, cn);
+        params.serial_number = Some(rcgen::SerialNumber::from(serial));
+        let key = KeyPair::generate().unwrap();
+        let cert = params
+            .signed_by(&key, &Issuer::from_params(&self.params, &self.key))
+            .unwrap();
+        (cert.pem(), key.serialize_pem())
+    }
+
+    /// A CRL revoking `serials`, current until 2090.
+    fn crl(&self, serials: &[u64]) -> String {
+        let params = rcgen::CertificateRevocationListParams {
+            this_update: rcgen::date_time_ymd(2021, 1, 1),
+            next_update: rcgen::date_time_ymd(2090, 1, 1),
+            crl_number: rcgen::SerialNumber::from(1u64),
+            issuing_distribution_point: None,
+            revoked_certs: serials
+                .iter()
+                .map(|&serial| rcgen::RevokedCertParams {
+                    serial_number: rcgen::SerialNumber::from(serial),
+                    revocation_time: rcgen::date_time_ymd(2021, 1, 1),
+                    reason_code: None,
+                    invalidity_date: None,
+                })
+                .collect(),
+            key_identifier_method: rcgen::KeyIdMethod::Sha256,
+        };
+        params
+            .signed_by(&Issuer::from_params(&self.params, &self.key))
+            .unwrap()
+            .pem()
+            .unwrap()
+    }
 }
 
 /// Writes `contents` to a file of this test's own and returns its path.
@@ -452,5 +490,255 @@ fn tls_ca_after_the_script_is_refused() {
         stderr(&out).contains("--tls-ca=bundled appears after"),
         "{}",
         stderr(&out)
+    );
+}
+
+/// Runs `script` with the grants these tests need and `env`, returning stdout
+/// and stderr. `flags` go before the script.
+fn run_script(name: &str, script: &str, flags: &[String], env: &[(&str, &str)]) -> Output {
+    let app = file(name, script);
+    let mut command = Command::new(common::esrun_bin());
+    command
+        .current_dir(common::tmpdir())
+        .args(["--allow-net", "--allow-listen", "--allow-env"])
+        .args(flags)
+        .arg(&app);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    command.output().expect("spawn esrun")
+}
+
+/// A `serve` that requires client certificates from `CLIENT_CA` and answers
+/// with the CN it verified; then `fetch`es itself three ways.
+const MTLS_SERVE: &str = r#"
+import { serve } from "runtime:http";
+import { env, unmask } from "runtime:process";
+const server = serve(
+  {
+    hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: unmask(env.KEY),
+    requestCert: true, ca: env.CLIENT_CA,
+  },
+  (request, info) => new Response(info.peerCertificate?.subject.CN ?? "none"),
+);
+const { port } = await server.addr;
+const url = `https://localhost:${port}/`;
+const attempt = async (init) => {
+  try { return await (await fetch(url, { ...init, signal: AbortSignal.timeout(5000) })).text(); }
+  catch (e) { return e.name === "TypeError" && /tls\./.test(e.message) ? "invalid" : "refused"; }
+};
+const withCert = await attempt({ tls: { ca: env.SERVER_CA, cert: env.CLIENT_CERT, key: unmask(env.CLIENT_KEY) } });
+const withoutCert = await attempt({ tls: { ca: env.SERVER_CA } });
+const skipping = await attempt({ tls: { ca: env.SERVER_CA, rejectUnauthorized: false } });
+console.log(`with=${withCert} without=${withoutCert} skipping=${skipping}`);
+await server.stop();
+"#;
+
+// D201 end to end: `fetch`'s `tls` member presents a certificate, the server
+// requires one, and the handler reads who it was.
+#[test]
+fn fetch_presents_a_client_certificate_a_server_requires() {
+    let server_ca = Ca::new("Server CA");
+    let client_ca = Ca::new("Client CA");
+    let (cert, key) = server_ca.localhost();
+    let (client_cert, client_key) = client_ca.named("billing", 5);
+    let out = run_script(
+        "mtls-serve.mjs",
+        MTLS_SERVE,
+        &[],
+        &[
+            ("CERT", &cert),
+            ("KEY", &key),
+            ("SERVER_CA", &server_ca.pem),
+            ("CLIENT_CA", &client_ca.pem),
+            ("CLIENT_CERT", &client_cert),
+            ("CLIENT_KEY", &client_key),
+        ],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("with=billing without=refused skipping=invalid"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+// The same over `runtime:net`, with a CRL: a revoked client is refused and the
+// accepted socket carries the verified certificate.
+#[test]
+fn a_listener_requires_and_revokes_client_certificates() {
+    let server_ca = Ca::new("Server CA");
+    let client_ca = Ca::new("Client CA");
+    let (cert, key) = server_ca.localhost();
+    let (good_cert, good_key) = client_ca.named("good", 1);
+    let (bad_cert, bad_key) = client_ca.named("revoked", 2);
+    let script = r#"
+import { connect, listen } from "runtime:net";
+import { env, unmask } from "runtime:process";
+const server = listen({
+  hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: unmask(env.KEY),
+  requestCert: true, ca: env.CLIENT_CA, crl: env.CRL,
+});
+const { port } = await server.addr;
+const seen = [];
+(async () => { for await (const socket of server) { const info = await socket.opened; seen.push(info.peerCertificate.subject.CN); await socket.close(); } })();
+const dial = async (cert, key) => {
+  const socket = connect({ hostname: "localhost", port }, { secureTransport: "on", ca: env.SERVER_CA, cert, key });
+  try { await socket.opened; await socket.writable.getWriter().write(new Uint8Array([1])); } catch {}
+  await new Promise((r) => setTimeout(r, 300));
+  try { await socket.close(); } catch {}
+};
+await dial(env.GOOD_CERT, unmask(env.GOOD_KEY));
+await dial(env.BAD_CERT, unmask(env.BAD_KEY));
+await dial(undefined, undefined);
+console.log("SEEN:" + seen.join(","));
+await server.close();
+"#;
+    let out = run_script(
+        "mtls-listen.mjs",
+        script,
+        &[],
+        &[
+            ("CERT", &cert),
+            ("KEY", &key),
+            ("SERVER_CA", &server_ca.pem),
+            ("CLIENT_CA", &client_ca.pem),
+            ("CRL", &client_ca.crl(&[2])),
+            ("GOOD_CERT", &good_cert),
+            ("GOOD_KEY", &good_key),
+            ("BAD_CERT", &bad_cert),
+            ("BAD_KEY", &bad_key),
+        ],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("SEEN:good\n"), "{}", stdout(&out));
+}
+
+// D200: a running server presents a new certificate to new connections, and
+// a replacement whose key does not match is refused with the old one kept.
+#[test]
+fn set_secure_context_rotates_a_running_server() {
+    let old_ca = Ca::new("Old CA");
+    let new_ca = Ca::new("New CA");
+    let (old_cert, old_key) = old_ca.localhost();
+    let (new_cert, new_key) = new_ca.localhost();
+    let (_, other_key) = new_ca.localhost();
+    let script = r#"
+import { serve } from "runtime:http";
+import { connect } from "runtime:net";
+import { env, unmask } from "runtime:process";
+const server = serve(
+  { hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.OLD_CERT, key: unmask(env.OLD_KEY) },
+  () => new Response("ok"),
+);
+const { port } = await server.addr;
+// A fresh connection each time, verifying against one CA.
+const trusts = async (ca) => {
+  const socket = connect({ hostname: "localhost", port }, { secureTransport: "on", ca });
+  try { await socket.opened; await socket.close(); return true; } catch { return false; }
+};
+const before = [await trusts(env.OLD_CA), await trusts(env.NEW_CA)];
+let mismatch = "accepted";
+try { await server.setSecureContext({ cert: env.NEW_CERT, key: unmask(env.OTHER_KEY) }); }
+catch (e) { mismatch = e.name; }
+const afterMismatch = [await trusts(env.OLD_CA), await trusts(env.NEW_CA)];
+await server.setSecureContext({ cert: env.NEW_CERT, key: unmask(env.NEW_KEY) });
+const after = [await trusts(env.OLD_CA), await trusts(env.NEW_CA)];
+let unknown = "accepted";
+try { await server.setSecureContext({ passphrase: "x" }); } catch (e) { unknown = e.name; }
+console.log(`before=${before} mismatch=${mismatch} kept=${afterMismatch} after=${after} unknown=${unknown}`);
+await server.stop();
+"#;
+    let out = run_script(
+        "rotate.mjs",
+        script,
+        &[],
+        &[
+            ("OLD_CERT", &old_cert),
+            ("OLD_KEY", &old_key),
+            ("NEW_CERT", &new_cert),
+            ("NEW_KEY", &new_key),
+            ("OTHER_KEY", &other_key),
+            ("OLD_CA", &old_ca.pem),
+            ("NEW_CA", &new_ca.pem),
+        ],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "before=true,false mismatch=TypeError kept=true,false after=false,true unknown=TypeError"
+        ),
+        "{}",
+        stdout(&out)
+    );
+}
+
+// D202, client side: `--tls-crl` refuses a revoked server for every client.
+#[test]
+fn tls_crl_refuses_a_revoked_server() {
+    let ca = Ca::new("Private CA");
+    let pem = file("crl-ca.pem", &ca.pem);
+    let crl = file("server.crl", &ca.crl(&[9]));
+    let revoked = ca.named("revoked", 9);
+    let flags = [tls_ca(&pem), format!("--tls-crl={}", crl.display())];
+    assert_clients(&all_clients(&revoked, &flags), REFUSED);
+    let good = ca.named("good", 10);
+    assert_clients(&all_clients(&good, &flags), TRUSTED);
+}
+
+#[test]
+fn a_crl_file_that_cannot_be_used_stops_startup() {
+    let ca = Ca::new("Private CA");
+    for (what, path, message) in [
+        (
+            "missing",
+            common::tmpdir().join("tls-trust/no.crl"),
+            "cannot read it",
+        ),
+        (
+            "a certificate",
+            file("not-a.crl", &ca.pem),
+            "CERTIFICATE block",
+        ),
+    ] {
+        let err = refused_at_startup(&[format!("--tls-crl={}", path.display())]);
+        assert!(err.contains(message), "{what}: {err}");
+    }
+}
+
+// Every way to ask a server to accept a client it did not verify is refused
+// before anything is bound.
+#[test]
+fn client_certificate_options_are_validated() {
+    let ca = Ca::new("CA");
+    let (cert, key) = ca.localhost();
+    let script = r#"
+import { serve } from "runtime:http";
+import { listen } from "runtime:net";
+import { env, unmask } from "runtime:process";
+const tls = { hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: unmask(env.KEY) };
+const cases = [
+  () => serve({ ...tls, requestCert: true }, () => new Response()),
+  () => serve({ ...tls, ca: env.CA }, () => new Response()),
+  () => serve({ ...tls, requestCert: true, ca: env.CA, rejectUnauthorized: false }, () => new Response()),
+  () => listen({ ...tls, requestCert: true }),
+  () => listen({ ...tls, crl: "x" }),
+  () => listen({ ...tls, requestCert: true, ca: env.CA, rejectUnauthorized: false }),
+];
+const results = cases.map((make) => { try { make(); return "accepted"; } catch (e) { return e.name; } });
+console.log("RESULTS:" + results.join(","));
+"#;
+    let out = run_script(
+        "mtls-options.mjs",
+        script,
+        &[],
+        &[("CERT", &cert), ("KEY", &key), ("CA", &ca.pem)],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out)
+            .contains("RESULTS:TypeError,TypeError,TypeError,TypeError,TypeError,TypeError"),
+        "{}",
+        stdout(&out)
     );
 }

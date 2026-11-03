@@ -157,6 +157,7 @@ const MONGO_OPTION_NAMES = new Map(
     "tlsAllowInvalidCertificates",
     "tlsAllowInvalidHostnames",
     "tlsCAFile",
+    "tlsCertificateKeyFile",
     "tlsInsecure",
     "w",
     "wtimeoutMS",
@@ -270,13 +271,22 @@ function parseMongoConnectionString(url, options = {}) {
   }
   if (tagSets.length > 0) given.readPreferenceTags = tagSets;
   // Options passed to connect() win over the URL's.
-  const { auth, ca, ...rest2 } = options;
+  const { auth, ca, cert, key, ...rest2 } = options;
   Object.assign(given, rest2);
   if (auth !== undefined) {
     if (auth.username !== undefined) settings.user = String(auth.username);
     if (auth.password !== undefined) settings.password = String(auth.password);
   }
   if (ca !== undefined) settings.ca = ca;
+  // A client certificate (D201), for a server that requires one and for
+  // MONGODB-X509 authentication.
+  if ((cert === undefined) !== (key === undefined)) {
+    throw mongoBad("a client certificate needs both cert and key");
+  }
+  if (cert !== undefined) {
+    settings.cert = cert;
+    settings.key = key;
+  }
 
   for (const [key, value] of Object.entries(given)) {
     const name = MONGO_OPTION_NAMES.get(key.toLowerCase());
@@ -377,7 +387,7 @@ function mongoOption(settings, name, value) {
       return;
     case "authMechanism": {
       const mechanism = String(value).toUpperCase();
-      if (mechanism !== "SCRAM-SHA-1" && mechanism !== "SCRAM-SHA-256") {
+      if (mechanism !== "SCRAM-SHA-1" && mechanism !== "SCRAM-SHA-256" && mechanism !== "MONGODB-X509") {
         throw mongoBad(`the ${value} authentication mechanism is not supported yet`);
       }
       settings.authMechanism = mechanism;
@@ -398,6 +408,12 @@ function mongoOption(settings, name, value) {
     }
     case "tlsCAFile":
       settings.tlsCAFile = String(value);
+      settings.tls = settings.tlsGiven ?? true;
+      return;
+    // One PEM file holding the client certificate and its key, as the
+    // official drivers take it.
+    case "tlsCertificateKeyFile":
+      settings.tlsCertificateKeyFile = String(value);
       settings.tls = settings.tlsGiven ?? true;
       return;
     case "tlsInsecure":
@@ -506,6 +522,22 @@ async function openMongo(url, options = {}) {
     const { file } = await import("runtime:fs");
     ca = await file(settings.tlsCAFile).bytes();
   }
+  let cert = new Uint8Array(0);
+  let key = new Uint8Array(0);
+  const pem = (v) => (typeof v === "string" ? new TextEncoder().encode(v) : v);
+  if (settings.cert !== undefined) {
+    cert = pem(settings.cert);
+    key = pem(settings.key);
+  } else if (settings.tlsCertificateKeyFile !== undefined) {
+    // Read through runtime:fs, so the file needs a read grant like any other.
+    // The host takes the certificates and the key out of the one file.
+    const { file } = await import("runtime:fs");
+    cert = await file(settings.tlsCertificateKeyFile).bytes();
+    key = cert;
+  }
+  if (settings.authMechanism === "MONGODB-X509" && cert.length === 0) {
+    throw mongoBad("MONGODB-X509 authenticates with a client certificate: pass cert and key, or tlsCertificateKeyFile");
+  }
   const ticket = mongoTicket++;
   let timedOut = false;
   const timer =
@@ -534,6 +566,8 @@ async function openMongo(url, options = {}) {
       settings.heartbeatFrequencyMS,
       settings.localThresholdMS,
       ticket,
+      cert,
+      key,
     );
   } finally {
     if (timer !== null) clearTimeout(timer);

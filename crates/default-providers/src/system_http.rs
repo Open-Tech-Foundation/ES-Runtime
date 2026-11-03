@@ -39,7 +39,8 @@ use bytes::Bytes;
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerRequest,
-    HttpServerResponse, HttpTimeouts, ProviderError, SocketInfo, UpgradedIo,
+    HttpServerResponse, HttpTimeouts, PeerCertificate, ProviderError, SecureContext, SocketInfo,
+    UpgradedIo,
 };
 use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -122,6 +123,9 @@ struct Control {
     /// connection accepted a moment before the signal could miss it and then
     /// hold the process open until its client happened to hang up.
     draining: watch::Sender<bool>,
+    /// The TLS configuration, replaceable while the server runs (D200).
+    /// `None` for a plaintext server.
+    tls: Option<crate::tls::ServerTls>,
 }
 
 /// Live connection accounting, shared by every server in one registry.
@@ -268,6 +272,7 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
         local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
         local_port: local.map(|a| a.port()).unwrap_or(0),
         alpn: None,
+        peer_certificate: None,
     }
 }
 
@@ -284,6 +289,7 @@ fn to_server_request(
     origin: &str,
     peer_host: &str,
     peer_port: u16,
+    peer_certificate: Option<Arc<PeerCertificate>>,
     body_limit: Option<BodyLimit>,
 ) -> Option<HttpServerRequest> {
     let method = req.method().to_string();
@@ -321,6 +327,7 @@ fn to_server_request(
         // the same one — they are one connection.
         remote_address: peer_host.to_owned(),
         remote_port: peer_port,
+        peer_certificate,
     })
 }
 
@@ -528,6 +535,7 @@ async fn serve_connection<S>(
     tx: mpsc::Sender<Pending>,
     origin: Arc<str>,
     peer: SocketAddr,
+    peer_certificate: Option<Arc<PeerCertificate>>,
     mut drain_rx: watch::Receiver<bool>,
     timeouts: HttpTimeouts,
 ) where
@@ -553,6 +561,7 @@ async fn serve_connection<S>(
         let tx = tx.clone();
         let origin = origin.clone();
         let peer_host = peer_host.clone();
+        let peer_certificate = peer_certificate.clone();
         async move {
             // Taken before the request is consumed: `on` needs it whole, and
             // the key is a header the guest never sees. `None` for anything that
@@ -562,9 +571,14 @@ async fn serve_connection<S>(
             // A request naming something that is not an authority never reaches
             // the guest: there is no URL to hand it that is both faithful to
             // what was sent and safe to route on.
-            let Some(server_req) =
-                to_server_request(req, &origin, &peer_host, peer_port, body_limit)
-            else {
+            let Some(server_req) = to_server_request(
+                req,
+                &origin,
+                &peer_host,
+                peer_port,
+                peer_certificate,
+                body_limit,
+            ) else {
                 return Ok::<_, Infallible>(status_only(StatusCode::BAD_REQUEST));
             };
             let (rtx, rrx) = oneshot::channel();
@@ -687,10 +701,20 @@ impl HttpServerProvider for SystemHttpServer {
             }
             // Build the TLS acceptor before binding: a bad cert should fail the
             // `serve` call, not each connection after the port is already open.
-            let tls = match &options.tls {
-                Some(tls) => Some(crate::tls::server_acceptor(&tls.cert, &tls.key, &tls.alpn)?),
+            let tls = match options.tls {
+                Some(tls) => Some(crate::tls::ServerTls::new(
+                    crate::tls::ServerTlsMaterial {
+                        cert: tls.cert,
+                        key: tls.key,
+                        client_ca: tls.client_ca,
+                        crl: tls.crl,
+                        request_cert: tls.request_cert,
+                    },
+                    &tls.alpn,
+                )?),
                 None => None,
             };
+            let site = tls.clone();
             // The shared bind: classified errors (a bind failure is the one a
             // caller most often branches on, and it used to arrive as an
             // uncoded "provider error: …" with no `ERR_ADDRESS_IN_USE` to
@@ -813,7 +837,9 @@ impl HttpServerProvider for SystemHttpServer {
                                 // an ordinary event on a public port — a scanner, a
                                 // client with no shared cipher — and must never take
                                 // the acceptor down with it.
-                                Some(acceptor) => {
+                                Some(site) => {
+                                    // The configuration current now (D200).
+                                    let acceptor = site.acceptor();
                                     // A handshake that never finishes is the same
                                     // hold on a task and a descriptor as one that
                                     // never starts, and rustls will wait for the
@@ -826,8 +852,25 @@ impl HttpServerProvider for SystemHttpServer {
                                     .await;
                                     match handshake {
                                         Some(Ok(stream)) => {
+                                            // Verified by the handshake, when the
+                                            // server requires one (D201); shared by
+                                            // every request on the connection.
+                                            let peer_certificate = stream
+                                                .get_ref()
+                                                .1
+                                                .peer_certificates()
+                                                .and_then(<[_]>::first)
+                                                .map(|der| {
+                                                    Arc::new(crate::trust::peer_certificate(der))
+                                                });
                                             serve_connection(
-                                                stream, tx, origin, peer, drain_rx, timeouts,
+                                                stream,
+                                                tx,
+                                                origin,
+                                                peer,
+                                                peer_certificate,
+                                                drain_rx,
+                                                timeouts,
                                             )
                                             .await;
                                         }
@@ -847,8 +890,10 @@ impl HttpServerProvider for SystemHttpServer {
                                     }
                                 }
                                 None => {
-                                    serve_connection(stream, tx, origin, peer, drain_rx, timeouts)
-                                        .await;
+                                    serve_connection(
+                                        stream, tx, origin, peer, None, drain_rx, timeouts,
+                                    )
+                                    .await;
                                 }
                             }
                             live.leave();
@@ -867,6 +912,7 @@ impl HttpServerProvider for SystemHttpServer {
                     acceptor,
                     shutdown: Arc::new(Notify::new()),
                     draining,
+                    tls: site,
                 },
             );
             Ok((id, info_of(local)))
@@ -1026,6 +1072,20 @@ impl HttpServerProvider for SystemHttpServer {
             // `compat` is the one-line bridge between them (D55).
             Ok(Box::new(TokioIo::new(upgraded).compat()) as UpgradedIo)
         })
+    }
+
+    fn set_secure_context(&self, id: u64, context: SecureContext) -> Result<(), ProviderError> {
+        let site = self
+            .controls
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|control| control.tls.clone())
+            .ok_or_else(|| ProviderError::Coded {
+                code: es_runtime_common::ErrorCode::Tls,
+                message: "setSecureContext: not a running TLS server".to_string(),
+            })?;
+        site.set(context)
     }
 
     fn request_disconnected(&self, request_id: u64) -> BoxFuture<bool> {
@@ -1434,6 +1494,9 @@ mod tls_tests {
             cert,
             key,
             alpn: vec!["http/1.1".to_string()],
+            request_cert: false,
+            client_ca: Vec::new(),
+            crl: Vec::new(),
         }
     }
 
@@ -1716,6 +1779,9 @@ mod http2_tests {
             key: key_pem,
             // What `runtime:http` `serve` sends when the guest names no `alpn`.
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+            request_cert: false,
+            client_ca: Vec::new(),
+            crl: Vec::new(),
         }))
         .await;
 
@@ -2120,6 +2186,9 @@ mod http2_tests {
             cert: cert_pem.clone(),
             key: key_pem,
             alpn: vec!["http/1.1".to_string()],
+            request_cert: false,
+            client_ca: Vec::new(),
+            crl: Vec::new(),
         }))
         .await;
 

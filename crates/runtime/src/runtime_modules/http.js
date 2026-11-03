@@ -43,8 +43,63 @@ function parseTls(options) {
   // Naming `alpn` narrows that, e.g. ["http/1.1"] for a client that mishandles h2.
   const alpn = o.alpn ?? [];
   if (!Array.isArray(alpn)) throw new TypeError("serve: alpn must be an array of strings");
-  return { cert: o.cert, key: o.key, alpn: alpn.map(String) };
+  // Client certificates (D201): required with `requestCert: true`, verified
+  // against `ca` and, when given, checked against `crl`. There is no way to
+  // accept a client whose certificate did not verify.
+  if (o.requestCert !== undefined && typeof o.requestCert !== "boolean") {
+    throw new TypeError("serve: requestCert must be a boolean");
+  }
+  if (o.rejectUnauthorized !== undefined) {
+    throw new TypeError(
+      "serve: rejectUnauthorized is not supported — a client certificate that did not verify identifies nobody",
+    );
+  }
+  const requestCert = o.requestCert === true;
+  if (requestCert && !o.ca) {
+    throw new TypeError("serve: requestCert: true needs ca, the CA client certificates must chain to");
+  }
+  if (!requestCert && (o.ca || o.crl)) {
+    throw new TypeError("serve: ca and crl verify client certificates; add requestCert: true");
+  }
+  return {
+    cert: tlsMaterial("serve", "cert", o.cert),
+    key: tlsMaterial("serve", "key", o.key),
+    alpn: alpn.map(String),
+    requestCert,
+    ca: o.ca == null ? null : tlsMaterial("serve", "ca", o.ca),
+    crl: o.crl == null ? null : tlsMaterial("serve", "crl", o.crl),
+  };
 }
+
+// A `setSecureContext` update (D200) as the host takes it: cert, key, ca and
+// crl, each `null` to keep the current one.
+function secureContextArgs(what, context) {
+  if (context === null || typeof context !== "object") {
+    throw new TypeError(`${what}: setSecureContext takes an object of cert, key, ca and crl`);
+  }
+  for (const name of Object.keys(context)) {
+    if (!["cert", "key", "ca", "crl"].includes(name)) {
+      throw new TypeError(`${what}: setSecureContext does not take ${name}`);
+    }
+  }
+  return ["cert", "key", "ca", "crl"].map((name) =>
+    context[name] == null ? null : tlsMaterial(what, name, context[name]),
+  );
+}
+
+// TLS material as the host takes it: a PEM string or bytes. A `Secret` from
+// runtime:process `env` is named rather than sent as an empty value.
+const SECRET = Symbol.for("runtime.secret.redacted");
+function tlsMaterial(what, name, value) {
+  if (value !== null && typeof value === "object" && value[SECRET] === true) {
+    throw new TypeError(`${what}: ${name} is a masked Secret from env; pass unmask(env.…) from runtime:process`);
+  }
+  if (typeof value === "string" || value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new TypeError(`${what}: ${name} must be a PEM string or bytes`);
+}
+
 
 // When to give up on a connection that is not making progress. Each one is
 // left `null` unless the guest names it, and `null` means "the host's default"
@@ -278,9 +333,14 @@ function watchDisconnect(requestId) {
 // anyone can send is not an identity until something says whose to believe.
 // Null when the host has no peer to report, which is honest about not knowing
 // rather than handing back an address-shaped object full of blanks.
-function connectionInfo(host, port) {
-  if (!host) return { remoteAddr: null };
-  return { remoteAddr: { transport: "tcp", hostname: host, port } };
+//
+// `peerCertificate` is the client certificate the server verified (D201), or
+// null when it does not require one.
+function connectionInfo(host, port, peerCertificate) {
+  return {
+    remoteAddr: host ? { transport: "tcp", hostname: host, port } : null,
+    peerCertificate: peerCertificate ?? null,
+  };
 }
 
 // Runs one request through the handler and writes the response back. Never
@@ -426,6 +486,7 @@ async function handleRequest(entry, handler) {
   const headers = entry[4];
   const peerHost = entry[5];
   const peerPort = entry[6];
+  const peerCertificate = entry[7];
   let response;
   let request;
   let cookies = null;
@@ -455,7 +516,7 @@ async function handleRequest(entry, handler) {
       requestId,
       ServerRequest,
     );
-    response = await handler(request, connectionInfo(peerHost, peerPort));
+    response = await handler(request, connectionInfo(peerHost, peerPort, peerCertificate));
     cookies = requestCookieMaps.get(request) ?? null;
     if (!(response instanceof Response)) {
       // A handler that returns something else has a bug, and coercing it with
@@ -585,6 +646,7 @@ class Server {
     });
     this._id = null;
     this._stopped = false;
+    this._tls = tls !== null;
 
     (async () => {
       let info;
@@ -601,6 +663,9 @@ class Server {
               maxConnections,
               maxConnectionsPerIp,
               reusePort,
+              tls.requestCert,
+              tls.ca,
+              tls.crl,
               ...tls.alpn,
             )
           : await ops.http_serve(
@@ -643,6 +708,7 @@ class Server {
           const hasBody = flat[i++];
           const peerHost = flat[i++];
           const peerPort = flat[i++];
+          const peerCertificate = flat[i++];
           const numHeaders = flat[i++];
           
           const headers = [];
@@ -654,7 +720,7 @@ class Server {
           // that `currentTask().traceId` — and anything the program's own
           // contexts put there — belongs to this request and not to the accept
           // loop that dispatched it.
-          const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort];
+          const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort, peerCertificate];
           inRequestScope(headers, trustTraceHeaders, method, url, () =>
             handleRequest(entry, handler),
           );
@@ -662,6 +728,26 @@ class Server {
       }
       resolveFinished();
     })();
+  }
+
+  // Replaces the TLS credentials for connections accepted from now on (D200):
+  // `{ cert, key }`, and `ca`/`crl` on a server with requestCert. What is left
+  // out keeps its current value; open connections keep theirs. Throws, and
+  // keeps serving the current certificate, when the new one does not load or
+  // its key does not match.
+  async setSecureContext(context) {
+    if (!this._tls) throw new TypeError("setSecureContext: this server does not use TLS");
+    const args = secureContextArgs("serve", context);
+    await this.addr;
+    try {
+      ops.http_set_secure_context(this._id, ...args);
+    } catch (e) {
+      // The current certificate is still being served; say why the new one
+      // was not taken, with the host's code (ERR_TLS).
+      const error = new TypeError(`setSecureContext: ${e.message}`);
+      if (e.code !== undefined) error.code = e.code;
+      throw error;
+    }
   }
 
   async stop() {

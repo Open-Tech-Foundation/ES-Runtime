@@ -44,9 +44,11 @@ to `connect()` win over the URL's. An option not listed here is refused with
 | --- | --- | --- | --- |
 | `auth` | `{ username, password }` | from the URL | Credentials. A name or password in the URL must percent-encode `:`, `/` and `@`. |
 | `authSource` | `string` | the URL's database, else `admin` | Where the user is defined. |
-| `authMechanism` | `"SCRAM-SHA-256" \| "SCRAM-SHA-1"` | negotiated | Taken from what the server offers when absent. |
+| `authMechanism` | `"SCRAM-SHA-256" \| "SCRAM-SHA-1" \| "MONGODB-X509"` | negotiated | Taken from what the server offers when absent. `MONGODB-X509` authenticates as the client certificate, against `$external`. |
 | `tls` / `ssl` | `boolean` | `false`; `true` with `mongodb+srv://` | Connect with TLS. The certificate is always verified. |
 | `tlsCAFile` | `string` | — | A PEM CA bundle to trust besides the public roots. Implies `tls`. |
+| `tlsCertificateKeyFile` | `string` | — | One PEM file with the client certificate and its key, read through `runtime:fs`. Implies `tls`. |
+| `cert`, `key` | `string \| Uint8Array` | — | The client certificate and its key as PEM (`connect()` options only). |
 | `ca` | `string \| Uint8Array` | — | The same, as PEM. |
 | `appName` | `string` | — | Reported to the server in the handshake. |
 | `maxPoolSize` | `number` | `100` | Connections the client may open; `0` for no limit. `pool: { max }` sets the same. |

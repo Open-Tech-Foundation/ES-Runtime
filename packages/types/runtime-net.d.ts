@@ -38,6 +38,45 @@ declare module "runtime:net" {
     localPort: number;
     /** Negotiated ALPN protocol (TLS only; `null` for plaintext or none). */
     alpn: string | null;
+    /**
+     * The client certificate a listener with `requestCert` verified; `null`
+     * otherwise.
+     */
+    peerCertificate: PeerCertificate | null;
+  }
+
+  /**
+   * A client certificate the server verified (DECISIONS D201). Node's field
+   * names, with the validity as epoch milliseconds.
+   */
+  export interface PeerCertificate {
+    /** Subject attributes by short name: `CN`, `O`, `OU`, `C`, `ST`, `L`. */
+    subject: Partial<Record<"CN" | "O" | "OU" | "C" | "ST" | "L", string>>;
+    /** Subject alternative names, e.g. `"DNS:a, URI:spiffe://b, IP Address:10.0.0.1, email:c"`. */
+    subjectaltname: string;
+    /** SHA-256 of `raw`, colon-separated upper-case hex. */
+    fingerprint256: string;
+    /** The certificate, DER-encoded. */
+    raw: Uint8Array;
+    /** `notBefore`, epoch milliseconds. */
+    validFrom: number;
+    /** `notAfter`, epoch milliseconds. */
+    validTo: number;
+  }
+
+  /** PEM material: a string or its bytes. */
+  export type Pem = string | Uint8Array | ArrayBuffer | ArrayBufferView;
+
+  /**
+   * A running TLS server's replacement credentials (DECISIONS D200). What is
+   * left out keeps its current value; `ca` and `crl` apply to a server with
+   * `requestCert`.
+   */
+  export interface SecureContext {
+    cert?: Pem;
+    key?: Pem;
+    ca?: Pem;
+    crl?: Pem;
   }
 
   /** Options for {@link connect} (the WinterTC Sockets API shape). */
@@ -61,6 +100,13 @@ declare module "runtime:net" {
      * and chain checks still run. A server matching neither is still refused.
      */
     ca?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+    /**
+     * A client certificate chain (PEM, leaf first) to present, for a server
+     * that requires one (DECISIONS D201). Needs `key`.
+     */
+    cert?: Pem;
+    /** The private key belonging to `cert`. */
+    key?: Pem;
     /**
      * Keep the writable usable after the peer's FIN (read EOF) instead of tearing
      * the whole socket down. Defaults to `false` (WinterTC).
@@ -124,6 +170,16 @@ declare module "runtime:net" {
     reusePort?: boolean;
     /** ALPN protocols to advertise, in preference order. */
     alpn?: string[];
+    /**
+     * Require a client certificate that chains to `ca` on every connection
+     * (DECISIONS D201). A client without one fails the handshake; there is no
+     * way to accept one that did not verify.
+     */
+    requestCert?: boolean;
+    /** The CA client certificates must chain to. Required with `requestCert`. */
+    ca?: Pem;
+    /** CRLs client certificates are checked against (DECISIONS D202). */
+    crl?: Pem;
   }
 
   /** A listener on a Unix socket path. Its accepted sockets report the path as `localAddress`. */
@@ -140,6 +196,12 @@ declare module "runtime:net" {
     accept(): Promise<Socket | null>;
     /** Stop listening. */
     close(): Promise<void>;
+    /**
+     * Replace the TLS credentials for connections accepted from now on
+     * (DECISIONS D200). Rejects, keeping the current ones, when the new
+     * certificate does not load or its key does not match.
+     */
+    setSecureContext(context: SecureContext): Promise<void>;
   }
 
   /** One received datagram. The sender travels with the message, because on an

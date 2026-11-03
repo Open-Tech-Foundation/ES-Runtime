@@ -256,6 +256,11 @@ declare module "runtime:http" {
      * peer, because they are one connection.
      */
     remoteAddr: NetAddr | null;
+    /**
+     * The client certificate the server verified, when it was started with
+     * `requestCert`; `null` otherwise (DECISIONS D201).
+     */
+    peerCertificate: import("runtime:net").PeerCertificate | null;
   }
 
   /** A transport address, in the shape `Deno.NetAddr` uses. */
@@ -289,6 +294,16 @@ declare module "runtime:http" {
      * e.g. `["http/1.1"]`.
      */
     alpn?: string[];
+    /**
+     * Require a client certificate that chains to `ca` on every connection
+     * (DECISIONS D201). A client without one fails the handshake; there is no
+     * way to accept one that did not verify.
+     */
+    requestCert?: boolean;
+    /** The CA client certificates must chain to. Required with `requestCert`. */
+    ca?: import("runtime:net").Pem;
+    /** CRLs client certificates are checked against (DECISIONS D202). */
+    crl?: import("runtime:net").Pem;
     /**
      * When to give up on a connection that is not making progress.
      *
@@ -436,6 +451,12 @@ declare module "runtime:http" {
     readonly finished: Promise<void>;
     /** Stop accepting and shut the server down; resolves once stopped. */
     stop(): Promise<void>;
+    /**
+     * Replace the TLS credentials for connections accepted from now on
+     * (DECISIONS D200). Rejects with a `TypeError`, keeping the current ones,
+     * when the new certificate does not load or its key does not match.
+     */
+    setSecureContext(context: import("runtime:net").SecureContext): Promise<void>;
   }
 
   /**

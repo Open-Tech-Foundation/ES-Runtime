@@ -1571,3 +1571,31 @@ fn a_second_process_cannot_open_a_database_another_holds() {
     assert!(second.status.success(), "stderr: {}", stderr(&second));
     assert_eq!(stdout(&second).trim(), "LOCKED");
 }
+
+// D201: a driver's client certificate is `sslCert` and `sslKey` (MongoDB:
+// `cert` and `key`), together or not at all, and MONGODB-X509 needs one. Each
+// is refused before anything reaches the network.
+#[test]
+fn driver_client_certificates_are_checked_before_connecting() {
+    let source = r#"
+        import { connect, postgres, mysql, mongodb } from "runtime:db";
+        const attempt = async (url, options) => {
+          try { await connect(url, options); return "connected"; }
+          catch (e) { return /cert|key|X509/.test(e.message) ? "refused" : `other:${e.message}`; }
+        };
+        const results = [
+          await attempt("postgres://u@127.0.0.1:1/x", { driver: postgres, sslCert: "PEM" }),
+          await attempt("postgres://u@127.0.0.1:1/x", { driver: postgres, sslKey: "PEM" }),
+          await attempt("mysql://u@127.0.0.1:1/x", { driver: mysql, sslCert: "PEM" }),
+          await attempt("mongodb://127.0.0.1:1/", { driver: mongodb, cert: "PEM" }),
+          await attempt("mongodb://127.0.0.1:1/?authMechanism=MONGODB-X509&tls=true", { driver: mongodb }),
+        ];
+        console.log(results.join(","));
+    "#;
+    let out = run("driver-client-certs", source, &["--allow-net"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "refused,refused,refused,refused,refused"
+    );
+}

@@ -812,7 +812,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // bundled Mozilla roots, or exactly what `--tls-ca` lists. Loaded before
     // anything runs, so a CA file that cannot be trusted stops the process
     // rather than a handshake in production.
-    let trust = TrustStore::load(&options.tls_ca)?;
+    let trust = TrustStore::load(&options.tls_ca)?.with_crl_files(&options.tls_crl)?;
     warn_ignored_ca_variables(bin);
     let transport = HttpTransport::new()
         .map_err(|e| format!("http transport: {e}"))?

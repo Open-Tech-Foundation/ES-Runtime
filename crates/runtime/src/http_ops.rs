@@ -157,9 +157,14 @@ pub(crate) fn install(
             // `SO_REUSEPORT`: several processes sharing one listening port.
             // Ahead of the ALPN tail, which must stay last.
             let reuse_port = matches!(args.get(11), Some(Value::Bool(true)));
+            // Client certificates (D201, D202): required, the CA they must
+            // chain to, and the CRLs that revoke them.
+            let request_cert = matches!(args.get(12), Some(Value::Bool(true)));
+            let client_ca = arg_bytes(&args, 13).unwrap_or_default();
+            let crl = arg_bytes(&args, 14).unwrap_or_default();
             let alpn: Vec<String> = args
                 .iter()
-                .skip(12)
+                .skip(15)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
@@ -177,6 +182,9 @@ pub(crate) fn install(
                             } else {
                                 alpn
                             },
+                            request_cert,
+                            client_ca,
+                            crl,
                         })
                     }
                     _ => None,
@@ -223,7 +231,7 @@ pub(crate) fn install(
             }
             // A flat array to avoid recursive v8::Array allocations.
             // Format: [requestId, method, url, hasBody, peerHost, peerPort,
-            // numHeaders, name1, val1, ...]
+            // peerCertificate, numHeaders, name1, val1, ...]
             let mut flat = Vec::new();
             for (rid, req) in reqs {
                 let has_body = !req.body.is_empty();
@@ -240,6 +248,12 @@ pub(crate) fn install(
                 // object full of blanks.
                 flat.push(Value::String(req.remote_address));
                 flat.push(Value::Number(req.remote_port as f64));
+                // The verified client certificate (D201), or null.
+                flat.push(
+                    req.peer_certificate
+                        .as_deref()
+                        .map_or(Value::Null, crate::net_ops::peer_certificate_value),
+                );
                 flat.push(Value::Number(req.headers.len() as f64));
                 for (n, v) in req.headers {
                     flat.push(Value::String(n));
@@ -552,6 +566,19 @@ pub(crate) fn install(
     // server id is low-cardinality, and keeping it lets a `next_request` that
     // races the stop end the way it always did.
     let owned = servers;
+    // Replaces a TLS server's credentials for connections it accepts from now
+    // on (D200). No capability: the server is already this agent's, and the
+    // material is inline, as at bind.
+    let h = http.clone();
+    let owned_for_context = owned.clone();
+    engine.register_op(OpDecl::sync("http_set_secure_context", move |args| {
+        let id = owned_for_context.check(arg_u64(&args, 0))?;
+        require(&h)?
+            .set_secure_context(id, crate::net_ops::secure_context(&args, 1))
+            .map_err(map_err)?;
+        Ok(Value::Undefined)
+    }))?;
+
     engine.register_op(OpDecl::r#async("http_close", move |args| {
         let h = http.clone();
         let owned = owned.clone();

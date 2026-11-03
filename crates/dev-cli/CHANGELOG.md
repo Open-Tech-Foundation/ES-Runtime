@@ -26,6 +26,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Security
 
+- `--tls-crl=<file>` (DECISIONS D202) is taken wherever `--tls-ca` is, and
+  `esdev start` passes it to its server. Programs run by esdev get client
+  certificates (D201) and `setSecureContext` (D200) as under esrun.
+
 - `esdev upgrade` refuses a release whose archive is not listed in, or does
   not match, its `checksums.txt` (DECISIONS D198); it used to install the
   download unchecked. `esdev create`'s npm registry lookups and the program's

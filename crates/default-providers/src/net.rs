@@ -1,11 +1,16 @@
 //! The default [`NetTransport`]: `fetch` over the outbound HTTP client
 //! (DECISIONS.md D198).
 
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use es_runtime_providers::{
     BoxFuture, HttpRequest, HttpResponse, NetTransport, ProviderError, RedirectMode, RequestBody,
+    RequestTls,
 };
+
+/// How many distinct `tls` configurations keep a client and pool at once.
+const MAX_TLS_CLIENTS: usize = 32;
 
 use crate::HostAllowlist;
 use crate::http_client::{Body, HttpClient, Outbound, Redirects};
@@ -25,6 +30,10 @@ use crate::http_client::{Body, HttpClient, Outbound, Redirects};
 /// never fetches should not pay.
 pub struct HttpTransport {
     client: OnceLock<HttpClient>,
+    /// Clients for requests with their own `tls` material (D201), keyed by a
+    /// digest of it: each has its own pool, so connections are never shared
+    /// across identities.
+    tls_clients: Mutex<HashMap<[u8; 32], HttpClient>>,
     /// Addresses `fetch` may reach. `None` ⇒ any (`esrun --allow-net` without a
     /// list, or an embedder that scopes nothing).
     allow: Option<Arc<HostAllowlist>>,
@@ -38,6 +47,7 @@ impl HttpTransport {
     pub fn new() -> Result<Self, ProviderError> {
         Ok(HttpTransport {
             client: OnceLock::new(),
+            tls_clients: Mutex::default(),
             allow: None,
             trust: crate::TrustStore::bundled(),
         })
@@ -65,18 +75,41 @@ impl HttpTransport {
         self
     }
 
-    fn client(&self) -> HttpClient {
-        self.client
-            .get_or_init(|| HttpClient::new(&self.trust))
-            .clone()
+    fn client(&self, tls: &RequestTls) -> Result<HttpClient, ProviderError> {
+        if tls.is_empty() {
+            return Ok(self
+                .client
+                .get_or_init(|| HttpClient::new(&self.trust))
+                .clone());
+        }
+        use sha2::Digest;
+        let mut digest = sha2::Sha256::new();
+        for part in [&tls.ca, &tls.identity.cert, &tls.identity.key] {
+            digest.update((part.len() as u64).to_be_bytes());
+            digest.update(part);
+        }
+        let key: [u8; 32] = digest.finalize().into();
+        let mut clients = self.tls_clients.lock().unwrap();
+        if let Some(client) = clients.get(&key) {
+            return Ok(client.clone());
+        }
+        let client = HttpClient::with_tls(&self.trust, &tls.ca, &tls.identity)?;
+        // Bounded: a program that mints material per request would otherwise
+        // grow this without end. Dropping a client drops its idle connections.
+        if clients.len() >= MAX_TLS_CLIENTS {
+            clients.clear();
+        }
+        clients.insert(key, client.clone());
+        Ok(client)
     }
 }
 
 impl NetTransport for HttpTransport {
     fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
-        let client = self.client();
+        let client = self.client(&request.tls);
         let allow = self.allow.clone();
         Box::pin(async move {
+            let client = client?;
             // An unparseable URL never reaches here (the guest's `Request`
             // parsed it), but if it did there would be nothing to send.
             let url = url::Url::parse(&request.url)
@@ -146,6 +179,7 @@ mod tests {
             headers: vec![],
             body: RequestBody::Empty,
             redirect: RedirectMode::Follow,
+            tls: Default::default(),
         }
     }
 

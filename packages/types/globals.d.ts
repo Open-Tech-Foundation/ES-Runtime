@@ -5,6 +5,24 @@
 // takes an extra option, because a worker here starts with no capabilities and
 // is granted them explicitly.
 
+interface RequestInit {
+  /**
+   * TLS material for this request only (DECISIONS D201) — Bun's member of the
+   * same name. `ca` is trusted in addition to the process store (`--tls-ca`);
+   * `cert` and `key` are a client certificate to present. PEM strings or
+   * bytes. There is no member that turns verification off.
+   *
+   * ```ts
+   * await fetch("https://billing.internal/", { tls: { ca, cert, key } });
+   * ```
+   */
+  tls?: {
+    ca?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+    cert?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+    key?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+  };
+}
+
 interface WorkerOptions {
   /**
    * Capabilities to grant the worker.

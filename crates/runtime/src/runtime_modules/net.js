@@ -21,6 +21,21 @@ function socketError(message, code) {
   return err;
 }
 
+// TLS material (cert, key, ca, crl) as bytes. A `Secret` from runtime:process
+// `env` is named rather than reported as a bad write: a key read from the
+// environment arrives masked, and `unmask` is the one-word fix.
+const SECRET = Symbol.for("runtime.secret.redacted");
+function pemBytes(name, value) {
+  if (value !== null && typeof value === "object" && value[SECRET] === true) {
+    throw socketError(`${name} is a masked Secret from env; pass unmask(env.…) from runtime:process`);
+  }
+  if (typeof value === "string") return encoder.encode(value);
+  if (value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw socketError(`${name} must be a PEM string or bytes`);
+}
+
 function socketOp(promise) {
   return promise.catch((e) => {
     if (e instanceof TypeError && e.message.startsWith("SocketError: ")) throw e;
@@ -82,6 +97,8 @@ class Socket {
       localAddress: address(c.localAddress, c.localPort),
       localPort: c.localPort,
       alpn: c.alpn ?? null,
+      // The client certificate a listener with requestCert verified (D201).
+      peerCertificate: c.peerCertificate ?? null,
     }));
     // One connect failure rejects several surfaces — `opened`, the streams,
     // close(), a later startTls() — because all of them derive from `_conn`.
@@ -178,7 +195,7 @@ class Socket {
     if (!this._upgrade) {
       throw socketError("startTls() requires secureTransport: 'starttls'");
     }
-    const { name, alpn, ca } = this._upgrade;
+    const { name, alpn, ca, cert, key } = this._upgrade;
     this._upgrade = null; // single-shot
     // The upgrade retires this socket's id and mints another, so from here the
     // original names nothing. Marked rather than left to fail: its own close()
@@ -186,7 +203,7 @@ class Socket {
     // to naming another agent's socket, not to naming your own after it was
     // consumed.
     this._consumed = true;
-    const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn, ca));
+    const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn, ca, cert, key));
     const upgraded = new Socket(info, { allowHalfOpen: this._allowHalfOpen });
     upgraded.upgraded = true;
     return upgraded;
@@ -216,6 +233,11 @@ function connect(address, options = {}) {
     if ((options.secureTransport ?? "off") !== "off") {
       throw socketError("connect: a Unix socket is plaintext — secureTransport must be 'off'");
     }
+    for (const key of ["ca", "cert", "key", "sni", "alpn"]) {
+      if (options[key] !== undefined) {
+        throw socketError(`connect: a Unix socket is plaintext, so ${key} cannot be given with it`);
+      }
+    }
     return new Socket(ops.net_connect_unix(path), {
       allowHalfOpen: options.allowHalfOpen === true,
       unix: true,
@@ -239,11 +261,18 @@ function connect(address, options = {}) {
   // accept more certificates, never skip it. A private CA is the ordinary case
   // for an internal database or service mesh, and without this there is no way
   // to reach one at all.
-  const ca = options.ca == null ? EMPTY : toBytes(options.ca);
-  const conn = ops.net_connect(hostname, port, tls, sni, alpn, ca);
+  const ca = options.ca == null ? EMPTY : pemBytes("ca", options.ca);
+  // A client certificate (D201): `cert` and `key` together, or neither. The
+  // host checks that the key belongs to the certificate before connecting.
+  if ((options.cert == null) !== (options.key == null)) {
+    throw socketError("a client certificate needs both cert and key");
+  }
+  const cert = options.cert == null ? EMPTY : pemBytes("cert", options.cert);
+  const key = options.key == null ? EMPTY : pemBytes("key", options.key);
+  const conn = ops.net_connect(hostname, port, tls, sni, alpn, ca, cert, key);
   // "starttls" opens plaintext now; record the server name (sni, default = host)
-  // + alpn + ca a later startTls() will negotiate with.
-  const upgrade = mode === "starttls" ? { name: sni || hostname, alpn, ca } : null;
+  // + alpn + ca + client certificate a later startTls() will negotiate with.
+  const upgrade = mode === "starttls" ? { name: sni || hostname, alpn, ca, cert, key } : null;
   return new Socket(conn, { upgrade, allowHalfOpen: options.allowHalfOpen === true });
 }
 
@@ -261,6 +290,29 @@ class Listener {
     // accept() has already reported it; this stops the leftover from ending the
     // process. `await listener.addr` still rejects.
     this.addr.catch(() => {});
+  }
+
+  // Replaces the TLS credentials for connections accepted from now on (D200):
+  // `{ cert, key }`, and `ca`/`crl` on a listener with requestCert. What is
+  // left out keeps its current value; open connections keep theirs.
+  async setSecureContext(context) {
+    if (!this._tls) throw socketError("setSecureContext: this listener does not use TLS");
+    if (context === null || typeof context !== "object") {
+      throw socketError("setSecureContext takes an object of cert, key, ca and crl");
+    }
+    for (const name of Object.keys(context)) {
+      if (!["cert", "key", "ca", "crl"].includes(name)) {
+        throw socketError(`setSecureContext does not take ${name}`);
+      }
+    }
+    const field = (name) => (context[name] == null ? null : pemBytes(name, context[name]));
+    const update = [field("cert"), field("key"), field("ca"), field("crl")];
+    const { id } = await this._ready;
+    try {
+      ops.net_set_secure_context(id, ...update);
+    } catch (e) {
+      throw socketError(e.message, e.code);
+    }
   }
 
   async accept() {
@@ -292,7 +344,16 @@ class Listener {
 
 function listen(options = {}) {
   if ("path" in options) {
-    const path = socketPath(options, "listen", ["secureTransport", "cert", "key", "alpn", "reusePort"]);
+    const path = socketPath(options, "listen", [
+      "secureTransport",
+      "cert",
+      "key",
+      "alpn",
+      "reusePort",
+      "requestCert",
+      "ca",
+      "crl",
+    ]);
     return new Listener(socketOp(ops.net_listen_unix(path)), { unix: true });
   }
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
@@ -310,9 +371,28 @@ function listen(options = {}) {
     if (options.cert == null || options.key == null) {
       throw socketError("secureTransport: 'on' requires cert and key");
     }
-    cert = toBytes(options.cert);
-    key = toBytes(options.key);
+    cert = pemBytes("cert", options.cert);
+    key = pemBytes("key", options.key);
   }
+  // Client certificates (D201, D202): required with `requestCert: true`,
+  // verified against `ca`, checked against `crl`. No way to accept one that
+  // did not verify.
+  if (options.rejectUnauthorized !== undefined) {
+    throw socketError(
+      "rejectUnauthorized is not supported — a client certificate that did not verify identifies nobody",
+    );
+  }
+  const requestCert = options.requestCert ?? false;
+  if (typeof requestCert !== "boolean") throw socketError("requestCert must be a boolean");
+  if (requestCert && mode !== "on") throw socketError("requestCert needs secureTransport: 'on'");
+  if (requestCert && options.ca == null) {
+    throw socketError("requestCert: true needs ca, the CA client certificates must chain to");
+  }
+  if (!requestCert && (options.ca != null || options.crl != null)) {
+    throw socketError("ca and crl verify client certificates; add requestCert: true");
+  }
+  const clientCa = options.ca == null ? EMPTY : pemBytes("ca", options.ca);
+  const crl = options.crl == null ? EMPTY : pemBytes("crl", options.crl);
   // Wrapped like `Socket._conn`: a bind failure (a denied address, a port in
   // use, a privileged port) is a socket failure and carries the documented
   // `TypeError: SocketError: …` shape, rather than the raw host `Error` that
@@ -328,8 +408,12 @@ function listen(options = {}) {
   if (typeof reusePort !== "boolean") {
     throw socketError(`reusePort must be a boolean, got ${typeof reusePort}`);
   }
-  const ready = socketOp(ops.net_listen(hostname, port, cert, key, alpn, reusePort));
-  return new Listener(ready);
+  const ready = socketOp(
+    ops.net_listen(hostname, port, cert, key, alpn, reusePort, requestCert, clientCa, crl),
+  );
+  const listener = new Listener(ready);
+  listener._tls = mode === "on";
+  return listener;
 }
 
 // A bound UDP socket. Not a stream: UDP delivers whole messages from whoever

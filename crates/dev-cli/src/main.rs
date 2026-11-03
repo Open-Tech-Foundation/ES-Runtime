@@ -186,6 +186,7 @@ RUN OPTIONS (esrun's, with one deliberate difference):
     --shutdown-grace=<ms>       Drain time for in-flight requests on ^C (10000)
     --tls-ca=<file|bundled>     Trust exactly these CAs (repeatable; default:
                                 the bundled Mozilla roots)
+    --tls-crl=<file>            Check servers against these CRLs (repeatable)
 
 TypeScript and JSX are stripped as they load — types erased, never checked.
 Imports resolve the way `esdev build` resolves them: `./util` finds util.ts,
@@ -343,6 +344,7 @@ OPTIONS:
                                 with index.html, for a client-side router
     --tls-ca=<file|bundled>     Trust exactly these CAs for an https
                                 dev.server.proxy target (repeatable)
+    --tls-crl=<file>            Check that target against these CRLs
     -h, --help                  Show this help
 
 It serves; it does not build. The dev loop's build is not the one that ships —
@@ -490,6 +492,7 @@ OPTIONS:
     --shutdown-grace=<ms>       How long the server may drain on a restart
     --tls-ca=<file|bundled>     Trust exactly these CAs, in the server and for
                                 an https dev.server.proxy target (repeatable)
+    --tls-crl=<file>            Check servers against these CRLs (repeatable)
     -h, --help                  Show this help
 
 It is `esdev build` on a loop. A dev build differs from a release build in
@@ -1266,10 +1269,12 @@ fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, St
     let mut config = None;
     let mut spa = false;
     let mut tls_ca = Vec::new();
+    let mut tls_crl = Vec::new();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
             "--tls-ca" => tls_ca.push(TrustSource::parse(require_value(flag, value)?)?),
+            "--tls-crl" => tls_crl.push(require_value(flag, value)?.into()),
             "-h" | "--help" => {
                 reject_value(flag, value)?;
                 println!("{PREVIEW_USAGE}");
@@ -1298,6 +1303,7 @@ fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, St
         config,
         spa,
         tls_ca,
+        tls_crl,
     })
 }
 
@@ -1480,7 +1486,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         // shape a restricted run; `start` uses esdev's normal development
         // permissions for its server child, so those flags are refused below.
         // `--tls-ca` names whom the server child and the dev proxy trust.
-        if flag == "--shutdown-grace" || flag == "--tls-ca" {
+        if flag == "--shutdown-grace" || flag == "--tls-ca" || flag == "--tls-crl" {
             options.try_flag(flag, value)?;
             continue;
         }
@@ -1539,6 +1545,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         hot,
         grace: options.shutdown_grace,
         tls_ca: options.tls_ca,
+        tls_crl: options.tls_crl,
     })
 }
 

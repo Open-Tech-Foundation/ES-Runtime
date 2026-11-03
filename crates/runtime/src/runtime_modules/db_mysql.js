@@ -712,6 +712,9 @@ class MySqlConnection extends BaseConnection {
       options.preparedStatementCacheSize === undefined
         ? 100
         : Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+    // A client certificate (D201): `sslCert` and `sslKey`, PEM, together or
+    // not at all. The key is checked against the certificate before
+    // connecting.
     const ca =
       options.sslRootCert === undefined
         ? MY_NO_PARAMS
@@ -733,6 +736,7 @@ class MySqlConnection extends BaseConnection {
         ? Math.trunc(options.statementTimeout)
         : null,
       ticket,
+      ...myClientIdentity(options, MY_ENCODER),
     );
     if (result.error !== undefined) throw myError(result.error);
     this._id = result.id;
@@ -976,3 +980,13 @@ const mysql = defineDriver({
 });
 
 export { mysql };
+
+// `sslCert`/`sslKey` as the two trailing connect arguments (D201).
+function myClientIdentity(options, encoder) {
+  if ((options.sslCert === undefined) !== (options.sslKey === undefined)) {
+    throw new TypeError("a client certificate needs both sslCert and sslKey");
+  }
+  if (options.sslCert === undefined) return [null, null];
+  const pem = (v) => (typeof v === "string" ? encoder.encode(v) : v);
+  return [pem(options.sslCert), pem(options.sslKey)];
+}

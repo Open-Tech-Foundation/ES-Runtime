@@ -7784,6 +7784,7 @@ mod tests {
             body: es_runtime_providers::HttpServerBody::Empty,
             remote_address: remote_address.to_string(),
             remote_port,
+            peer_certificate: None,
         }
     }
 
@@ -7803,6 +7804,7 @@ mod tests {
                 local_address: options.host.clone(),
                 local_port: 8443,
                 alpn: None,
+                peer_certificate: None,
             };
             self.options.lock().unwrap().push(options);
             Box::pin(std::future::ready(Ok((1, info))))

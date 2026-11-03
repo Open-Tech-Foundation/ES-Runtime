@@ -285,6 +285,7 @@ impl NetTransport for MockTransport {
                         headers: Vec::new(),
                         body: RequestBody::Empty,
                         redirect: RedirectMode::Follow,
+                        tls: Default::default(),
                     });
                 }
             }

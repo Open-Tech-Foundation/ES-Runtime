@@ -406,6 +406,10 @@ declare module "runtime:db" {
      * reading a file needs a permission a URL should not exercise.
      */
     sslRootCert?: string | Uint8Array;
+    /** A client certificate chain (PEM) to present (DECISIONS D201). Needs `sslKey`. */
+    sslCert?: string | Uint8Array;
+    /** The private key belonging to `sslCert`. */
+    sslKey?: string | Uint8Array;
   }
 
   /** Connection options, plus how big the pool is. */
@@ -504,6 +508,10 @@ declare module "runtime:db" {
     sslmode?: "require" | "prefer" | "disable";
     /** A certificate authority (PEM) to trust besides the public roots. */
     sslRootCert?: string | Uint8Array;
+    /** A client certificate chain (PEM) to present (DECISIONS D201). Needs `sslKey`. */
+    sslCert?: string | Uint8Array;
+    /** The private key belonging to `sslCert`. */
+    sslKey?: string | Uint8Array;
     /** Milliseconds for the connection and its handshake. Default 10 000; `0` waits forever. */
     connectTimeout?: number;
     /**
@@ -595,13 +603,20 @@ declare module "runtime:db" {
     /** Where the user is defined; the URL's database, else `admin`. */
     authSource?: string;
     /** Negotiated with the server when absent. */
-    authMechanism?: "SCRAM-SHA-1" | "SCRAM-SHA-256";
+    /** `MONGODB-X509` authenticates with the client certificate (`cert`/`key` or `tlsCertificateKeyFile`). */
+    authMechanism?: "SCRAM-SHA-1" | "SCRAM-SHA-256" | "MONGODB-X509";
     tls?: boolean;
     ssl?: boolean;
     /** A CA bundle to trust, read through `runtime:fs` (needs `read`). */
     tlsCAFile?: string;
     /** A CA bundle to trust, as PEM. */
     ca?: string | Uint8Array;
+    /** One PEM file holding the client certificate and its key, read through `runtime:fs` (DECISIONS D201). */
+    tlsCertificateKeyFile?: string;
+    /** A client certificate chain (PEM) to present. Needs `key`. */
+    cert?: string | Uint8Array;
+    /** The private key belonging to `cert`. */
+    key?: string | Uint8Array;
     appName?: string;
     /** Connections the client may open; 0 for no limit. Default 100. */
     maxPoolSize?: number;
