@@ -4180,3 +4180,13 @@ Deno replaced reqwest in `fetch` with a hyper-util client of its own (deno#24237
 - **Installing an archive whose checksum is missing**, as `install.sh` does: an upgrade replaces a binary that is already working, so there is no reason to accept an unverified one.
 
 **Consequences:** reqwest, `self_update`, `hyper-rustls`, `tower-http`, `rustls-platform-verifier` and their dependencies leave the tree: 580 → 555 crates on Linux, 578 → 552 on macOS (`security-framework` and `core-foundation` among them), 589 → 563 on Windows, none added (`cargo tree --workspace -e normal --target <triple>`). `fetch`'s observable behaviour is unchanged except where it now follows the Fetch specification more closely (body headers dropped on a method change; a streamed body is never resent). `upgrade` fails rather than installing an unverified binary, and shows no progress bar. Documented per D27 (internals `fetch` and `tls`, `api/cli`, both changelogs).
+
+### D199 — TLS prefers the hybrid post-quantum key exchange · *Accepted (2026-11-03)*
+
+**Context:** rustls offers X25519MLKEM768 — X25519 combined with ML-KEM-768 (FIPS 203) — and puts it first by default. tokio-rustls depends on rustls with `default-features = false`, so its `prefer-post-quantum` feature was off in this build, and every client and server handshake offered plain X25519 first. A session recorded today can then be decrypted by whoever later has a quantum computer able to break X25519; the hybrid is secure as long as either half is. Chrome and Firefox already prefer it, and it is the TLS 1.3 key exchange the IETF hybrid design (draft-ietf-tls-ecdhe-mlkem) specifies.
+
+**Decision (maintainer, 2026-11-03):** rustls is named in the workspace with `prefer-post-quantum`, so X25519MLKEM768 is offered first in every TLS client and server the runtime builds. A peer without it negotiates X25519 as before; nothing is configurable.
+
+**Rejected:** making it an option (there is no deployment that is better off without it); offering only the hybrid (most servers on the internet do not support it yet, and refusing them is no protection).
+
+**Consequences:** a ClientHello carries an ML-KEM key share, about 1.2 KB more. A test pins the negotiated group between our client and server, and fails if the feature is lost again.

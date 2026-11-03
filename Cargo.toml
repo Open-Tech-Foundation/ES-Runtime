@@ -149,6 +149,12 @@ http-body-util = "0.1.3"
 # Confined to `default-providers`; the HTTP client (D198) uses the same stack.
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12"] }
+# Named only to turn on `prefer-post-quantum` (DECISIONS.md D199), which rustls
+# enables by default and tokio-rustls's `default-features = false` turns off:
+# the hybrid X25519MLKEM768 key exchange is offered first rather than last, so
+# a recorded session cannot be decrypted later by a quantum computer. Already
+# in the tree through tokio-rustls.
+rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "tls12", "prefer-post-quantum"] }
 webpki-roots = "1.0.11"
 # RFC 6455 WebSocket framing for the `WebSocket` global (DECISIONS D29). TLS is
 # done by us (tokio-rustls, above) and the established stream handed to

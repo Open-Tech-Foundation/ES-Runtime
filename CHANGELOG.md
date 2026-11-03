@@ -13,6 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- TLS prefers the hybrid post-quantum key exchange X25519MLKEM768 in every
+  client and server (DECISIONS D199). The build had turned rustls's
+  preference off, so handshakes used plain X25519 first.
+
 - **`esrun upgrade` verifies what it installs** (DECISIONS D198). It replaced
   the running binary with the downloaded archive without checking it, though
   the CLI reference said it did. It now refuses a release that publishes no

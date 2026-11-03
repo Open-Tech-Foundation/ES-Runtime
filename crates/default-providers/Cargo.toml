@@ -28,6 +28,7 @@ tempfile.workspace = true
 # seam speaks (D55).
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tokio-rustls.workspace = true
+rustls.workspace = true
 tokio-tungstenite.workspace = true
 webpki-roots.workspace = true
 bytes.workspace = true

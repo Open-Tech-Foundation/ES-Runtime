@@ -798,3 +798,54 @@ pub(crate) mod test_pki {
         (port, task)
     }
 }
+
+#[cfg(test)]
+mod key_exchange_tests {
+    use std::sync::Arc;
+
+    use tokio_rustls::rustls::ServerConfig;
+    use tokio_rustls::rustls::crypto::aws_lc_rs;
+    use tokio_rustls::rustls::pki_types::ServerName;
+    use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+    use super::test_pki::Ca;
+
+    // D199: both directions prefer the hybrid post-quantum key exchange, so a
+    // session between two peers that support it is protected against a future
+    // quantum attacker who records it today.
+    #[tokio::test]
+    async fn the_hybrid_post_quantum_key_exchange_is_negotiated() {
+        let ca = Ca::new("PQ CA");
+        let leaf = ca.leaf(&["localhost"]);
+        let server = ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(leaf.chain, leaf.key)
+            .unwrap();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let accept = tokio::spawn(async move {
+            let tls = TlsAcceptor::from(Arc::new(server))
+                .accept(server_io)
+                .await
+                .unwrap();
+            tls.get_ref()
+                .1
+                .negotiated_key_exchange_group()
+                .map(|g| g.name())
+        });
+        let connector = TlsConnector::from(Arc::new(ca.trust().client_config(&[])));
+        let tls = connector
+            .connect(ServerName::try_from("localhost").unwrap(), client_io)
+            .await
+            .unwrap();
+        let client_group = tls
+            .get_ref()
+            .1
+            .negotiated_key_exchange_group()
+            .map(|g| g.name());
+        let expected = Some(tokio_rustls::rustls::NamedGroup::X25519MLKEM768);
+        assert_eq!(client_group, expected);
+        assert_eq!(accept.await.unwrap(), expected);
+    }
+}

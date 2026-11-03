@@ -7,7 +7,8 @@
 // the client global (one ws_recv outstanding, re-armed per frame; D4), so it
 // rides the embedder's tick with no owned loop. Binding requires NetListen; the
 // per-connection send/recv/close need no capability (the accept authorized them).
-// ws: only — a wss: server is a follow-up.
+// ws: only. A wss: endpoint is runtime:http's `serve` with TLS and
+// `upgradeWebSocket`, which serves https: and wss: on one port.
 
 const ops = globalThis.__ops;
 // Which host request a server-side Request came from — set by the prelude when

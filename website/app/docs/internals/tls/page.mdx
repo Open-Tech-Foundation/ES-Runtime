@@ -85,6 +85,14 @@ file, and `--tls-ca=/etc/ssl/certs/ca-certificates.crt` uses it.
 For the same reason, `fetch` and the exporter ignore `HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY`.
 
+## Post-quantum key exchange
+
+Every client and server prefers the hybrid X25519MLKEM768 key exchange — X25519
+together with ML-KEM-768 — and falls back to X25519 for a peer without it. A
+session is safe as long as either half holds, so traffic recorded today stays
+private from a quantum computer later. The cost is about 1.2 KB more in the
+first handshake message.
+
 ## What it costs
 
 The store is parsed once. Each client builds its TLS configuration from it on

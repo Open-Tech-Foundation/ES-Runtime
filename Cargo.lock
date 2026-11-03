@@ -1444,6 +1444,7 @@ dependencies = [
  "hyper-util",
  "rcgen",
  "rustix 1.1.4",
+ "rustls",
  "serde",
  "serde_json",
  "socket2",
