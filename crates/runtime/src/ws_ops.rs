@@ -239,10 +239,29 @@ pub(crate) fn install(
                 Some(n) if n <= 0.0 || !n.is_finite() => None,
                 Some(n) => Some(n as u64),
             };
+            // `wss:`: the PEM chain and key, inline (D28). Absent ⇒ `ws:`.
+            let pem = |i: usize| match args.get(i) {
+                Some(Value::Bytes(bytes)) => Some(bytes.clone()),
+                Some(Value::String(text)) => Some(text.as_bytes().to_vec()),
+                _ => None,
+            };
+            let tls = match (pem(6), pem(7)) {
+                (Some(cert), Some(key)) => Some(es_runtime_providers::HttpServerTls {
+                    cert,
+                    key,
+                    // The opening handshake is an HTTP/1.1 request.
+                    alpn: vec!["http/1.1".to_string()],
+                    request_cert: false,
+                    client_ca: Vec::new(),
+                    crl: Vec::new(),
+                }),
+                _ => None,
+            };
             Box::pin(async move {
                 let (id, info) = require(&w)?
                     .serve(WsServeOptions {
                         host,
+                        tls,
                         port,
                         timeouts,
                         max_connections,

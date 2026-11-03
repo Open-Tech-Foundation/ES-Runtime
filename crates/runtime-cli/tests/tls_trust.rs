@@ -742,3 +742,45 @@ console.log("RESULTS:" + results.join(","));
         stdout(&out)
     );
 }
+
+// A standalone runtime:websocket server serves `wss:` (its own certificate,
+// verified by the client against `--tls-ca`), and refuses half-given options.
+#[test]
+fn the_standalone_websocket_server_serves_wss() {
+    let ca = Ca::new("Private CA");
+    let pem = file("wss-ca.pem", &ca.pem);
+    let (cert, key) = ca.localhost();
+    let script = r#"
+import { serve } from "runtime:websocket";
+import { env, unmask } from "runtime:process";
+const server = serve({ hostname: "127.0.0.1", port: 0, secureTransport: "on", cert: env.CERT, key: unmask(env.KEY) });
+const { port } = await server.addr;
+(async () => { for await (const socket of server) socket.onmessage = (e) => socket.send("echo:" + e.data); })();
+const echoed = await new Promise((resolve, reject) => {
+  const ws = new WebSocket(`wss://localhost:${port}/`);
+  ws.onopen = () => ws.send("hi");
+  ws.onmessage = (e) => { resolve(e.data); ws.close(); };
+  ws.onerror = () => reject(new Error("refused"));
+  setTimeout(() => reject(new Error("timed out")), 5000);
+}).catch((e) => e.message);
+const refused = [
+  () => serve({ port: 0, secureTransport: "on", cert: env.CERT }),
+  () => serve({ port: 0, cert: env.CERT, key: unmask(env.KEY) }),
+  () => serve({ port: 0, secureTransport: "on", cert: env.CERT, key: unmask(env.KEY), requestCert: true }),
+].map((make) => { try { make(); return "accepted"; } catch (e) { return e.name; } });
+console.log(`WSS:${echoed} REFUSED:${refused.join(",")}`);
+await server.close();
+"#;
+    let out = run_script(
+        "wss.mjs",
+        script,
+        &[tls_ca(&pem)],
+        &[("CERT", &cert), ("KEY", &key)],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("WSS:echo:hi REFUSED:TypeError,TypeError,TypeError"),
+        "{}",
+        stdout(&out)
+    );
+}

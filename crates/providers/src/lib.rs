@@ -1712,6 +1712,9 @@ pub struct WebSocketInfo {
 pub struct WsServeOptions {
     /// Address to bind (`"0.0.0.0"`, `"127.0.0.1"`, …).
     pub host: String,
+    /// TLS termination (`wss:`): the PEM certificate chain and key, as
+    /// [`HttpServeOptions::tls`] takes them. `None` ⇒ plaintext `ws:`.
+    pub tls: Option<HttpServerTls>,
     /// Port to bind; `0` picks an ephemeral one, read back from the returned
     /// [`SocketInfo`].
     pub port: u16,

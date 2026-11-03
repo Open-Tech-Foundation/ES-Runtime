@@ -11,6 +11,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:websocket`'s `serve()` serves `wss:` with `secureTransport: "on"`,
+  `cert` and `key`, like `runtime:http`'s `serve`.
+
 ### Security
 
 - **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to

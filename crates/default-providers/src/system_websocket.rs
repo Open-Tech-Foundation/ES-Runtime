@@ -605,6 +605,21 @@ impl WebSocketProvider for SystemWebSocket {
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            // Built before the bind, so a bad certificate fails `serve` rather
+            // than every connection after the port is open.
+            let site = match options.tls {
+                Some(tls) => Some(crate::tls::ServerTls::new(
+                    crate::tls::ServerTlsMaterial {
+                        cert: tls.cert,
+                        key: tls.key,
+                        client_ca: tls.client_ca,
+                        crl: tls.crl,
+                        request_cert: tls.request_cert,
+                    },
+                    &tls.alpn,
+                )?),
+                None => None,
+            };
             let listener = TcpListener::bind((options.host.as_str(), options.port))
                 .await
                 .map_err(err)?;
@@ -693,6 +708,7 @@ impl WebSocketProvider for SystemWebSocket {
                     let tx = tx.clone();
                     let conns = conns.clone();
                     let next_id = next_id.clone();
+                    let site = site.clone();
                     // One span per connection, at `debug`, so the handshake
                     // failure below and anything logged after it are
                     // attributable to a peer. See the same shape in
@@ -710,38 +726,65 @@ impl WebSocketProvider for SystemWebSocket {
                             // task so it lives as long as the connection does.
                             let permit = permit;
                             let peer_slot = peer_slot;
-                            // A peer that opens a connection and never sends its
-                            // upgrade request is the cheapest hold there is: one
-                            // syscall to the peer, a task and a descriptor to us,
-                            // and tungstenite waits for that request forever.
-                            let handshake = match handshake_timeout {
-                                None => Some(tokio_tungstenite::accept_async(tcp).await),
-                                Some(limit) => {
-                                    match tokio::time::timeout(
-                                        limit,
-                                        tokio_tungstenite::accept_async(tcp),
-                                    )
-                                    .await
-                                    {
-                                        Ok(done) => Some(done),
-                                        Err(_) => {
-                                            tracing::debug!(
-                                                target: "runtime::websocket",
-                                                timeout_ms = limit.as_millis() as u64,
-                                                "handshake timed out; closing the connection",
-                                            );
-                                            None
-                                        }
+                            // TLS first on a `wss:` server, then the opening
+                            // handshake; one deadline covers both. A slot taken
+                            // above goes with whichever way this ends.
+                            let establish = async move {
+                                match site {
+                                    None => {
+                                        let ws = tokio_tungstenite::accept_async(tcp)
+                                            .await
+                                            .map_err(|e| e.to_string())?;
+                                        Ok::<_, String>(SystemWebSocket::spawn(
+                                            ws,
+                                            permit,
+                                            peer_slot,
+                                            max_buffered,
+                                        ))
+                                    }
+                                    Some(site) => {
+                                        let tls = site
+                                            .acceptor()
+                                            .accept(tcp)
+                                            .await
+                                            .map_err(|e| format!("tls handshake: {e}"))?;
+                                        let ws = tokio_tungstenite::accept_async(tls)
+                                            .await
+                                            .map_err(|e| e.to_string())?;
+                                        Ok(SystemWebSocket::spawn(
+                                            ws,
+                                            permit,
+                                            peer_slot,
+                                            max_buffered,
+                                        ))
                                     }
                                 }
                             };
-                            let ws = match handshake {
-                                Some(Ok(ws)) => ws,
+                            // A peer that opens a connection and never sends its
+                            // upgrade request is the cheapest hold there is: one
+                            // syscall to the peer, a task and a descriptor to us,
+                            // and the handshake waits for that request forever.
+                            let handshake = match handshake_timeout {
+                                None => Some(establish.await),
+                                Some(limit) => match tokio::time::timeout(limit, establish).await {
+                                    Ok(done) => Some(done),
+                                    Err(_) => {
+                                        tracing::debug!(
+                                            target: "runtime::websocket",
+                                            timeout_ms = limit.as_millis() as u64,
+                                            "handshake timed out; closing the connection",
+                                        );
+                                        None
+                                    }
+                                },
+                            };
+                            let slot = match handshake {
+                                Some(Ok(slot)) => slot,
                                 // A plain HTTP request to a WebSocket port, a
-                                // missing `Sec-WebSocket-Key`, a peer that
-                                // opened a connection and said nothing. Debug,
-                                // not warn: it is peer-driven, so warning would
-                                // let any client set this server's log volume.
+                                // failed TLS handshake, a missing
+                                // `Sec-WebSocket-Key`. Debug, not warn: it is
+                                // peer-driven, so warning would let any client
+                                // set this server's log volume.
                                 Some(Err(e)) => {
                                     tracing::debug!(
                                         target: "runtime::websocket",
@@ -754,7 +797,6 @@ impl WebSocketProvider for SystemWebSocket {
                                 None => return,
                             };
                             let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
-                            let slot = SystemWebSocket::spawn(ws, permit, peer_slot, max_buffered);
                             conns.lock().unwrap().insert(id, slot);
                             if tx.send((id, WebSocketInfo::default())).await.is_err() {
                                 conns.lock().unwrap().remove(&id); // server gone before accept
@@ -838,6 +880,7 @@ mod tests {
     ) -> (u64, SocketInfo) {
         sys.serve(WsServeOptions {
             host: "127.0.0.1".to_string(),
+            tls: None,
             port: 0,
             timeouts,
             max_connections,
@@ -1399,6 +1442,7 @@ mod bounds_tests {
         let (server_id, info) = sys
             .serve(WsServeOptions {
                 host: "127.0.0.1".to_string(),
+                tls: None,
                 port: 0,
                 timeouts: WsTimeouts::default(),
                 max_connections: None,
@@ -1456,6 +1500,7 @@ mod bounds_tests {
         let (server_id, info) = sys
             .serve(WsServeOptions {
                 host: "127.0.0.1".to_string(),
+                tls: None,
                 port: 0,
                 timeouts: WsTimeouts::default(),
                 max_connections: None,
@@ -1509,6 +1554,7 @@ mod bounds_tests {
         let (server_id, info) = sys
             .serve(WsServeOptions {
                 host: "127.0.0.1".to_string(),
+                tls: None,
                 port: 0,
                 timeouts: WsTimeouts::default(),
                 max_connections: Some(8),

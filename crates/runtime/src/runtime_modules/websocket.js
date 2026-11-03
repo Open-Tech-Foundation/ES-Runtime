@@ -366,6 +366,7 @@ function serve(options = {}) {
   const maxConnections = parseMaxConnections(options);
   const maxConnectionsPerIp = parseMaxConnectionsPerIp(options);
   const maxBufferedAmount = parseMaxBufferedAmount(options);
+  const tls = parseWssTls(options);
   const ready = ops.ws_serve(
     hostname,
     port,
@@ -373,8 +374,48 @@ function serve(options = {}) {
     maxConnections,
     maxConnectionsPerIp,
     maxBufferedAmount,
+    tls?.cert ?? null,
+    tls?.key ?? null,
   );
   return new WebSocketServer(ready);
+}
+
+// `secureTransport: "on"` serves `wss:` with an inline PEM `cert` and `key`, as
+// runtime:http's `serve` takes them. Client certificates are runtime:http's:
+// there the handler sees who connected, and `upgradeWebSocket` makes the
+// connection a WebSocket.
+const SECRET = Symbol.for("runtime.secret.redacted");
+function parseWssTls(options) {
+  const mode = options.secureTransport ?? "off";
+  if (mode === "off") {
+    if (options.cert !== undefined || options.key !== undefined) {
+      throw new TypeError('serve: cert and key need secureTransport: "on"');
+    }
+    return null;
+  }
+  if (mode !== "on") {
+    throw new TypeError(`serve: secureTransport must be "on" or "off", got ${JSON.stringify(mode)}`);
+  }
+  for (const name of ["requestCert", "ca", "crl"]) {
+    if (options[name] !== undefined) {
+      throw new TypeError(
+        `serve: ${name} is not supported here; client certificates are runtime:http's serve with upgradeWebSocket`,
+      );
+    }
+  }
+  if (!options.cert || !options.key) {
+    throw new TypeError('serve: secureTransport "on" requires both cert and key (PEM)');
+  }
+  for (const name of ["cert", "key"]) {
+    const value = options[name];
+    if (typeof value === "object" && value !== null && value[SECRET] === true) {
+      throw new TypeError(`serve: ${name} is a masked Secret from env; pass unmask(env.…) from runtime:process`);
+    }
+    if (typeof value !== "string" && !(value instanceof Uint8Array)) {
+      throw new TypeError(`serve: ${name} must be a PEM string or Uint8Array`);
+    }
+  }
+  return { cert: options.cert, key: options.key };
 }
 
 // Send one message to many connections in a single host crossing — the batched

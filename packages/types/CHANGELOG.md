@@ -13,6 +13,10 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `secureTransport`, `cert` and `key` on `runtime:websocket`'s `serve()`.
+
 ## [0.21.0] - 2026-11-03
 
 ### Added

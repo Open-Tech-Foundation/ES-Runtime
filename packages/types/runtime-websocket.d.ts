@@ -196,6 +196,12 @@ declare module "runtime:websocket" {
      * it.
      */
     maxBufferedAmount?: number | null;
+    /** `"on"` serves `wss:` with `cert` and `key`. */
+    secureTransport?: "on" | "off";
+    /** PEM certificate chain, leaf first. Required with `secureTransport: "on"`. */
+    cert?: string | Uint8Array;
+    /** PEM private key. Required with `secureTransport: "on"`. */
+    key?: string | Uint8Array;
   }
 
   /**
