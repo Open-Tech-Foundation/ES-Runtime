@@ -197,6 +197,33 @@ if [ -d "$LEGACY_BIN_DIR" ] && [ "$LEGACY_BIN_DIR" != "$BIN_DIR" ]; then
 fi
 
 # Suggest a PATH entry if it isn't already there.
+#
+# fish reads neither ~/.bashrc nor POSIX `export` lines, so it gets a file of
+# its own in conf.d: fish sources every file there at startup, the file is ours
+# alone (re-running overwrites it rather than appending a duplicate), and
+# uninstalling is deleting it. `fish_add_path` (fish 3.2+) skips a directory
+# already in PATH.
+case "${SHELL:-}" in
+  */fish)
+    shell_profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/es-runtime.fish"
+    path_line="fish_add_path \"$BIN_DIR\""
+    ;;
+  *)
+    shell_profile=""
+    case "${SHELL:-}" in
+      */zsh) shell_profile="$HOME/.zshrc" ;;
+      */bash) shell_profile="$HOME/.bashrc" ;;
+      *)
+        if [ -f "$HOME/.bashrc" ]; then shell_profile="$HOME/.bashrc"
+        elif [ -f "$HOME/.zshrc" ]; then shell_profile="$HOME/.zshrc"
+        elif [ -f "$HOME/.profile" ]; then shell_profile="$HOME/.profile"
+        fi
+        ;;
+    esac
+    path_line="export PATH=\"$BIN_DIR:\$PATH\""
+    ;;
+esac
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
@@ -207,37 +234,32 @@ case ":$PATH:" in
       # openable (a container without a controlling terminal), where the read
       # fails and the manual instructions below are the right answer anyway.
       if read -r ans < /dev/tty 2>/dev/null && { [ "$ans" = "y" ] || [ "$ans" = "Y" ]; }; then
-        shell_profile=""
-        case "${SHELL:-}" in
-          */zsh) shell_profile="$HOME/.zshrc" ;;
-          */bash) shell_profile="$HOME/.bashrc" ;;
-          *)
-            if [ -f "$HOME/.bashrc" ]; then shell_profile="$HOME/.bashrc"
-            elif [ -f "$HOME/.zshrc" ]; then shell_profile="$HOME/.zshrc"
-            elif [ -f "$HOME/.profile" ]; then shell_profile="$HOME/.profile"
-            fi
-            ;;
-        esac
-        if [ -n "$shell_profile" ]; then
-          echo "" >> "$shell_profile"
-          echo "# ES Runtime" >> "$shell_profile"
-          echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$shell_profile"
+        if [ -z "$shell_profile" ]; then
+          echo
+          echo "Could not determine shell profile. Please add it manually:"
+          bold "  $path_line"
+        elif [ "${shell_profile##*.}" = fish ]; then
+          mkdir -p "$(dirname "$shell_profile")"
+          printf '# ES Runtime\n%s\n' "$path_line" > "$shell_profile"
           echo
           bold "Added PATH to $shell_profile"
           dim "Restart your terminal or run: source $shell_profile"
         else
+          echo "" >> "$shell_profile"
+          echo "# ES Runtime" >> "$shell_profile"
+          echo "$path_line" >> "$shell_profile"
           echo
-          echo "Could not determine shell profile. Please add it manually:"
-          bold "  export PATH=\"$BIN_DIR:\$PATH\""
+          bold "Added PATH to $shell_profile"
+          dim "Restart your terminal or run: source $shell_profile"
         fi
       else
         echo
         echo "Please add it manually:"
-        bold "  export PATH=\"$BIN_DIR:\$PATH\""
+        bold "  $path_line"
       fi
     else
       echo "Please add it manually:"
-      bold "  export PATH=\"$BIN_DIR:\$PATH\""
+      bold "  $path_line"
     fi
     ;;
 esac

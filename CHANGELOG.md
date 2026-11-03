@@ -11,6 +11,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- `install.sh` supports the fish shell: asked to add ES Runtime to `PATH`, it
+  writes `~/.config/fish/conf.d/es-runtime.fish` (honouring
+  `XDG_CONFIG_HOME`) with `fish_add_path`, instead of appending a POSIX
+  `export` line to `~/.bashrc` that fish never reads. The manual instruction
+  is printed in fish syntax too.
+
 ### Changed
 
 - The site footer centers a visibly external Foundation policies link without

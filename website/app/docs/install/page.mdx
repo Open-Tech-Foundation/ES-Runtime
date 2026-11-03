@@ -112,6 +112,8 @@ Delete the install directory and remove it from your `PATH`.
 ```sh
 # Linux / macOS — remove the install dir, then drop the PATH line from your shell profile.
 rm -rf "$HOME/.es-runtime"
+# fish keeps its PATH entry in a file of its own.
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/es-runtime.fish"
 ```
 
 ```powershell
