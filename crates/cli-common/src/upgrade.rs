@@ -435,6 +435,9 @@ fn swap(exe: &Path, staged: &Path) -> Result<(), String> {
         let _ = std::fs::rename(&aside, exe);
         return Err(format!("cannot replace {}: {e}", exe.display()));
     }
+    // Gone now unless it is still running, in which case the next upgrade
+    // removes it.
+    let _ = std::fs::remove_file(&aside);
     Ok(())
 }
 
@@ -855,6 +858,41 @@ mod tests {
             .collect();
         assert_eq!(left, ["esrun"], "a staging file was left behind");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Windows refuses to overwrite a running executable but lets it be
+    // renamed, which is what the swap relies on: the running copy moves
+    // aside, the new one takes its name, and the next upgrade removes the old.
+    #[cfg(windows)]
+    #[test]
+    fn a_running_executable_is_replaced_on_windows() {
+        let dir = scratch("running");
+        let exe = dir.join("running.exe");
+        // A copy of this test binary, kept running by the ignored test below.
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let mut child = std::process::Command::new(&exe)
+            .args(["--ignored", "--exact", "upgrade::tests::stays_running"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let installed = install(&exe, b"NEW");
+        let _ = child.kill();
+        let _ = child.wait();
+        installed.unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"NEW");
+        // The next upgrade clears the set-aside copy before swapping again.
+        install(&exe, b"NEWER").unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"NEWER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Not a test: the process `a_running_executable_is_replaced_on_windows`
+    /// keeps running while it replaces the file.
+    #[test]
+    #[ignore = "a helper process for the Windows replacement test"]
+    fn stays_running() {
+        std::thread::sleep(std::time::Duration::from_secs(30));
     }
 
     /// A release server on loopback: `GET <path>` answers with `files[path]`,
