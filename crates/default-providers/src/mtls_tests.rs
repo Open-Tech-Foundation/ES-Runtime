@@ -59,12 +59,17 @@ async fn handshake(
     identity: ClientIdentity,
 ) -> Option<Option<Arc<PeerCertificate>>> {
     let client = SystemNet::new().with_trust(server_ca.trust());
+    // The listener's address, not `localhost`: Windows resolves that to `::1`
+    // first and spends seconds on the refusal there before trying 127.0.0.1,
+    // which outlasts the accept below. The certificate is still checked
+    // against `localhost`, through SNI.
     let connect = client.connect(
-        "localhost".to_string(),
+        "127.0.0.1".to_string(),
         port,
         ConnectOptions {
             secure: true,
             identity,
+            sni: Some("localhost".to_string()),
             ..Default::default()
         },
     );
@@ -214,11 +219,12 @@ async fn a_client_key_that_does_not_match_its_certificate_is_refused() {
     let client = SystemNet::new().with_trust(server_ca.trust());
     let err = client
         .connect(
-            "localhost".to_string(),
+            "127.0.0.1".to_string(),
             port,
             ConnectOptions {
                 secure: true,
                 identity: mismatched,
+                sni: Some("localhost".to_string()),
                 ..Default::default()
             },
         )
@@ -488,10 +494,11 @@ async fn a_revoked_server_certificate_is_refused_by_clients() {
             let net = SystemNet::new().with_trust(trust);
             let result = net
                 .connect(
-                    "localhost".to_string(),
+                    "127.0.0.1".to_string(),
                     port,
                     ConnectOptions {
                         secure: true,
+                        sni: Some("localhost".to_string()),
                         ..Default::default()
                     },
                 )
