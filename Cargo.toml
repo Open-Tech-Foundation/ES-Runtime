@@ -62,9 +62,8 @@ getrandom = "0.4.2"
 # accepts. The same implementation Firefox ships, so the legacy encodings are
 # the spec's tables rather than a hand-written subset.
 encoding_rs = "0.8.35"
-# Unpredictable temp file/directory names for `runtime:fs`. Already in the tree
-# (via self_update); named here so the dependency is deliberate rather than
-# inherited. Confined to `default-providers`.
+# Unpredictable temp file/directory names for `runtime:fs`. Confined to
+# `default-providers`.
 tempfile = "3.27.0"
 # The embedded SQL engine behind `runtime:db`'s `sqlite:` scheme (DECISIONS.md
 # D56). `turso_core` rather than the `turso` wrapper: the wrapper pulls mimalloc
@@ -117,36 +116,37 @@ futures-core = "0.3.32"
 # body: JS pushes chunks into a bounded sender, the transport drains the receiver
 # as a `ByteStream`. Bounded capacity gives upload backpressure.
 futures-channel = { version = "0.3.32", default-features = false, features = ["alloc"] }
-# Vetted HTTP client for the default NetTransport (DECISIONS.md D20). rustls TLS
-# only (no OpenSSL/native-tls). Confined to `default-providers`.
-#
-# The three content-codings are the same set `CompressionStream` implements
-# (SPEC §2.8), which is what Fetch's "decode" step needs a client to understand;
-# enabling them is what makes reqwest negotiate `Accept-Encoding` and decode the
-# response body. `zstd` is deliberately left out: the runtime does not implement
-# it anywhere else, and advertising a coding we would then have to decode with a
-# codec present for no other reason is dependency for its own sake.
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset", "gzip", "brotli", "deflate"] }
 futures-io = { version = "0.3.32", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.32", default-features = false }
 # Vetted HTTP/1.1 + HTTP/2 server for the default HttpServerProvider
-# (runtime:http). The same hyper 1.x already in the tree via reqwest;
-# hyper-util's tokio executor + http-body-util's Full body keep it minimal. All
-# MIT. Confined to `default-providers`.
+# (runtime:http). hyper-util's tokio executor + http-body-util's Full body keep
+# it minimal. All MIT. Confined to `default-providers`.
 #
-# `http2` adds no crate to the graph: the `h2` implementation behind it is
-# already present via reqwest's client-side HTTP/2. hyper-util's `server-auto`
+# One `h2` implementation serves both directions: the server's HTTP/2 and the
+# client's (below). hyper-util's `server-auto`
 # is what lets one accepted connection serve either version — it reads the
 # HTTP/2 connection preface and dispatches, so h2 over ALPN and cleartext h2c
 # (prior knowledge) both work without a second accept path.
-hyper = { version = "1.10.1", default-features = false, features = ["http1", "http2", "server"] }
-hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "server-auto"] }
+#
+# The client side is the outbound HTTP client (DECISIONS.md D198): hyper's
+# framing, hyper-util's `client-legacy` connection pool and `HttpConnector`
+# (DNS, TCP, Happy Eyeballs). Not `client-proxy`: the client reads no proxy
+# configuration.
+hyper = { version = "1.10.1", default-features = false, features = ["http1", "http2", "server", "client"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "server-auto", "client-legacy", "http1", "http2"] }
+# The `Service` the client's connector implements, which is how hyper-util's
+# pool asks for a connection. Already in the tree with hyper-util.
+tower-service = "0.3.3"
+# Streaming decoders for the HTTP client's content-codings (D198): the same
+# three `CompressionStream` implements (SPEC §2.8). `zstd` is left out — the
+# runtime decodes it nowhere else.
+async-compression = { version = "0.4.42", default-features = false, features = ["tokio", "gzip", "brotli", "zlib"] }
 http-body-util = "0.1.3"
 # TLS for `runtime:net` client sockets (`secureTransport: "on"`, DECISIONS D28).
 # rustls via tokio-rustls with the `aws-lc-rs` provider (selected explicitly —
 # both ring and aws-lc-rs are in the tree, so the process default is ambiguous);
 # trust anchors from the bundled Mozilla set (webpki-roots, no platform I/O).
-# Both already present transitively via reqwest. Confined to `default-providers`.
+# Confined to `default-providers`; the HTTP client (D198) uses the same stack.
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12"] }
 webpki-roots = "1.0.11"
@@ -251,27 +251,13 @@ subtle = "2.6.1"
 globset = "0.4.16"
 ignore = "0.4.23"
 walkdir = "2.5.0"
-# Archive reading and writing for `runtime:archive` (DECISIONS D174). Both are
-# already in the tree via self_update; named here so the dependency is
-# deliberate. `tar` needs no default features (xattr is for extraction to a
+# Archive reading and writing for `runtime:archive` (DECISIONS D174), and for
+# reading a release archive in `upgrade` (D198). `tar` needs no default features (xattr is for extraction to a
 # real filesystem, which the provider does), and `zip` only deflate — the
 # compression method a ZIP in the wild actually uses. Every other method is
 # refused at the boundary rather than silently unsupported.
 tar = { version = "0.4.46", default-features = false }
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
-# Self-update for `esrun upgrade`: finds the latest GitHub release for the
-# target, downloads + extracts it, and replaces the running binary in place
-# (rustls TLS, no OpenSSL). Used only by runtime-cli.
-self_update = { version = "1.3.1", default-features = false, features = [
-    "github",
-    "reqwest",
-    "rustls",
-    "progress-bar",
-    "archive-tar",
-    "archive-zip",
-    "compression-tar-gz",
-    "compression-zip-deflate",
-] }
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

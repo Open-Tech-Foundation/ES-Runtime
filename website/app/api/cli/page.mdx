@@ -82,7 +82,7 @@ script that genuinely wants a flag esrun also knows.
 | `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
 | `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |
 | `--otel-sample=<0..1>` | Fraction of **traces** to export. Per trace, so a trace is kept whole or dropped whole. |
-| `upgrade` | Download the latest release for your platform, verify its checksum, and replace the running binary in place. |
+| `upgrade` | Download the latest release for your platform, verify it against the release's `checksums.txt`, and replace the running binary in place. A release with no checksum, or one that does not match, is refused. |
 | `-h, --help` | Print usage and exit. |
 | `-v, --version` | Print the esrun version and exit. |
 

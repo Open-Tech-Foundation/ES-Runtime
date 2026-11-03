@@ -108,7 +108,6 @@ html5gum.workspace = true
 serde_json.workspace = true
 # `esdev create` resolves each template dependency to the current npm registry
 # release, independent of which package manager the new project will use.
-reqwest.workspace = true
 # `derive` named here rather than inherited from whichever crate happens to
 # turn it on: the resolved settings a test child receives are derived types.
 serde = { workspace = true, features = ["derive"] }

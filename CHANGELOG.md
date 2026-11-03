@@ -13,6 +13,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **`esrun upgrade` verifies what it installs** (DECISIONS D198). It replaced
+  the running binary with the downloaded archive without checking it, though
+  the CLI reference said it did. It now refuses a release that publishes no
+  `checksums.txt`, or whose archive's SHA-256 does not match it, and leaves the
+  installed binary untouched. The new binary is written beside the old one and
+  renamed into place, so an interrupted upgrade never leaves half a binary.
+  Drafts and pre-releases are no longer offered, and there is no progress bar.
+- **`fetch` runs on the runtime's own HTTP client** (D198): hyper's framing
+  and hyper-util's connection pool, with redirects, content codings and
+  deadlines written to their specifications. Following a redirect now drops
+  the body's `Content-*` headers when the method becomes `GET`, rejects rather
+  than resending a streamed body, and drops `Cookie2` and `WWW-Authenticate`
+  along with `Authorization`, `Cookie` and `Proxy-Authorization` on a hop to
+  another origin. A decoded body arrives at most 64 KiB at a time.
+  `TCP_NODELAY` is on. reqwest, `self_update` and `rustls-platform-verifier`
+  are gone, taking `security-framework`, `core-foundation` and the system
+  proxy readers with them: 25 to 26 fewer crates on each platform.
+
 - **Every TLS client verifies against one trust store** (DECISIONS D197).
   `fetch` and the `--otel` exporter checked the operating system's store
   while `runtime:net`, the database drivers and `WebSocket` checked the

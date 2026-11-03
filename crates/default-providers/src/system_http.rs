@@ -1065,6 +1065,81 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
+    /// An HTTP/2 client that opens with the connection preface (prior
+    /// knowledge, h2c) — a mode no fetch client needs, so these server tests
+    /// carry their own, straight on hyper. One value is one connection, so two
+    /// requests through it share it.
+    #[derive(Clone)]
+    pub(super) struct H2c {
+        port: u16,
+        send: hyper::client::conn::http2::SendRequest<http_body_util::Full<bytes::Bytes>>,
+    }
+
+    impl H2c {
+        pub(super) async fn connect(port: u16) -> H2c {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let (send, conn) = hyper::client::conn::http2::handshake(
+                hyper_util::rt::TokioExecutor::new(),
+                hyper_util::rt::TokioIo::new(tcp),
+            )
+            .await
+            .unwrap();
+            tokio::spawn(conn);
+            H2c { port, send }
+        }
+
+        pub(super) async fn get(&self, path: &str) -> Result<Reply, hyper::Error> {
+            self.request("GET", path, &[], Vec::new()).await
+        }
+
+        pub(super) async fn request(
+            &self,
+            method: &str,
+            path: &str,
+            headers: &[(&str, &str)],
+            body: Vec<u8>,
+        ) -> Result<Reply, hyper::Error> {
+            let mut send = self.send.clone();
+            send.ready().await?;
+            let mut request = hyper::Request::builder()
+                .method(method)
+                .uri(format!("http://127.0.0.1:{}{path}", self.port));
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let request = request
+                .body(http_body_util::Full::new(bytes::Bytes::from(body)))
+                .unwrap();
+            send.send_request(request).await.map(Reply)
+        }
+    }
+
+    /// A response from [`H2c`].
+    pub(super) struct Reply(pub(super) hyper::Response<hyper::body::Incoming>);
+
+    impl Reply {
+        pub(super) fn version(&self) -> hyper::Version {
+            self.0.version()
+        }
+
+        pub(super) fn status(&self) -> hyper::StatusCode {
+            self.0.status()
+        }
+
+        pub(super) fn headers(&self) -> &hyper::HeaderMap {
+            self.0.headers()
+        }
+
+        pub(super) async fn bytes(self) -> Result<Vec<u8>, hyper::Error> {
+            use http_body_util::BodyExt;
+            Ok(self.0.into_body().collect().await?.to_bytes().to_vec())
+        }
+
+        pub(super) async fn text(self) -> Result<String, hyper::Error> {
+            Ok(String::from_utf8(self.bytes().await?).unwrap())
+        }
+    }
+
     #[test]
     fn an_authority_is_a_host_and_a_port_and_nothing_else() {
         for good in [
@@ -1501,6 +1576,7 @@ mod tls_tests {
 
 #[cfg(test)]
 mod http2_tests {
+    use super::tests::H2c;
     use super::*;
     use es_runtime_providers::HttpServerTls;
 
@@ -1525,30 +1601,17 @@ mod http2_tests {
     #[tokio::test]
     async fn every_stream_on_one_h2_connection_reports_the_same_peer() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         // Two requests in flight on one connection: neither is answered until
         // both have arrived, so they genuinely share the connection.
         let first = tokio::spawn({
             let client = client.clone();
-            async move {
-                client
-                    .get(format!("http://127.0.0.1:{port}/a"))
-                    .send()
-                    .await
-            }
+            async move { client.get("/a").await }
         });
         let second = tokio::spawn({
             let client = client.clone();
-            async move {
-                client
-                    .get(format!("http://127.0.0.1:{port}/b"))
-                    .send()
-                    .await
-            }
+            async move { client.get("/b").await }
         });
 
         let mut peers = Vec::new();
@@ -1576,17 +1639,10 @@ mod http2_tests {
     #[tokio::test]
     async fn serves_h2c_on_a_cleartext_port_by_prior_knowledge() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
-            let resp = client
-                .get(format!("http://127.0.0.1:{port}/h2c"))
-                .send()
-                .await
-                .expect("an h2c client is answered");
+            let resp = client.get("/h2c").await.expect("an h2c client is answered");
             (resp.version(), resp.text().await.unwrap())
         });
 
@@ -1598,7 +1654,7 @@ mod http2_tests {
         ok(&http, rid, "over-h2c").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(version, hyper::Version::HTTP_2);
         assert_eq!(body, "over-h2c");
     }
 
@@ -1609,17 +1665,13 @@ mod http2_tests {
     async fn multiplexes_concurrent_streams_on_one_connection() {
         let (http, id, port) = super::tests::bound_with(None).await;
         // One client, so both requests share a pooled connection.
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let get = |path: &'static str| {
             let client = client.clone();
             tokio::spawn(async move {
                 client
-                    .get(format!("http://127.0.0.1:{port}/{path}"))
-                    .send()
+                    .get(&format!("/{path}"))
                     .await
                     .unwrap()
                     .text()
@@ -1667,21 +1719,23 @@ mod http2_tests {
         }))
         .await;
 
-        // Trusts this cert and nothing else, so the test never reads the host's
-        // certificate store.
-        let client = reqwest::Client::builder()
-            .add_root_certificate(reqwest::Certificate::from_pem(&cert_pem).unwrap())
-            .resolve("localhost", ([127, 0, 0, 1], port).into())
-            .build()
-            .unwrap();
+        // Trusts this cert and nothing else.
+        let client = crate::http_client::HttpClient::new(
+            &crate::TrustStore::from_certificates([ck.cert.der().clone()]).unwrap(),
+        );
 
         let request = tokio::spawn(async move {
             let resp = client
-                .get(format!("https://localhost:{port}/tls"))
-                .send()
+                .send(crate::http_client::Outbound::get(
+                    url::Url::parse(&format!("https://localhost:{port}/tls")).unwrap(),
+                ))
                 .await
                 .expect("the handshake negotiates a protocol both sides speak");
-            (resp.version(), resp.text().await.unwrap())
+            let version = resp.version;
+            (
+                version,
+                String::from_utf8(resp.bytes(1 << 20).await.unwrap()).unwrap(),
+            )
         });
 
         let reqs = http.next_requests(id, 8).await.unwrap();
@@ -1690,7 +1744,7 @@ mod http2_tests {
         ok(&http, rid, "secure-h2").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(version, hyper::Version::HTTP_2);
         assert_eq!(body, "secure-h2");
     }
 
@@ -1716,16 +1770,9 @@ mod http2_tests {
             sock.read_to_string(&mut got).await.unwrap();
             got
         });
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
         let h2 = tokio::spawn(async move {
-            let resp = client
-                .get(format!("http://127.0.0.1:{port}/two"))
-                .send()
-                .await
-                .unwrap();
+            let resp = client.get("/two").await.unwrap();
             (resp.version(), resp.text().await.unwrap())
         });
 
@@ -1746,7 +1793,7 @@ mod http2_tests {
         assert!(one.contains("HTTP/1.1 200"), "{one}");
         assert!(one.contains("v1"), "{one}");
         let (version, two) = h2.await.unwrap();
-        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(version, hyper::Version::HTTP_2);
         assert_eq!(two, "v2");
     }
 
@@ -1758,17 +1805,10 @@ mod http2_tests {
     #[tokio::test]
     async fn streams_a_response_body_over_h2() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
-            let resp = client
-                .get(format!("http://127.0.0.1:{port}/stream"))
-                .send()
-                .await
-                .unwrap();
+            let resp = client.get("/stream").await.unwrap();
             let te = resp.headers().get("transfer-encoding").is_some();
             let len = resp.headers().get("content-length").is_some();
             (resp.text().await.unwrap(), te, len)
@@ -1808,10 +1848,7 @@ mod http2_tests {
     #[tokio::test]
     async fn reads_a_streamed_request_body_over_h2() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         // Big enough to span many DATA frames and exhaust the initial stream
         // window, so the client only finishes if WINDOW_UPDATEs flow back.
@@ -1819,9 +1856,7 @@ mod http2_tests {
         let expected = upload.len();
         let request = tokio::spawn(async move {
             client
-                .post(format!("http://127.0.0.1:{port}/upload"))
-                .body(upload)
-                .send()
+                .request("POST", "/upload", &[], upload.into_bytes())
                 .await
                 .unwrap()
                 .text()
@@ -1853,16 +1888,16 @@ mod http2_tests {
     #[tokio::test]
     async fn carries_method_status_and_headers_over_h2() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
             let resp = client
-                .patch(format!("http://127.0.0.1:{port}/thing?q=1"))
-                .header("x-request-note", "from-client")
-                .send()
+                .request(
+                    "PATCH",
+                    "/thing?q=1",
+                    &[("x-request-note", "from-client")],
+                    Vec::new(),
+                )
                 .await
                 .unwrap();
             let note = resp
@@ -1907,15 +1942,11 @@ mod http2_tests {
     #[tokio::test]
     async fn connection_specific_headers_do_not_break_an_h2_response() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
             let resp = client
-                .get(format!("http://127.0.0.1:{port}/legacy"))
-                .send()
+                .get("/legacy")
                 .await
                 .expect("the response must be valid HTTP/2");
             let leaked: Vec<String> = ["connection", "keep-alive", "transfer-encoding", "upgrade"]
@@ -1961,15 +1992,11 @@ mod http2_tests {
     #[tokio::test]
     async fn a_response_larger_than_the_flow_control_window_completes() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
             client
-                .get(format!("http://127.0.0.1:{port}/big"))
-                .send()
+                .get("/big")
                 .await
                 .unwrap()
                 .bytes()
@@ -2007,16 +2034,10 @@ mod http2_tests {
     #[tokio::test]
     async fn a_client_that_abandons_an_h2_stream_is_reported_as_a_disconnect() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
         let request = tokio::spawn(async move {
-            let _ = client
-                .get(format!("http://127.0.0.1:{port}/gone"))
-                .send()
-                .await;
+            let _ = client.get("/gone").await;
         });
         let reqs = http.next_requests(id, 8).await.unwrap();
         let (rid, _) = reqs.into_iter().next().expect("one request");
@@ -2043,20 +2064,10 @@ mod http2_tests {
     #[tokio::test]
     async fn a_request_that_can_no_longer_be_answered_becomes_a_500() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
-        let request = tokio::spawn(async move {
-            client
-                .get(format!("http://127.0.0.1:{port}/dropped"))
-                .send()
-                .await
-                .unwrap()
-                .status()
-                .as_u16()
-        });
+        let request =
+            tokio::spawn(async move { client.get("/dropped").await.unwrap().status().as_u16() });
 
         let reqs = http.next_requests(id, 8).await.unwrap();
         let (_rid, _req) = reqs.into_iter().next().expect("one request");
@@ -2078,21 +2089,10 @@ mod http2_tests {
     #[tokio::test]
     async fn a_drain_finishes_an_inflight_h2_request() {
         let (http, id, port) = super::tests::bound_with(None).await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
 
-        let request = tokio::spawn(async move {
-            client
-                .get(format!("http://127.0.0.1:{port}/slow"))
-                .send()
-                .await
-                .unwrap()
-                .text()
-                .await
-                .unwrap()
-        });
+        let request =
+            tokio::spawn(async move { client.get("/slow").await.unwrap().text().await.unwrap() });
         let reqs = http.next_requests(id, 8).await.unwrap();
         let (rid, _) = reqs.into_iter().next().expect("one request");
 
@@ -2123,19 +2123,22 @@ mod http2_tests {
         }))
         .await;
 
-        let client = reqwest::Client::builder()
-            .add_root_certificate(reqwest::Certificate::from_pem(&cert_pem).unwrap())
-            .resolve("localhost", ([127, 0, 0, 1], port).into())
-            .build()
-            .unwrap();
+        let client = crate::http_client::HttpClient::new(
+            &crate::TrustStore::from_certificates([ck.cert.der().clone()]).unwrap(),
+        );
 
         let request = tokio::spawn(async move {
             let resp = client
-                .get(format!("https://localhost:{port}/one-one"))
-                .send()
+                .send(crate::http_client::Outbound::get(
+                    url::Url::parse(&format!("https://localhost:{port}/one-one")).unwrap(),
+                ))
                 .await
                 .expect("a narrowed ALPN still serves");
-            (resp.version(), resp.text().await.unwrap())
+            let version = resp.version;
+            (
+                version,
+                String::from_utf8(resp.bytes(1 << 20).await.unwrap()).unwrap(),
+            )
         });
 
         let reqs = http.next_requests(id, 8).await.unwrap();
@@ -2143,7 +2146,7 @@ mod http2_tests {
         ok(&http, rid, "plain").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, reqwest::Version::HTTP_11);
+        assert_eq!(version, hyper::Version::HTTP_11);
         assert_eq!(body, "plain");
     }
 }
@@ -2509,7 +2512,7 @@ mod timeout_tests {
 /// inside the runtime.
 #[cfg(test)]
 mod trailer_tests {
-    use super::tests::bound;
+    use super::tests::{H2c, bound};
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -2583,20 +2586,13 @@ mod trailer_tests {
     #[tokio::test]
     async fn http2_sends_trailers_as_a_trailing_headers_frame() {
         let (http, id, port) = super::tests::bound().await;
-        let client = reqwest::Client::builder()
-            .http2_prior_knowledge()
-            .build()
-            .unwrap();
+        let client = H2c::connect(port).await;
         let request = tokio::spawn(async move {
-            let resp = client
-                .get(format!("http://127.0.0.1:{port}/grpc"))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(resp.version(), reqwest::Version::HTTP_2);
-            // Read the frames rather than the convenience stream: `bytes_stream`
-            // drops trailers, which is the whole thing being asserted.
-            let mut body: hyper::Response<reqwest::Body> = resp.into();
+            let resp = client.get("/grpc").await.unwrap();
+            assert_eq!(resp.version(), hyper::Version::HTTP_2);
+            // Read the frames rather than the collected body, which would
+            // fold the trailers away — they are the whole thing being asserted.
+            let mut body = resp.0;
             let mut found = None;
             loop {
                 let frame =

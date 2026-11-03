@@ -71,6 +71,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use es_runtime_default_providers::TrustStore;
+use es_runtime_default_providers::http_client::{HttpClient, Outbound};
+
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 
 /// The one-line descriptions `--list` prints.
@@ -1843,33 +1846,54 @@ fn configured_registry() -> Result<String, String> {
     Ok(registry.to_string())
 }
 
+/// How long one registry lookup may take, connect to last byte.
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The largest package document a lookup reads. A popular package's full
+/// metadata runs to megabytes; this is far beyond any of them.
+const REGISTRY_LIMIT: usize = 64 * 1024 * 1024;
+
 async fn registry_version(
-    client: &reqwest::Client,
+    client: &HttpClient,
     registry: &str,
     package: &str,
 ) -> Result<String, RegistryFailure> {
-    let response = client
-        .get(registry_url(registry, package))
-        .send()
-        .await
-        .map_err(|error| RegistryFailure {
-            message: error.to_string(),
-            retryable: true,
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        let retryable = status.is_server_error()
-            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || status == reqwest::StatusCode::REQUEST_TIMEOUT;
-        return Err(RegistryFailure {
-            message: format!("registry returned HTTP {status}"),
-            retryable,
-        });
-    }
-    let metadata: serde_json::Value = response.json().await.map_err(|error| RegistryFailure {
-        message: format!("invalid registry response: {error}"),
+    let failure = |message: String| RegistryFailure {
+        message,
         retryable: true,
-    })?;
+    };
+    let url = url::Url::parse(&registry_url(registry, package))
+        .map_err(|error| failure(format!("invalid registry URL: {error}")))?;
+    let mut request = Outbound::get(url);
+    request.headers = vec![(
+        "user-agent".to_string(),
+        concat!("esdev/", env!("CARGO_PKG_VERSION")).to_string(),
+    )];
+    let lookup = async {
+        let response = client
+            .send(request)
+            .await
+            .map_err(|error| failure(error.to_string()))?;
+        let status = response.status;
+        if !status.is_success() {
+            let retryable = status.is_server_error()
+                // 429 Too Many Requests, 408 Request Timeout.
+                || matches!(status.as_u16(), 429 | 408);
+            return Err(RegistryFailure {
+                message: format!("registry returned HTTP {status}"),
+                retryable,
+            });
+        }
+        response
+            .bytes(REGISTRY_LIMIT)
+            .await
+            .map_err(|error| failure(error.to_string()))
+    };
+    let body = tokio::time::timeout(REGISTRY_TIMEOUT, lookup)
+        .await
+        .map_err(|_| failure(format!("no answer within {}s", REGISTRY_TIMEOUT.as_secs())))??;
+    let metadata: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|error| failure(format!("invalid registry response: {error}")))?;
     metadata
         .get("dist-tags")
         .and_then(|tags| tags.get("latest"))
@@ -1889,7 +1913,7 @@ fn registry_backoff(attempt: usize, retryable: bool) -> Option<Duration> {
 }
 
 async fn registry_version_with_retries(
-    client: &reqwest::Client,
+    client: &HttpClient,
     registry: &str,
     package: &str,
 ) -> Result<String, String> {
@@ -1938,11 +1962,7 @@ async fn resolve_registry_versions(
             .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
     );
     let registry = configured_registry()?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent(concat!("esdev/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| format!("cannot create npm registry client: {error}"))?;
+    let client = HttpClient::new(&TrustStore::bundled());
     let requests = packages.iter().map(|package| {
         let client = client.clone();
         let registry = registry.clone();

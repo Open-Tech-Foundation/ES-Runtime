@@ -14,16 +14,19 @@ es-runtime-providers.workspace = true
 es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
-# `<binary> upgrade` — self-update from GitHub releases. Both binaries are
-# installed together and released together, so they upgrade through one module.
-self_update.workspace = true
-# The release listing, parsed rather than pattern-matched. Both already in the
-# tree (via `es-runtime` and `reqwest`), so naming them here costs nothing.
+# `<binary> upgrade` (DECISIONS.md D198): the release listing parsed rather
+# than pattern-matched, the archive checked against `checksums.txt`, and the
+# binary read out of a `.tar.gz` or `.zip`. All already in the tree through
+# `es-runtime`, so naming them here adds no crate.
 serde_json.workspace = true
+sha2.workspace = true
+flate2 = "1.1"
+tar.workspace = true
+zip.workspace = true
+url.workspace = true
 # Reading an inline source map back out of a bundle, to put a stack trace's
 # frames where they were written (`sourcemap`).
 base64.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
 
 # build.rs runs V8 to bake the prelude snapshot once, here, so that both
 # binaries share one blob instead of each paying for its own snapshot build

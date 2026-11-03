@@ -16,8 +16,8 @@ use tracing_subscriber::EnvFilter;
 /// loops reporting that they could not accept and are backing off — a failure
 /// of the listening socket, which is the operator's problem and not something a
 /// peer can provoke. Nothing else fires in normal operation, so a healthy
-/// process stays silent. `info` would be a global level, so hyper, rustls and
-/// reqwest could log at it too, and dependency chatter in the default output of
+/// process stays silent. `info` would be a global level, so hyper, hyper-util
+/// and rustls could log at it too, and dependency chatter in the default output of
 /// every run is how a log people are supposed to read becomes one they filter
 /// out.
 const DEFAULT_FILTER: &str = "warn";

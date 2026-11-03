@@ -13,18 +13,20 @@ This is the **outbound** side. The inbound server has [its own
 page](/docs/internals/http), and raw sockets [another](/docs/internals/sockets).
 For signatures, see the [Web APIs reference](/docs/globals).
 
-## The clients are built lazily, and there are two
+## The wire is borrowed, the policy is owned
 
-The HTTP client is built on the **first `fetch` that needs one**, not at
-startup. Building it means assembling a TLS configuration and parsing a root
-store, which costs startup milliseconds — and a script that never fetches should
-not pay them. A failure to build surfaces as an error from that first fetch
-rather than from the runtime starting.
+`fetch` runs on the runtime's own HTTP client. The parts that are dangerous to
+write — HTTP/1.1 and HTTP/2 framing, connection pooling, HTTP/2 multiplexing,
+DNS and Happy Eyeballs — are hyper and hyper-util, the most-reviewed
+implementations in Rust. TLS is rustls over the [process trust
+store](/docs/internals/tls). What the client decides rather than parses —
+redirects, content codings, deadlines — is written here, each part to the
+specification that defines it.
 
-There are two clients because **redirect policy is a property of the client in
-reqwest, not of a request**. `redirect: "follow"` and `redirect: "manual"` get
-one each, and a program that only ever uses the default never pays to build the
-other. Both are `Arc` inside, so handing one to a request is a refcount bump.
+The same client serves `fetch`, the `--otel` exporter, `upgrade` and `esdev
+create`'s registry lookups, so there is one set of defaults to get right. It is
+built on the **first `fetch`**, not at startup: assembling a TLS configuration
+costs time a script that never fetches should not pay.
 
 ## What goes out
 
@@ -33,8 +35,16 @@ other. Both are `Arc` inside, so handing one to a request is a refcount bump.
 | `User-Agent` | `ES-Runtime/<version>`, matching `navigator.userAgent` so a server sees the identity the guest reports. A request that sets its own overrides it. |
 | `Accept-Encoding` | `gzip, br, deflate` |
 | HTTP version | 1.1 or 2, negotiated by ALPN over TLS |
-| Connect timeout | 30s |
+| `TE` | `trailers`, so an HTTP/1.1 server may send them |
+| Connect timeout | 30s, DNS, TCP and TLS together |
 | TCP keepalive | 60s on pooled connections |
+| `TCP_NODELAY` | On |
+| Proxy | None. `HTTP_PROXY` and the like are not read |
+
+`Accept-Encoding` is left out of a request that has a `Range`, since a range of
+a compressed representation is not a range of the resource. `TCP_NODELAY` is
+set explicitly: hyper-util's connector leaves Nagle's algorithm on, and a
+request written in pieces then waits on the peer's delayed ACK.
 
 Connections are pooled and reused across requests. The keepalive is what stops a
 peer that vanished *without a FIN* from leaving a dead socket in the pool to be
@@ -75,6 +85,11 @@ Two details that are easy to get wrong and are not:
   answers `zstd`, the guest gets the compressed bytes and the header that says
   so — the honest answer, since pretending to have decoded it would be a lie.
 
+Decoding happens as the body streams, at most 64 KiB at a time, so a small
+compressed body that expands enormously is handed over in bounded pieces rather
+than in one allocation. A `HEAD`, a `204`, a `304` or an empty body is not
+decoded; a corrupt one fails as a body error rather than producing garbage.
+
 `zstd` is deliberately not negotiated. The three codings offered are exactly the
 set `CompressionStream` implements, which is what Fetch's decode step needs a
 client to understand; advertising a fourth would mean carrying a codec present
@@ -82,19 +97,28 @@ for no other reason.
 
 ## Redirects
 
-Following is capped at **20 hops**, which is the Fetch specification's own limit.
+Following is capped at **20 hops**, the Fetch specification's own limit, and
+each hop follows its HTTP-redirect fetch:
 
-The part worth knowing is what happens when a `--allow-net` list is in force:
-**every hop is checked, not just the URL the guest wrote.** Because redirect
-policy is a client-level property, an unchecked implementation would follow a
-`302` from an allowed host to a denied one transparently and hand the guest its
-body — the allowlist enforced at the front door and nowhere else.
+- A `303`, and a `301` or `302` for a `POST`, becomes a `GET`. The body goes,
+  and so do the headers that described it (`Content-Type`, `Content-Length`,
+  `Content-Encoding`, `Content-Language`, `Content-Location`).
+- A `307` or `308` resends the method and the body. A buffered body is sent
+  again; a `ReadableStream` has already been consumed, so the fetch fails rather
+  than sending an empty body in its place, which would be a different request.
+- A hop to another origin — scheme, host or port — drops `Authorization`,
+  `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate`. A token
+  meant for one service is never handed to whatever it redirects to.
+- A `Location` that is not `http:` or `https:` fails the fetch. A relative one
+  resolves against the current URL, and one without a fragment keeps the
+  request's.
 
-A refused hop **fails the request** rather than returning the redirect response.
-A program that asked to follow redirects has nothing sensible to do with one, so
-the error is the honest outcome. It is distinguishable from an exhausted
-redirect budget: the refusal is carried inside the redirect error rather than
-being flattened into it.
+When a `--allow-net` list is in force, **every hop is checked before it is
+sent**, not just the URL the guest wrote. Otherwise a `302` from an allowed host
+to a denied one would be followed and its body handed back — the allowlist
+enforced at the front door and nowhere else. A refused hop fails the request
+with `ERR_PERMISSION_DENIED`, distinguishable from an exhausted redirect budget
+(`ERR_TOO_MANY_REDIRECTS`).
 
 ## Request bodies stream
 

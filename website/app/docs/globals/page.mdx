@@ -253,6 +253,15 @@ r.headers.get("location");     // where it would have gone
 r.redirected;                  // false — nothing was followed
 ```
 
+Following one, the request changes as the specification says:
+
+| On a redirect | What changes |
+| --- | --- |
+| `303` (not `HEAD`), or `301`/`302` for a `POST` | becomes `GET`; the body and its `Content-*` headers are dropped |
+| `307`/`308`, or `301`/`302` otherwise | method and body kept; a streamed body rejects instead of being resent |
+| to another origin | `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization`, `WWW-Authenticate` dropped |
+| `Location` not `http:`/`https:` | rejects |
+
 An unknown mode throws `TypeError` from `new Request`. Under `"manual"` the real
 response is returned, not the spec's opaque-redirect filtered one — same as
 Node, Deno and Bun.

@@ -17,9 +17,16 @@ use tokio::sync::Notify;
 
 use es_runtime_providers::{BoxFuture, TelemetrySink};
 
+use crate::http_client::{Body, HttpClient, Outbound};
+
+/// How long one export may take, connect to last byte. An export is
+/// best-effort, and a sink that waits long on a wedged collector holds a
+/// connection and a task for telemetry nobody is reading.
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Posts OTLP/JSON to an `OTEL_EXPORTER_OTLP_ENDPOINT`-style base URL.
 pub struct OtlpHttpSink {
-    client: reqwest::Client,
+    client: HttpClient,
     endpoint: String,
     /// Latches the first delivery failure so a collector that is down produces
     /// one line in the log rather than one per turn.
@@ -41,7 +48,7 @@ impl OtlpHttpSink {
     pub fn new(endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
         OtlpHttpSink {
-            client: client(&crate::TrustStore::bundled()),
+            client: HttpClient::new(&crate::TrustStore::bundled()),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             warned: Arc::new(AtomicBool::new(false)),
             in_flight: Arc::new(AtomicUsize::new(0)),
@@ -55,25 +62,30 @@ impl OtlpHttpSink {
     /// `--tls-ca` describes (D197).
     #[must_use]
     pub fn with_trust(mut self, trust: &crate::TrustStore) -> Self {
-        self.client = client(trust);
+        self.client = HttpClient::new(trust);
         self
     }
 }
 
-/// The exporter's HTTP client, verifying against `trust`.
-fn client(trust: &crate::TrustStore) -> reqwest::Client {
-    reqwest::Client::builder()
-        // Not through a proxy the environment names, for the same reason
-        // `fetch` is not: spans go to the `--otel` collector.
-        .no_proxy()
-        .tls_backend_preconfigured(trust.client_config(&["h2", "http/1.1"]))
-        .timeout(Duration::from_secs(10))
-        .build()
-        // Never `unwrap_or_default`: reqwest's default client verifies against
-        // the operating system's store, so falling back would quietly change
-        // whom the exporter trusts. The build only fails if reqwest and
-        // tokio-rustls stop sharing one rustls, which the test below catches.
-        .expect("the exporter's HTTP client builds with the process trust store")
+/// Posts `payload` to `url`, reading the answer to its end so the connection
+/// goes back to the pool. `Err` describes what went wrong, without the body.
+async fn post(client: &HttpClient, url: &str, payload: String) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
+    let mut request = Outbound::get(parsed);
+    request.method = hyper::Method::POST;
+    request.headers = vec![("content-type".to_string(), "application/json".to_string())];
+    request.body = Body::Bytes(payload.into());
+    let response = client
+        .send(request)
+        .await
+        .map_err(|e| format!("{url}: {e}"))?;
+    let status = response.status;
+    let _ = response.bytes(1024 * 1024).await;
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(format!("{url} returned {status}"))
+    }
 }
 
 impl TelemetrySink for OtlpHttpSink {
@@ -88,17 +100,15 @@ impl TelemetrySink for OtlpHttpSink {
         // this over and moves on, so a slow collector never adds latency to the
         // request whose span is being exported.
         tokio::spawn(async move {
-            let sent = client
-                .post(&url)
-                .header("content-type", "application/json")
-                .body(payload)
-                .send()
-                .await;
-            let failure = match sent {
-                Ok(response) if response.status().is_success() => None,
-                Ok(response) => Some(format!("{} returned {}", url, response.status())),
-                Err(error) => Some(format!("{url}: {error}")),
-            };
+            let failure =
+                match tokio::time::timeout(EXPORT_TIMEOUT, post(&client, &url, payload)).await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(failure)) => Some(failure),
+                    Err(_) => Some(format!(
+                        "{url}: no answer within {}s",
+                        EXPORT_TIMEOUT.as_secs()
+                    )),
+                };
             if let Some(failure) = failure
                 && !warned.swap(true, Ordering::Relaxed)
             {
@@ -136,14 +146,34 @@ impl TelemetrySink for OtlpHttpSink {
 
 #[cfg(test)]
 mod tests {
-    // The exporter's client is built with the process store; a failure would
-    // panic at startup rather than fall back to the OS store, so make sure it
-    // never does.
-    #[test]
-    fn the_exporter_client_builds_with_any_trust_store() {
-        let _ = super::OtlpHttpSink::new("http://127.0.0.1:4318")
-            .with_trust(&crate::TrustStore::bundled());
-        let _ = super::OtlpHttpSink::new("http://127.0.0.1:4318")
-            .with_trust(&crate::trust::test_pki::Ca::new("Collector CA").trust());
+    use super::*;
+    use crate::trust::test_pki::{Ca, tls_server};
+
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+
+    /// Exports one payload to a TLS collector `ca` signed, through a sink
+    /// trusting `trust`, and reports whether the collector's handshake
+    /// completed.
+    async fn export_to(ca: &Ca, trust: &crate::TrustStore) -> bool {
+        let (port, server) = tls_server(ca.leaf(&["localhost"]), &["http/1.1"], OK).await;
+        let sink = OtlpHttpSink::new(format!("https://localhost:{port}")).with_trust(trust);
+        let _ = sink.export("traces", "{}".to_string()).await;
+        sink.flush().await;
+        server.await.unwrap().is_some()
+    }
+
+    // D197: an `https` collector is verified against the process store, like
+    // every other TLS client.
+    #[tokio::test]
+    async fn an_https_collector_is_verified_against_the_trust_store() {
+        let ca = Ca::new("Collector CA");
+        assert!(
+            export_to(&ca, &ca.trust()).await,
+            "a trusted collector was refused"
+        );
+        assert!(
+            !export_to(&ca, &crate::TrustStore::bundled()).await,
+            "an untrusted collector was accepted"
+        );
     }
 }

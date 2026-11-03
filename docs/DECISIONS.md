@@ -4150,4 +4150,33 @@ Node, Deno and Bun all default to a bundled Mozilla snapshot shared by every API
 - **Requiring each certificate to be a CA** (`basicConstraints`): a self-signed server certificate pinned as its own anchor trusts less than a CA does, and is the ordinary case for an internal service.
 - **An option to skip verification** (`NODE_TLS_REJECT_UNAUTHORIZED=0`, `--unsafely-ignore-certificate-errors`): every use of one we know of is a private CA that `--tls-ca` names properly.
 
-**Consequences:** `fetch` and the exporter verify against the bundled roots instead of the OS store: a private CA installed only in the OS is now named with `--tls-ca`. `rustls-platform-verifier` stays compiled in but unused, because every public rustls feature of reqwest 0.13 includes it and `self_update` enables one; removing it means replacing reqwest, which is D198's to decide. `esrun upgrade` and esdev's npm client still use reqwest's defaults until then. Documented per D27 (`api/cli`, `docs/API.md`, internals `tls`, both changelogs).
+**Consequences:** `fetch` and the exporter verify against the bundled roots instead of the OS store: a private CA installed only in the OS is now named with `--tls-ca`. `rustls-platform-verifier` stays compiled in but unused, because every public rustls feature of reqwest 0.13 includes it and `self_update` enables one; removing it means replacing reqwest, which is D198's to decide. *(Done in D198: reqwest and the verifier are gone.)* `esrun upgrade` and esdev's npm client still use reqwest's defaults until then. Documented per D27 (`api/cli`, `docs/API.md`, internals `tls`, both changelogs).
+
+### D198 — One HTTP client of our own, on hyper, for every outbound request · *Accepted (2026-11-03)* · *supersedes D20's choice of reqwest*
+
+**Context:** D197 gave every TLS client one trust store but left `rustls-platform-verifier` compiled in: every public rustls feature of reqwest 0.13 enables it, and `self_update` enables one for `esrun upgrade`. It is the only crate that brings `security-framework` and `core-foundation` into the macOS build and `rustls-native-certs` into the Linux build — the platform bindings the supply-chain rule excludes. Five places used reqwest: `fetch`, the `--otel` exporter, the release listing in `upgrade`, `self_update`'s download, and esdev's npm registry lookups in `create`.
+
+Replacing `self_update` also surfaced a defect: `upgrade` swapped the running binary for a download it never verified. `install.sh` checks each archive against the release's `checksums.txt`, and the CLI reference said `upgrade` did too; it did not.
+
+Deno replaced reqwest in `fetch` with a hyper-util client of its own (deno#24237) and later had to restore `TCP_NODELAY`, which reqwest had set and its connector did not (deno#35581). Node's `fetch` is undici, its own client; Bun's is its own as well.
+
+**Decision (maintainer, 2026-11-03):**
+- **One client, in `default-providers`**, for every outbound HTTP request either binary makes: `fetch`, the exporter, `upgrade`, and `create`'s registry lookups.
+- **The wire stays vetted.** HTTP/1.1 and HTTP/2 framing are hyper's; connection pooling and HTTP/2 multiplexing are hyper-util's `client-legacy` pool, the one reqwest is built on; DNS, TCP and Happy Eyeballs are hyper-util's `HttpConnector`; TLS is tokio-rustls with the D197 trust store, offering `h2` and `http/1.1` by ALPN. Nothing parses HTTP that hyper does not.
+- **The policy is ours**, each part to a specification:
+  - *Redirects* (Fetch, HTTP-redirect fetch): `301`, `302`, `303`, `307`, `308` with a `Location`, at most 20. `303` becomes `GET` (a `HEAD` stays `HEAD`), as do `301`/`302` for a `POST`, dropping the body and its headers (`Content-Type`, `Content-Length`, `Content-Encoding`, `Content-Language`, `Content-Location`). A streamed body cannot be sent twice, so a redirect that would resend one is an error. A hop to another origin (scheme, host or port) drops `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate`. A `Location` that is not `http`/`https` is an error; a relative one resolves against the current URL, and one without a fragment keeps the request's. Every hop is checked against `--allow-net` before it is sent. A `3xx` without `Location` is returned as is.
+  - *Content-codings*: `gzip`, `br` and `deflate` (zlib) are decoded as the body streams, in bounded reads, and `Content-Encoding`/`Content-Length` are removed; anything else passes through untouched. A `HEAD`, `204` or `304` response, or an empty body, is not decoded.
+  - *Timeouts*: DNS, TCP and TLS together within 30 seconds; a 60-second TCP keepalive on pooled connections; `TCP_NODELAY` on.
+  - *No proxy* and no environment variable, as before.
+- **`upgrade` is ours too.** It lists the releases, picks this binary's newest version (semver, compared by our own small parser), downloads this platform's archive, and **refuses to install it unless the release's `checksums.txt` lists it and the SHA-256 matches**. Only the binary's own entry is read from the archive, with a size cap, into a file beside the running one, which is then renamed into place — atomic on Unix; on Windows the running binary is renamed aside first, and the old copy removed by the next upgrade.
+
+**Why not keep reqwest:** its private `__rustls` features are not semver-stable, and they keep the rest — `hyper-rustls`, `tower-http`, its proxy and redirect machinery — for a client whose policy we already had to override in three places (proxies, trust, redirect allowlisting). Owning the policy and borrowing the wire is how Deno ended up as well.
+
+**Rejected:**
+- **reqwest's private features**: see above.
+- **Leaving the verifier compiled in but unused**: code that ships is attack surface and audit surface, used or not.
+- **Our own HTTP framing**: request smuggling lives in framing, and hyper is the most-reviewed implementation there is.
+- **A second client for `upgrade`** (ureq, `self_update`'s other backend): two clients, two trust configurations, two sets of defaults to keep in step.
+- **Installing an archive whose checksum is missing**, as `install.sh` does: an upgrade replaces a binary that is already working, so there is no reason to accept an unverified one.
+
+**Consequences:** reqwest, `self_update`, `hyper-rustls`, `tower-http`, `rustls-platform-verifier` and their dependencies leave the tree: 580 → 555 crates on Linux, 578 → 552 on macOS (`security-framework` and `core-foundation` among them), 589 → 563 on Windows, none added (`cargo tree --workspace -e normal --target <triple>`). `fetch`'s observable behaviour is unchanged except where it now follows the Fetch specification more closely (body headers dropped on a method change; a streamed body is never resent). `upgrade` fails rather than installing an unverified binary, and shows no progress bar. Documented per D27 (internals `fetch` and `tls`, `api/cli`, both changelogs).

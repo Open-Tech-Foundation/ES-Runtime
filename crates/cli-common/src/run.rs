@@ -14,8 +14,8 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
-    Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub,
-    ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
+    HttpTransport, Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub,
+    ProcessPortHub, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
     SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, TrustStore, WorkerProcess,
     path,
@@ -814,7 +814,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // rather than a handshake in production.
     let trust = TrustStore::load(&options.tls_ca)?;
     warn_ignored_ca_variables(bin);
-    let transport = ReqwestTransport::new()
+    let transport = HttpTransport::new()
         .map_err(|e| format!("http transport: {e}"))?
         .with_trust(trust.clone());
     let net = Arc::new(match allow_net.clone() {

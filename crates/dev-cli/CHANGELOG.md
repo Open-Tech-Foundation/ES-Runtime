@@ -26,6 +26,11 @@ is the point, since none of the three has any business in a deployment.
 
 ### Security
 
+- `esdev upgrade` refuses a release whose archive is not listed in, or does
+  not match, its `checksums.txt` (DECISIONS D198); it used to install the
+  download unchecked. `esdev create`'s npm registry lookups and the program's
+  `fetch` use the runtime's own HTTP client, as under esrun.
+
 - `--tls-ca=<file|bundled>` (DECISIONS D197) is taken by every command that
   runs a program, and by `esdev start` and `esdev preview`, which use it for
   the server they start and for an `https` `dev.server.proxy` target. As under

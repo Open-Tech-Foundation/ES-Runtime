@@ -105,6 +105,12 @@ release: `esrun upgrade` never moves `esdev`, and neither will pick up the
 other's archive because the release published most recently happened to be the
 other one's. A binary already current says so and changes nothing.
 
+The archive is checked against the release's `checksums.txt` before anything is
+replaced. A release without one, or an archive whose SHA-256 does not match it,
+is refused and the installed binary is left as it was. The new binary is
+written beside the old one and renamed into place, so an interrupted upgrade
+never leaves half a binary.
+
 ## Uninstall
 
 Delete the install directory and remove it from your `PATH`.

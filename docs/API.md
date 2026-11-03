@@ -104,6 +104,17 @@ const r = await fetch(url, { redirect: "manual" });
 if (r.status === 302) console.log("would go to", r.headers.get("location"));
 ```
 
+Following a redirect follows the specification's HTTP-redirect fetch:
+
+| On a redirect | What changes |
+| --- | --- |
+| `303` (not `HEAD`), or `301`/`302` for a `POST` | Becomes a `GET`; the body and `Content-Type`, `Content-Length`, `Content-Encoding`, `Content-Language`, `Content-Location` are dropped |
+| `307`/`308`, or `301`/`302` for another method | Method and body kept; a `ReadableStream` body cannot be sent twice, so the fetch rejects instead |
+| To another origin (scheme, host or port) | `Authorization`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `WWW-Authenticate` are dropped |
+| `Location` not `http:`/`https:` | Rejects |
+| `Location` without a fragment | Keeps the request's |
+| `3xx` without `Location` | Returned as is |
+
 `response.redirected` reports whether at least one redirect was followed, and
 `response.url` is where the request actually ended up. Both come from the
 transport — a script cannot construct a `Response` that claims either.
@@ -165,7 +176,7 @@ and advertising a coding means carrying a codec that exists for no other reason.
 Outbound requests carry `User-Agent: ES-Runtime/<version>` — the same string as
 `navigator.userAgent` — unless the request sets its own.
 
-Both are properties of the default `ReqwestTransport`. An embedder that installs
+Both are properties of the default `HttpTransport` (DECISIONS D198). An embedder that installs
 its own `NetTransport` decides for itself.
 
 ### `console`

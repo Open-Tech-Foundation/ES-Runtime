@@ -142,8 +142,8 @@ for the jail.
 
 A build sorts entries by path, writes `0:0` ownership, `0644` files and `0755`
 directories, and uses timestamp `0` unless an entry supplied `lastModified`.
-Zip's default options depend on whether its time feature is enabled in the
-dependency graph — `self_update` enables it — so the writer sets the timestamp
+Zip's default options depend on whether its time feature is enabled anywhere in
+the dependency graph, which any crate can change, so the writer sets the timestamp
 and the system explicitly rather than inheriting a default that could change
 between builds. The same entries therefore produce the same bytes, which is what
 lets an archive be hashed or cached.
