@@ -32,6 +32,7 @@ fn upgrade_names_where_it_moved() {
         assert!(text.contains("esrun no longer upgrades itself"), "{text}");
         assert!(text.contains("esdev upgrade"), "{text}");
         assert!(text.contains("ESRUN_VERSION="), "{text}");
+        assert!(text.contains("install.ps1"), "{text}");
     }
 }
 

@@ -165,7 +165,9 @@ fn parse_args() -> Result<Config, String> {
                      On a development machine, `esdev upgrade` updates esrun and esdev \
                      together (`esdev upgrade --only=esrun` for esrun alone).\n\
                      Elsewhere, re-run the installer, pinning the version:\n  \
-                     curl -fsSL https://esrun.opentechf.org/install.sh | ESRUN_VERSION=<version> bash -s -- --only=esrun"
+                     curl -fsSL https://esrun.opentechf.org/install.sh | ESRUN_VERSION=<version> bash -s -- --only=esrun\n\
+                     On Windows (PowerShell):\n  \
+                     $env:ESRUN_VERSION = '<version>'; $env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | iex"
                         .to_string(),
                 );
             }

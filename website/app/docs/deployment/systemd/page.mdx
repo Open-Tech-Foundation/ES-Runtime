@@ -135,3 +135,18 @@ journalctl -u app -f
 accepting connections, finishes in-flight requests for up to
 `--shutdown-grace` milliseconds, and exits. `Restart=on-failure` starts it
 again after a crash, not after a stop.
+
+## Upgrading esrun
+
+Re-run the install command with the version you are moving to, then restart
+the service:
+
+```sh
+curl -fsSL https://esrun.opentechf.org/install.sh \
+  | ESRUN_VERSION=<version> ES_RUNTIME_INSTALL=/usr/local bash -s -- --only=esrun
+systemctl restart app
+```
+
+The installer checks the archive against the release's `checksums.txt` and
+replaces the binary; the running process keeps the old one until the restart. esrun has no self-upgrade command
+([Installation](/docs/install#upgrade)).
