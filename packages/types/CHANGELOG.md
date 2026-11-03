@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-03
+
 ### Added
 
 - Mutual TLS, rotation and revocation (D200–D202): `runtime:net`'s

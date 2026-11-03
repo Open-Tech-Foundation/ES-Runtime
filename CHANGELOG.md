@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-03
+
 ### Security
 
 - **Mutual TLS** (DECISIONS D201). `serve` and `listen` take `requestCert`,

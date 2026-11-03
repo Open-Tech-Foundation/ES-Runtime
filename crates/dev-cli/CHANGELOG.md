@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-03
+
 ### Security
 
 - `--tls-crl=<file>` (DECISIONS D202) is taken wherever `--tls-ca` is, and
