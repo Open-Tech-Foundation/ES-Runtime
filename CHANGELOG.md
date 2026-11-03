@@ -11,6 +11,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- The bundled TLS root certificates (`webpki-roots` 1.0.11) no longer trust
+  "emSign Root CA - C1" or "emSign ECC Root CA - C3". Mozilla removed them
+  after the October 2026 compromise of eight eMudhra intermediate CA keys;
+  "emSign ECC Root CA - G3", the root that signed those intermediates, was
+  already dropped in 1.0.10. Applies to `runtime:net` TLS and `WebSocket`
+  (`wss:`); `fetch` checks the operating system's trust store.
+
 ### Fixed
 
 - `install.sh` supports the fish shell: asked to add ES Runtime to `PATH`, it

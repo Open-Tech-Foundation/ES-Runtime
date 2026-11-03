@@ -1443,6 +1443,29 @@ mod tests {
         (cert, key)
     }
 
+    // The bundled roots must not trust what Mozilla removed after the eMudhra
+    // intermediate key compromise (October 2026): G3 signed the compromised
+    // intermediates, and C1 and C3 followed in the CCADB removal. Guards the
+    // `webpki-roots` floor in Cargo.toml against a downgrade.
+    #[test]
+    fn bundled_roots_exclude_roots_removed_after_emudhra_compromise() {
+        let removed: [&[u8]; 3] = [
+            b"emSign ECC Root CA - G3",
+            b"emSign Root CA - C1",
+            b"emSign ECC Root CA - C3",
+        ];
+        for anchor in webpki_roots::TLS_SERVER_ROOTS {
+            let subject: &[u8] = anchor.subject.as_ref();
+            for name in removed {
+                assert!(
+                    !subject.windows(name.len()).any(|w| w == name),
+                    "bundled roots still trust {}",
+                    String::from_utf8_lossy(name)
+                );
+            }
+        }
+    }
+
     /// A `SystemNet` trusting only `cert` (so the self-signed server verifies).
     pub(super) fn net_trusting(cert: CertificateDer<'static>) -> SystemNet {
         let mut roots = RootCertStore::empty();
