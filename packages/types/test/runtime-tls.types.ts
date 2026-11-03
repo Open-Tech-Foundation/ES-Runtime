@@ -1,9 +1,9 @@
 // A type test for certificate rotation, mutual TLS and revocation (DECISIONS
 // D200–D202) across runtime:net, runtime:http and fetch.
 
+import { serve } from "runtime:http";
 import type { PeerCertificate, SecureContext } from "runtime:net";
 import { connect, listen } from "runtime:net";
-import { serve } from "runtime:http";
 
 declare const pem: string;
 declare const bytes: Uint8Array;
@@ -25,7 +25,10 @@ const context: SecureContext = { ca: bytes, crl: pem };
 
 // --- a client that presents one --------------------------------------------------
 
-const socket = connect({ hostname: "db.internal", port: 5432 }, { secureTransport: "on", cert: pem, key: pem });
+const socket = connect(
+  { hostname: "db.internal", port: 5432 },
+  { secureTransport: "on", cert: pem, key: pem },
+);
 socket.opened.then((info) => {
   const peer: PeerCertificate | null = info.peerCertificate;
   if (peer !== null) {
