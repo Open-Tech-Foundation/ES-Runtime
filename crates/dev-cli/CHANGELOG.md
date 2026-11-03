@@ -24,6 +24,13 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- `esdev upgrade` tries a download again when the network fails it (a
+  dropped connection, a truncated or stalled body, a `5xx` or `429`), up to
+  three attempts in all, and shows a progress bar for the archive when
+  stderr is a terminal.
+
 ## [0.26.0] - 2026-11-03
 
 ### Security

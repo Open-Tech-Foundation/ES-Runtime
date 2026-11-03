@@ -111,6 +111,10 @@ is refused and the installed binary is left as it was. The new binary is
 written beside the old one and renamed into place, so an interrupted upgrade
 never leaves half a binary.
 
+A download the network interrupts (a dropped connection, a stalled transfer,
+or a server error) is tried again, up to three attempts in all. On a terminal
+the archive's download shows a progress bar.
+
 ## Uninstall
 
 Delete the install directory and remove it from your `PATH`.

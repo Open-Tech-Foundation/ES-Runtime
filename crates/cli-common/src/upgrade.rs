@@ -12,11 +12,15 @@
 //! What differs per binary is one word: its name.
 
 use std::cmp::Ordering;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
+use es_runtime_common::ErrorCode;
 use es_runtime_default_providers::TrustStore;
 use es_runtime_default_providers::http_client::{HttpClient, Outbound};
+use es_runtime_providers::ProviderError;
+use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 
 /// The repository releases are published from.
@@ -291,26 +295,279 @@ fn describe(binary: &str, current_version: &str, latest: Option<(&Version, bool)
     message
 }
 
-/// GETs `url`, following redirects, refusing more than `limit` bytes.
-async fn download(client: &HttpClient, url: &str, limit: usize) -> Result<Vec<u8>, String> {
-    let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
+/// How many times a download is tried before its failure is reported.
+const ATTEMPTS: u32 = 3;
+
+/// The wait before the second attempt, doubled before each one after.
+const BACKOFF: Duration = if cfg!(test) {
+    Duration::from_millis(10)
+} else {
+    Duration::from_secs(1)
+};
+
+/// The longest a download may go without a byte before it counts as stalled
+/// and is tried again. A connection that hangs mid-body otherwise hangs the
+/// upgrade with it.
+const STALL: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(30)
+};
+
+/// Why one attempt at a download failed: worth another try, or not.
+#[derive(Debug)]
+enum Failure {
+    /// The network, not the request: a dropped connection, a timeout, a
+    /// server error. Another attempt may well succeed.
+    Transient(String),
+    /// Another attempt would get the same answer: a 404, a certificate that
+    /// does not verify, a body over its limit.
+    Final(String),
+}
+
+/// Whether a client error is the network's and may pass. A certificate that
+/// fails to verify or a redirect loop will fail the same way again.
+fn is_transient(error: &ProviderError) -> bool {
+    matches!(
+        error.code(),
+        None | Some(
+            ErrorCode::ConnectionRefused
+                | ErrorCode::ConnectionReset
+                | ErrorCode::TimedOut
+                | ErrorCode::Unreachable
+                | ErrorCode::Dns
+                | ErrorCode::Io
+        )
+    )
+}
+
+/// GETs `url`, following redirects, refusing more than `limit` bytes, and
+/// trying again — [`ATTEMPTS`] times in all — when the network fails it.
+/// With `progress`, a bar on stderr follows the body as it arrives.
+async fn download(
+    client: &HttpClient,
+    url: &str,
+    limit: usize,
+    progress: bool,
+) -> Result<Vec<u8>, String> {
+    let mut wait = BACKOFF;
+    for attempt in 1.. {
+        match download_once(client, url, limit, progress).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(Failure::Final(e)) => return Err(e),
+            Err(Failure::Transient(e)) if attempt < ATTEMPTS => {
+                eprintln!(
+                    "warning: {e}; retrying in {}s ({attempt}/{})",
+                    wait.as_secs_f32(),
+                    ATTEMPTS - 1
+                );
+                tokio::time::sleep(wait).await;
+                wait *= 2;
+            }
+            Err(Failure::Transient(e)) => {
+                return Err(format!("{e} (gave up after {ATTEMPTS} attempts)"));
+            }
+        }
+    }
+    unreachable!("the attempts loop returns")
+}
+
+async fn download_once(
+    client: &HttpClient,
+    url: &str,
+    limit: usize,
+    progress: bool,
+) -> Result<Vec<u8>, Failure> {
+    let parsed = url::Url::parse(url).map_err(|e| Failure::Final(format!("{url}: {e}")))?;
     let mut request = Outbound::get(parsed);
     // GitHub rejects a request with no user agent.
     request.headers = vec![(
         "user-agent".to_string(),
         concat!("es-runtime/", env!("CARGO_PKG_VERSION")).to_string(),
     )];
-    let response = client
-        .send(request)
-        .await
-        .map_err(|e| format!("{url}: {e}"))?;
-    if !response.status.is_success() {
-        return Err(format!("{url} returned {}", response.status));
+    let failed = |e: ProviderError| {
+        let message = format!("{url}: {e}");
+        if is_transient(&e) {
+            Failure::Transient(message)
+        } else {
+            Failure::Final(message)
+        }
+    };
+    let mut response = match tokio::time::timeout(STALL, client.send(request)).await {
+        Ok(sent) => sent.map_err(failed)?,
+        Err(_) => {
+            return Err(Failure::Transient(format!(
+                "{url}: no response in {}s",
+                STALL.as_secs()
+            )));
+        }
+    };
+    let status = response.status;
+    if !status.is_success() {
+        let message = format!("{url} returned {status}");
+        // A server error or a rate limit may clear; anything else is the
+        // answer.
+        return Err(if status.is_server_error() || status.as_u16() == 429 {
+            Failure::Transient(message)
+        } else {
+            Failure::Final(message)
+        });
     }
-    response
-        .bytes(limit)
-        .await
-        .map_err(|e| format!("{url}: {e}"))
+    let total = response
+        .headers
+        .get("content-length")
+        .and_then(|value| value.to_str().ok()?.parse::<u64>().ok());
+    if total.is_some_and(|total| total > limit as u64) {
+        return Err(Failure::Final(format!(
+            "{url}: the response is larger than {limit} bytes"
+        )));
+    }
+    let mut bar = Progress::new(progress && std::io::stderr().is_terminal(), total);
+    let mut body = Vec::with_capacity(total.map_or(0, |total| total as usize));
+    loop {
+        let chunk = match tokio::time::timeout(STALL, response.body.next()).await {
+            Ok(Some(chunk)) => chunk.map_err(|e| {
+                bar.abandon();
+                failed(e)
+            })?,
+            Ok(None) => break,
+            Err(_) => {
+                bar.abandon();
+                return Err(Failure::Transient(format!(
+                    "{url}: no data for {}s",
+                    STALL.as_secs()
+                )));
+            }
+        };
+        if body.len() + chunk.len() > limit {
+            bar.abandon();
+            return Err(Failure::Final(format!(
+                "{url}: the response is larger than {limit} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+        bar.advance(body.len() as u64);
+    }
+    if total.is_some_and(|total| total != body.len() as u64) {
+        bar.abandon();
+        return Err(Failure::Transient(format!(
+            "{url}: the connection closed after {} of {} bytes",
+            body.len(),
+            total.unwrap_or_default()
+        )));
+    }
+    bar.finish(body.len() as u64);
+    Ok(body)
+}
+
+/// A download's progress bar, redrawn in place on stderr.
+///
+/// Drawn only on a terminal: piped into a log, a bar is a screenful of
+/// carriage returns, so a non-terminal run gets the lines around it and no
+/// bar at all.
+struct Progress {
+    shown: bool,
+    total: Option<u64>,
+    started: Instant,
+    drawn: Option<Instant>,
+}
+
+/// How often the bar is redrawn at most. Chunks arrive far faster than a
+/// terminal can usefully show them.
+const REDRAW: Duration = Duration::from_millis(100);
+
+impl Progress {
+    fn new(shown: bool, total: Option<u64>) -> Progress {
+        Progress {
+            shown,
+            total,
+            started: Instant::now(),
+            drawn: None,
+        }
+    }
+
+    fn advance(&mut self, done: u64) {
+        if !self.shown || self.drawn.is_some_and(|at| at.elapsed() < REDRAW) {
+            return;
+        }
+        self.drawn = Some(Instant::now());
+        self.draw(&progress_line(done, self.total, self.started.elapsed()));
+    }
+
+    fn finish(&mut self, done: u64) {
+        if self.shown {
+            let line = progress_line(done, Some(done), self.started.elapsed());
+            self.draw(&line);
+            eprintln!();
+            self.shown = false;
+        }
+    }
+
+    /// Clears the bar, so the error that follows starts on a clean line.
+    fn abandon(&mut self) {
+        if self.shown && self.drawn.is_some() {
+            self.draw("");
+        }
+        self.shown = false;
+    }
+
+    fn draw(&self, line: &str) {
+        use std::io::Write;
+        // `\x1b[2K` clears the old line first, so a shorter one leaves no tail.
+        let mut stderr = std::io::stderr().lock();
+        let _ = write!(stderr, "\r\x1b[2K{line}");
+        let _ = stderr.flush();
+    }
+}
+
+/// The width of the bar itself, in cells.
+const BAR_WIDTH: u64 = 30;
+
+/// One frame of the progress bar: `done` of `total` bytes after `elapsed`.
+///
+/// `  [██████████████░░░░░░░░░░░░░░░░]  47%  19.4 MiB / 41.3 MiB  8.1 MiB/s`
+///
+/// With no `Content-Length`, the size is unknown and there is no bar to
+/// fill, so the line is the count and the rate.
+fn progress_line(done: u64, total: Option<u64>, elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs_f64();
+    let rate = if seconds > 0.0 {
+        format!("  {}/s", size(done as f64 / seconds))
+    } else {
+        String::new()
+    };
+    match total.filter(|&total| total > 0) {
+        Some(total) => {
+            let done = done.min(total);
+            let filled = done * BAR_WIDTH / total;
+            let bar: String = (0..BAR_WIDTH)
+                .map(|cell| if cell < filled { '█' } else { '░' })
+                .collect();
+            format!(
+                "  [{bar}] {:>3}%  {} / {}{rate}",
+                done * 100 / total,
+                size(done as f64),
+                size(total as f64)
+            )
+        }
+        None => format!("  {}{rate}", size(done as f64)),
+    }
+}
+
+/// `bytes` in the largest binary unit that keeps it at or over one.
+fn size(bytes: f64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 /// The SHA-256 `checksums.txt` lists for `name`, as lowercase hex.
@@ -477,7 +734,7 @@ async fn upgrade(
 ) -> Result<Outcome, String> {
     #[cfg(windows)]
     let _ = std::fs::remove_file(set_aside(exe));
-    let listing = download(client, listing_url, LISTING_LIMIT).await?;
+    let listing = download(client, listing_url, LISTING_LIMIT, false).await?;
     let releases = parse_releases(binary, &listing)?;
     let Some(latest) = releases.first() else {
         return Ok(Outcome::Current(format!(
@@ -499,11 +756,11 @@ async fn upgrade(
     let checksums_url = latest.asset("checksums.txt").ok_or_else(|| {
         format!("{binary} {version} publishes no checksums.txt; refusing to install it unverified")
     })?;
-    let checksums = download(client, checksums_url, CHECKSUMS_LIMIT).await?;
+    let checksums = download(client, checksums_url, CHECKSUMS_LIMIT, false).await?;
     let expected = listed_checksum(&String::from_utf8_lossy(&checksums), &name)
         .ok_or_else(|| format!("checksums.txt does not list {name}; refusing to install it"))?;
     eprintln!("Downloading {binary} {version} ({})...", target());
-    let archive = download(client, archive_url, ARCHIVE_LIMIT).await?;
+    let archive = download(client, archive_url, ARCHIVE_LIMIT, true).await?;
     let actual = sha256_hex(&archive);
     if actual != expected {
         return Err(format!(
@@ -538,7 +795,8 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, String
 /// The read half of [`run`]: the same release listing, but it stops at
 /// comparing versions instead of downloading. Returns the line to print.
 pub fn check(binary: &'static str, current_version: &str) -> Result<String, String> {
-    let listing = block_on(async { download(&client(), &releases_url(), LISTING_LIMIT).await })??;
+    let listing =
+        block_on(async { download(&client(), &releases_url(), LISTING_LIMIT, false).await })??;
     let releases = parse_releases(binary, &listing)?;
     let latest = releases.first().map(|release| {
         (
@@ -1072,5 +1330,179 @@ mod tests {
             "a newer build was downgraded"
         );
         assert_eq!(after, b"OLD");
+    }
+
+    /// How a [`flaky_server`] answers the attempts before it behaves.
+    #[derive(Clone, Copy)]
+    enum Misbehave {
+        /// Closes the connection without a response.
+        Hangup,
+        /// Promises the whole body and sends half of it.
+        Truncate,
+        /// Answers with this status and no body.
+        Status(u16),
+        /// Sends the headers and then nothing at all.
+        Stall,
+    }
+
+    /// Serves `body` at any path, misbehaving as `how` on the first `bad`
+    /// requests. Returns the port and the count of requests seen.
+    async fn flaky_server(
+        body: Vec<u8>,
+        bad: usize,
+        how: Misbehave,
+    ) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = seen.clone();
+        let body = Arc::new(body);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let ok = |len: usize| {
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {len}\r\nconnection: close\r\n\r\n"
+                        )
+                    };
+                    if n >= bad {
+                        let _ = socket.write_all(ok(body.len()).as_bytes()).await;
+                        let _ = socket.write_all(&body).await;
+                        return;
+                    }
+                    match how {
+                        Misbehave::Hangup => {}
+                        Misbehave::Truncate => {
+                            let _ = socket.write_all(ok(body.len()).as_bytes()).await;
+                            let _ = socket.write_all(&body[..body.len() / 2]).await;
+                        }
+                        Misbehave::Status(code) => {
+                            let response = format!(
+                                "HTTP/1.1 {code} Nope\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                            );
+                            let _ = socket.write_all(response.as_bytes()).await;
+                        }
+                        Misbehave::Stall => {
+                            let _ = socket.write_all(ok(body.len()).as_bytes()).await;
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
+                    }
+                });
+            }
+        });
+        (port, seen)
+    }
+
+    async fn fetch_flaky(bad: usize, how: Misbehave) -> (Result<Vec<u8>, String>, usize) {
+        let (port, seen) = flaky_server(b"the archive".to_vec(), bad, how).await;
+        let client = HttpClient::new(&TrustStore::bundled());
+        let url = format!("http://127.0.0.1:{port}/archive");
+        let result = download(&client, &url, 1024, true).await;
+        (result, seen.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_dropped_connection_is_tried_again() {
+        let (result, seen) = fetch_flaky(2, Misbehave::Hangup).await;
+        assert_eq!(result.as_deref(), Ok(&b"the archive"[..]));
+        assert_eq!(seen, 3);
+    }
+
+    #[tokio::test]
+    async fn a_truncated_body_is_tried_again() {
+        let (result, seen) = fetch_flaky(1, Misbehave::Truncate).await;
+        assert_eq!(result.as_deref(), Ok(&b"the archive"[..]));
+        assert_eq!(seen, 2);
+    }
+
+    #[tokio::test]
+    async fn a_server_error_is_tried_again() {
+        let (result, seen) = fetch_flaky(1, Misbehave::Status(503)).await;
+        assert_eq!(result.as_deref(), Ok(&b"the archive"[..]));
+        assert_eq!(seen, 2);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_body_is_tried_again() {
+        let (result, seen) = fetch_flaky(1, Misbehave::Stall).await;
+        assert_eq!(result.as_deref(), Ok(&b"the archive"[..]));
+        assert_eq!(seen, 2);
+    }
+
+    #[tokio::test]
+    async fn a_not_found_is_not_tried_again() {
+        let (result, seen) = fetch_flaky(usize::MAX, Misbehave::Status(404)).await;
+        let error = result.unwrap_err();
+        assert!(error.contains("404"), "{error}");
+        assert_eq!(seen, 1);
+    }
+
+    #[tokio::test]
+    async fn the_network_is_given_up_on_after_every_attempt() {
+        let (result, seen) = fetch_flaky(usize::MAX, Misbehave::Hangup).await;
+        let error = result.unwrap_err();
+        assert!(error.contains("gave up after 3 attempts"), "{error}");
+        assert_eq!(seen, ATTEMPTS as usize);
+    }
+
+    #[tokio::test]
+    async fn a_body_over_its_limit_is_refused_by_its_length() {
+        let (port, seen) = flaky_server(vec![0; 2048], 0, Misbehave::Hangup).await;
+        let client = HttpClient::new(&TrustStore::bundled());
+        let url = format!("http://127.0.0.1:{port}/archive");
+        let error = download(&client, &url, 1024, false).await.unwrap_err();
+        assert!(error.contains("larger than 1024 bytes"), "{error}");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_bar_fills_with_the_download() {
+        let mib = 1024 * 1024;
+        let line = progress_line(10 * mib, Some(40 * mib), Duration::from_secs(2));
+        assert_eq!(
+            line,
+            format!(
+                "  [{}{}]  25%  10.0 MiB / 40.0 MiB  5.0 MiB/s",
+                "█".repeat(7),
+                "░".repeat(23)
+            )
+        );
+        let done = progress_line(40 * mib, Some(40 * mib), Duration::from_secs(4));
+        assert!(done.contains(&"█".repeat(30)), "{done}");
+        assert!(
+            done.contains(" 100%  40.0 MiB / 40.0 MiB  10.0 MiB/s"),
+            "{done}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_size_shows_the_count_and_the_rate() {
+        assert_eq!(
+            progress_line(1536, None, Duration::from_secs(1)),
+            "  1.5 KiB  1.5 KiB/s"
+        );
+        assert_eq!(progress_line(0, Some(0), Duration::ZERO), "  0 B");
+    }
+
+    #[test]
+    fn sizes_are_in_binary_units() {
+        assert_eq!(size(512.0), "512 B");
+        assert_eq!(size(1024.0), "1.0 KiB");
+        assert_eq!(size(41_309_862.0), "39.4 MiB");
+        assert_eq!(size(3.0 * 1024.0 * 1024.0 * 1024.0), "3.0 GiB");
     }
 }

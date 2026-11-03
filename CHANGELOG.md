@@ -16,6 +16,13 @@ namespace) is unstable and may change between minor releases until the API freez
 - `runtime:websocket`'s `serve()` serves `wss:` with `secureTransport: "on"`,
   `cert` and `key`, like `runtime:http`'s `serve`.
 
+### Fixed
+
+- `esrun upgrade` tries a download again when the network fails it (a
+  dropped connection, a truncated or stalled body, a `5xx` or `429`), up to
+  three attempts in all. Before, one dropped connection failed the upgrade.
+  The archive download shows a progress bar when stderr is a terminal.
+
 ### Security
 
 - **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to
