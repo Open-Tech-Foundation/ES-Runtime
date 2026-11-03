@@ -134,6 +134,13 @@ the tool:
 await fetch(url, { signal: AbortSignal.timeout(5000) });
 ```
 
+### Proxies
+
+`fetch` connects to the host in the URL. It reads no proxy configuration —
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and the operating system's proxy
+settings are ignored — so an inherited environment variable cannot route a
+deployment's traffic through a host it never named.
+
 ### Compressed responses
 
 The default transport negotiates and decodes content-codings, so a compressed

@@ -216,6 +216,11 @@ await fetch("https://example.com/upload", { method: "POST", body });
 await fetch(url, { signal: AbortSignal.timeout(5000) }); // TimeoutError
 ```
 
+## Proxies
+
+`fetch` connects to the host in the URL. `HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY` and the operating system's proxy settings are ignored.
+
 ## Compressed responses
 
 | | |

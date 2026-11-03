@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- `fetch` and the `--otel` exporter no longer read `HTTP_PROXY`,
+  `HTTPS_PROXY`, `ALL_PROXY` or the operating system's proxy settings. The
+  HTTP client enabled them by default, so an inherited environment variable
+  could route every outbound request through a host the deployment never
+  named. Requests now go to the host in the URL.
+
 - The bundled TLS root certificates (`webpki-roots` 1.0.11) no longer trust
   "emSign Root CA - C1" or "emSign ECC Root CA - C3". Mozilla removed them
   after the October 2026 compromise of eight eMudhra intermediate CA keys;

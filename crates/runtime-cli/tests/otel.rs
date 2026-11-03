@@ -467,6 +467,45 @@ fn exporting_grants_the_program_nothing() {
     );
 }
 
+/// The exporter talks to the `--otel` collector itself, never to a proxy an
+/// environment variable names: spans carry request paths and timings, and an
+/// inherited `HTTP_PROXY` is not the deployment choosing where they go.
+#[test]
+fn spans_bypass_a_proxy_named_by_the_environment() {
+    let collector = Collector::start();
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy");
+    proxy.set_nonblocking(true).expect("nonblocking");
+    let proxy_url = format!("http://{}", proxy.local_addr().expect("addr"));
+    let app = temp("otel-proxy.mjs");
+    std::fs::write(&app, "await new Promise((r) => setTimeout(r, 20));\n").expect("write app");
+
+    let mut command = Command::new(common::esrun_bin());
+    for name in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+        command.env(name, &proxy_url);
+    }
+    let out = command
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .current_dir(common::tmpdir())
+        .arg(format!("--otel={}", collector.endpoint()))
+        .arg(&app)
+        .output()
+        .expect("run esrun");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !collector.collect(Duration::from_millis(1500)).is_empty(),
+        "no spans reached the collector"
+    );
+    assert!(
+        matches!(proxy.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the exporter connected to the proxy named by the environment"
+    );
+}
+
 /// `--otel-service` names the service; without it the entry's file name does.
 #[test]
 fn the_service_name_defaults_to_the_entry() {

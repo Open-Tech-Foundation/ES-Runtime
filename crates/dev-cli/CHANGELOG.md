@@ -26,6 +26,10 @@ is the point, since none of the three has any business in a deployment.
 
 ### Security
 
+- A program run by esdev no longer sends `fetch` requests or `--otel` spans
+  through a proxy named by `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`, the
+  same as under esrun.
+
 - esdev's dev proxy no longer trusts the eMudhra roots Mozilla removed after
   the October 2026 intermediate CA key compromise ("emSign Root CA - C1",
   "emSign ECC Root CA - C3"; `webpki-roots` 1.0.11).

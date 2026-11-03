@@ -116,6 +116,11 @@ impl ReqwestTransport {
         };
         cell.get_or_init(|| {
             reqwest::Client::builder()
+                // reqwest otherwise reads HTTP_PROXY, HTTPS_PROXY and ALL_PROXY
+                // (and the OS proxy settings), which would let an environment
+                // variable route every request through a host the deployment
+                // never named. Outbound traffic goes where the program asked.
+                .no_proxy()
                 .redirect(policy)
                 .user_agent(USER_AGENT)
                 .connect_timeout(CONNECT_TIMEOUT)

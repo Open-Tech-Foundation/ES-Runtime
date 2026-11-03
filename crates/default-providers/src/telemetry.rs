@@ -42,6 +42,9 @@ impl OtlpHttpSink {
         let endpoint = endpoint.into();
         OtlpHttpSink {
             client: reqwest::Client::builder()
+                // Not through a proxy the environment names, for the same
+                // reason `fetch` is not: spans go to the `--otel` collector.
+                .no_proxy()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_default(),

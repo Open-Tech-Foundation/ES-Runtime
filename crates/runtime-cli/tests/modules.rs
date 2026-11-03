@@ -1809,6 +1809,48 @@ fn runtime_http_serve_and_fetch_roundtrip() {
 }
 
 #[test]
+fn fetch_ignores_proxy_environment_variables() {
+    // An environment variable must not be able to route every outbound request
+    // through a host the deployment never named. A listener stands in for the
+    // proxy: with every proxy variable pointing at it, the fetch still reaches
+    // the server directly and the "proxy" sees no connection at all. The
+    // timeout bounds the failure: the kernel completes a handshake to the
+    // listener without an accept, so a proxied request would wait forever.
+    let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    proxy.set_nonblocking(true).unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let script = "import { serve } from 'runtime:http';\
+        const server = serve({ hostname: '127.0.0.1', port: 0 }, () => new Response('direct'));\
+        const { port } = await server.addr;\
+        const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(5000) });\
+        console.log('PROXY:' + (await res.text()));\
+        await server.stop();";
+    let mut command = esrun();
+    for name in [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        command.env(name, &proxy_url);
+    }
+    let out = command
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("PROXY:direct"), "{}", stdout(&out));
+    assert!(
+        matches!(proxy.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "fetch connected to the proxy named by the environment"
+    );
+}
+
+#[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
         .arg("-e=import 'runtime:nope';")
