@@ -92,18 +92,28 @@ Each binary is released under its own tag and is pinned independently. Latest:
 
 ## Upgrade
 
-Each binary updates itself in place — no reinstall needed.
+On a development machine, `esdev upgrade` updates `esdev` and the `esrun`
+installed beside it, each to its own newest release:
 
 ```sh
-# Downloads the latest release for this platform and replaces the binary.
-esrun upgrade
-esdev upgrade
+esdev upgrade                 # both
+esdev upgrade --only=esrun    # just esrun (or --only=esdev)
+esdev upgrade --dry-run       # say what would change, change nothing
 ```
 
-They are versioned and tagged separately, so each resolves its own newest
-release: `esrun upgrade` never moves `esdev`, and neither will pick up the
-other's archive because the release published most recently happened to be the
-other one's. A binary already current says so and changes nothing.
+The two are versioned and tagged separately, so each resolves its own release.
+A binary already current says so and changes nothing. An `esrun` elsewhere on
+`PATH` is left alone.
+
+On a server, or anywhere only `esrun` is installed, upgrade by re-running the
+installer with the version you want, as a deployment's image or install step
+does:
+
+```sh
+curl -fsSL https://esrun.opentechf.org/install.sh | ESRUN_VERSION=<version> bash -s -- --only=esrun
+```
+
+`esrun` does not replace itself.
 
 The archive is checked against the release's `checksums.txt` before anything is
 replaced. A release without one, or an archive whose SHA-256 does not match it,

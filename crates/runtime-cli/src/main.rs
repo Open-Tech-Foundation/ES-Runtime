@@ -4,11 +4,10 @@
 //! The wiring itself — the default tokio providers, the [`Runtime`], the module
 //! load and the drive loop — lives in `es-runtime-cli-common` and is shared with
 //! `esdev`, so a program behaves identically under either binary (SPEC.md §8).
-//! What remains here is `esrun`'s own command line: its flags, and the
-//! `upgrade` subcommand it shares with `esdev` (`cli_common::upgrade`). Nothing
-//! here is for development — the TypeScript definitions used to be installed
-//! from this binary and now belong to `esdev`, which is the one a developer
-//! runs (D59).
+//! What remains here is `esrun`'s own command line: its flags. Nothing here is
+//! for development — the TypeScript definitions (D59) and the self-upgrade
+//! (D204) used to live in this binary and now belong to `esdev`, which is the
+//! one a developer runs.
 //!
 //! Every input runs as an ES module: `import`/`export` and top-level `await`
 //! work. Imports resolve via `NodeModuleLoader`: relative/absolute paths and
@@ -55,7 +54,6 @@ USAGE:
     esrun [options] <file> [args...]
                                 Run a JavaScript module file
     esrun -e=<code>             Run an inline module snippet
-    esrun upgrade [--dry-run]   Update esrun to the latest release
     esrun -h, --help            Show this help
     esrun -v, -V, --version     Show the version
 
@@ -112,20 +110,6 @@ streams, encoding, timers, events.
     The modules:         https://esrun.opentechf.org/api
 ";
 
-/// `esrun upgrade` usage, printed for `-h`/`--help` and after a refused argument.
-const UPGRADE_USAGE: &str = "\
-esrun upgrade — update esrun to the latest release
-
-USAGE:
-    esrun upgrade               Replace this binary with the newest release
-    esrun upgrade --dry-run     Say whether a newer release exists, and change
-                                nothing
-    esrun upgrade -h, --help    Show this help
-
-It finds the latest release, downloads it, and replaces the running binary
-in place. There is nothing else to configure, and no other argument to give it.
-";
-
 /// Parses `esrun`'s command line.
 ///
 /// The shared flags (`--timeout`, `--env-file`, `--max-heap`, the permission
@@ -170,42 +154,20 @@ fn parse_args() -> Result<Config, String> {
                         .to_string(),
                 );
             }
+            // Moved to `esdev upgrade` (D204), for the reason `types` moved: a
+            // deployment pins its runtime rather than letting it replace
+            // itself. Named here so the old command gets an answer rather
+            // than "cannot read upgrade".
             "upgrade" => {
-                reject_value(flag, value)?;
-                // Anything after `upgrade` is its own: `--dry-run` checks,
-                // `-h`/`--help` prints, and anything else is refused by name.
-                // Running the replacement past a stray argument would upgrade
-                // a binary the developer never asked to move.
-                let rest: Vec<String> = args.collect();
-                match rest.as_slice() {
-                    [] => es_runtime_cli_common::upgrade::run_and_exit(
-                        "esrun",
-                        env!("CARGO_PKG_VERSION"),
-                    ),
-                    [extra] => {
-                        let (flag, value) = split_flag_value(extra);
-                        if value.is_none() {
-                            if flag == "-h" || flag == "--help" {
-                                println!("{UPGRADE_USAGE}");
-                                std::process::exit(0);
-                            }
-                            if flag == "--dry-run" {
-                                es_runtime_cli_common::upgrade::check_and_exit(
-                                    "esrun",
-                                    env!("CARGO_PKG_VERSION"),
-                                );
-                            }
-                        }
-                        return Err(format!(
-                            "esrun upgrade takes no arguments; got {extra}.\n\n{UPGRADE_USAGE}"
-                        ));
-                    }
-                    [first, ..] => {
-                        return Err(format!(
-                            "esrun upgrade takes no arguments; got {first}.\n\n{UPGRADE_USAGE}"
-                        ));
-                    }
-                }
+                return Err(
+                    "esrun no longer upgrades itself: a deployment pins its esrun in its \
+                     image or install step.\n\n\
+                     On a development machine, `esdev upgrade` updates esrun and esdev \
+                     together (`esdev upgrade --only=esrun` for esrun alone).\n\
+                     Elsewhere, re-run the installer, pinning the version:\n  \
+                     curl -fsSL https://esrun.opentechf.org/install.sh | ESRUN_VERSION=<version> bash -s -- --only=esrun"
+                        .to_string(),
+                );
             }
             "-v" | "-V" | "--version" => {
                 reject_value(flag, value)?;

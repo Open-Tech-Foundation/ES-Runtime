@@ -24,7 +24,6 @@ pub mod permissions;
 pub mod run;
 pub mod shutdown;
 pub mod sourcemap;
-pub mod upgrade;
 
 pub use extension::{ExtensionContext, HostExtension, HostModule};
 pub use run::{Config, Inspector, Source, SourceResolver, run};

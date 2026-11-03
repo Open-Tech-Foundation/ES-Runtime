@@ -1794,7 +1794,7 @@ The failure is not the missing dependency. It is that a build's output is treate
 
 ---
 
-### D77 — Both binaries upgrade themselves, and a `--help` is a map, not a manual · *Proposed (2026-08-18)* · *reverses D64-era "esrun only", amends D59*
+### D77 — Both binaries upgrade themselves, and a `--help` is a map, not a manual · *Proposed (2026-08-18)* · *reverses D64-era "esrun only", amends D59* · *upgrade half superseded by D204*
 
 **Context:** Two findings, a day apart, with one cause. `esdev test --help` described five ambient globals — `test`, `assert`, `assertEquals`, `assertThrows`, `assertRejects` — that **D71 replaced with `runtime:test` imports a release earlier**. A file written from that help fails on its first line with `ReferenceError: test is not defined`, and nothing caught it: the templates had been updated, the site had been updated, the runtime's own suite had been updated, and the help had not. It was wrong because it was long — 93 lines for `esrun`, 118 for `esdev`, and another 328 across the four `esdev` subcommands, most of it prose that also exists on the site, where a reader can find it and where correcting it does not mean shipping a binary.
 
@@ -2403,7 +2403,7 @@ Verified by 7 unit tests over the report and 4 end-to-end tests that make the cl
 
 It is now `esdev --install-types`, and rewritten rather than moved: the definitions are published to npm as `@opentf/esrun-types`, so nothing fabricates a package under `node_modules/@opentf/esrun` any more. The command adds the real package with the manager the lockfile names, and registers it as a `compilerOptions.types` entry — the form the package's own `index.d.ts` documents, so there is one answer rather than two. A JSONC `tsconfig.json` is left untouched with the lines to add printed, because re-emitting it from a JSON value would silently delete the comments. `esrun types` is kept as a *recognised* word solely so it can name its replacement; without that the parser would take it for a script and answer "cannot read types".
 
-**`upgrade` stays in `esrun`, deliberately.** The same audit asked the same question of it, and the answer is different: it is reachable only by explicitly typing `esrun upgrade`, never from guest JS, never at startup, and it does nothing on any ordinary run. It is how an installed `esrun` updates itself, and `esdev` is not published — moving it would leave the shipped binary with no update path to solve a risk that is not there.
+**`upgrade` stays in `esrun`, deliberately.** The same audit asked the same question of it, and the answer is different: it is reachable only by explicitly typing `esrun upgrade`, never from guest JS, never at startup, and it does nothing on any ordinary run. It is how an installed `esrun` updates itself, and `esdev` is not published — moving it would leave the shipped binary with no update path to solve a risk that is not there. **Superseded by D204 (2026-11-04):** `esdev` is published and installed beside `esrun`, so the premise is gone; `upgrade` moved to `esdev`.
 
 **Not moved, and worth recording so it is not asked again: the console.** `console.log`'s formatting is a WinterTC surface implemented in the prelude and baked into the shared snapshot. Moving or trimming it in one binary would change what the JS sees, which is the one thing D59 forbids.
 
@@ -4263,3 +4263,22 @@ Deno replaced reqwest in `fetch` with a hyper-util client of its own (deno#24237
 - **graviola**: no RSA encryption, so no RSA-OAEP. **ring**: no key generation, no OAEP.
 
 **Consequences:** `rsa` no longer pulls the `digest` 0.10 generation, and the `sha1_rsa` alias is gone. `deny.toml` and `.cargo/audit.toml` keep their exception, because the advisory still lists every version as affected; their reason now records the fix. Revisit at 0.10.0, and when RustSec publishes a patched range.
+
+### D204 — `upgrade` leaves `esrun`; `esdev upgrade` updates both · *Accepted (2026-11-04)* · *supersedes D59's "upgrade stays in esrun" and D77's esrun half*
+
+**Context:** D59 kept `esrun upgrade` for one reason: "`esdev` is not published — moving it would leave the shipped binary with no update path." That stopped being true when `install.sh` began installing both binaries from the same releases. What remains is a production binary carrying code to download, unpack and replace an executable, for a use deployments do not have: a deployment pins its runtime in an image or an install step, and a binary that replaces itself on a server works against a reproducible deploy. D77 also left open that `esdev upgrade` could not tell a developer the `esrun` beside it was stale.
+
+How the mainstream tools split it: Node has no self-upgrade (version managers, images); Deno and Bun have `deno upgrade` / `bun upgrade` because each is one binary for development and production alike — there is nowhere else to put it. `rustup update` updates every component it installed, from the tool a developer already runs. We have the second binary, so the command belongs in it.
+
+**Decision (maintainer, 2026-11-04):**
+- **`esrun upgrade` is removed.** The word is answered with where it went (as `esrun types` is, D59), so it is never read as a script path. The upgrade module moves from `cli-common` to `esdev`; `cli-common` drops `sha2`, `flate2`, `tar`, `zip`, `url` and `futures-util`.
+- **`esdev upgrade` updates `esdev` and the `esrun` installed beside it** — the same directory, where `install.sh` puts both. The `esrun`'s version is read from its `--version`. One release listing serves both; each binary is then upgraded, verified (D198) and reported on its own, so a broken `esrun` asset does not hold back `esdev`.
+- **`--only=esdev|esrun`**, `install.sh`'s spelling, for one; `--dry-run` combines with it.
+- **A server upgrades by re-running the installer** with `ESRUN_VERSION=` pinned.
+
+**Rejected:**
+- **Finding `esrun` on `PATH`**: it may be a system package or a container's, not this installation's to replace.
+- **A flag that turns `esrun` on (`esdev upgrade --with-esrun`)**: the installer installs both by default, so updating both by default is the matching shape; `--only=` is the opt-out it already has.
+- **Keeping `esrun upgrade` beside the new command**: two update paths for one file, and the production binary keeps the surface.
+
+**Consequences:** breaking for anyone scripting `esrun upgrade`; the error names `esdev upgrade` and the installer line. An `esrun`-only machine (a server, a CI image) re-runs the installer. Releases of `esrun` already installed keep their own `upgrade` until they are replaced. **Not solved here:** `install.ps1`'s pinning reads `ES_RUNTIME_*` variables rather than flags, and the moved-command message shows only the `install.sh` line.

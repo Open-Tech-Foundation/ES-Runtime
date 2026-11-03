@@ -16,12 +16,13 @@ namespace) is unstable and may change between minor releases until the API freez
 - `runtime:websocket`'s `serve()` serves `wss:` with `secureTransport: "on"`,
   `cert` and `key`, like `runtime:http`'s `serve`.
 
-### Fixed
+### Removed
 
-- `esrun upgrade` tries a download again when the network fails it (a
-  dropped connection, a truncated or stalled body, a `5xx` or `429`), up to
-  three attempts in all. Before, one dropped connection failed the upgrade.
-  The archive download shows a progress bar when stderr is a terminal.
+- **`esrun upgrade`** (DECISIONS D204). A deployment pins its esrun in its
+  image or install step; on a development machine, `esdev upgrade` now
+  updates esrun and esdev together. `esrun upgrade` exits with an error that
+  names both routes. To upgrade an esrun-only machine, re-run the installer
+  with `ESRUN_VERSION=<version>`.
 
 ### Security
 

@@ -91,6 +91,7 @@ mod trace;
 mod transform;
 mod types;
 mod unbundled;
+mod upgrade;
 mod watch;
 mod watch_keys;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
@@ -152,7 +153,7 @@ COMMANDS:
     bench [filter...]           Run the benchmark files (*.bench.*)
     typecheck [args...]         Typecheck the project with its own tsc
     preview                     Serve the built output before deploying it
-    upgrade [--dry-run]         Update esdev to the latest release
+    upgrade [--dry-run]         Update esdev and esrun to their latest releases
 
     Each takes --help: `esdev build --help`.
 
@@ -377,18 +378,47 @@ Output is tsc's own; a failure adds only the exit code.
 ";
 
 const UPGRADE_USAGE: &str = "\
-esdev upgrade — update esdev to the latest release
+esdev upgrade — update esdev, and the esrun beside it, to their latest releases
 
 USAGE:
-    esdev upgrade               Replace this binary with the newest release
-    esdev upgrade --dry-run     Say whether a newer release exists, and change
-                                nothing
+    esdev upgrade               Replace esdev, and the esrun installed in the
+                                same directory, with their newest releases
+    esdev upgrade --only=esdev  Just esdev
+    esdev upgrade --only=esrun  Just the esrun beside esdev
+    esdev upgrade --dry-run     Say whether newer releases exist, and change
+                                nothing (combines with --only)
     esdev upgrade -h, --help    Show this help
 
-It finds the latest release, downloads it, and replaces the running binary
-in place — the same machinery `esrun upgrade` runs. There is nothing else
-to configure, and no other argument to give it.
+Each archive is checked against its release's checksums.txt before anything
+is replaced. An esrun elsewhere on PATH is not touched; a deployment pins its
+esrun in its image or install step instead (install.sh, ESRUN_VERSION=).
 ";
+
+/// `esdev upgrade`'s arguments: which binaries (`--only=`), and whether to
+/// only check (`--dry-run`). Anything else is refused by name — running the
+/// replacement past a stray argument would replace a binary nobody asked to
+/// move. `-h`/`--help` prints and exits.
+fn parse_upgrade_args(argv: impl Iterator<Item = String>) -> Result<(upgrade::Only, bool), String> {
+    let mut only = upgrade::Only::Both;
+    let mut dry_run = false;
+    for arg in argv {
+        let (flag, value) = split_flag_value(&arg);
+        match (flag, value) {
+            ("-h" | "--help", None) => {
+                println!("{UPGRADE_USAGE}");
+                std::process::exit(0);
+            }
+            ("--dry-run", None) => dry_run = true,
+            ("--only", Some(value)) => only = upgrade::Only::parse(value)?,
+            _ => {
+                return Err(format!(
+                    "esdev upgrade does not take {arg}.\n\n{UPGRADE_USAGE}"
+                ));
+            }
+        }
+    }
+    Ok((only, dry_run))
+}
 
 const INIT_USAGE: &str = "\
 esdev init — start a bare project, or adopt this one
@@ -647,31 +677,11 @@ fn parse_args() -> Result<Command, String> {
             return Ok(Command::Typecheck(args));
         }
         if first == "upgrade" {
-            if let Some(extra) = argv.next() {
-                let (flag, value) = split_flag_value(&extra);
-                if value.is_none() {
-                    if flag == "-h" || flag == "--help" {
-                        println!("{UPGRADE_USAGE}");
-                        std::process::exit(0);
-                    }
-                    // The read half of the upgrade: the same release listing,
-                    // stopping at the comparison instead of self-replacing.
-                    if flag == "--dry-run" {
-                        es_runtime_cli_common::upgrade::check_and_exit(
-                            "esdev",
-                            env!("CARGO_PKG_VERSION"),
-                        );
-                    }
-                }
-                return Err(format!(
-                    "esdev upgrade takes no arguments; got {extra}.\n\n\
-                     It replaces this binary with the newest esdev release."
-                ));
+            let (only, dry_run) = parse_upgrade_args(argv)?;
+            if dry_run {
+                upgrade::check_and_exit(only);
             }
-            // The same machinery `esrun upgrade` runs, on a thread of its own —
-            // self_update drives a blocking HTTP runtime, and dropping that from
-            // inside this async runtime panics.
-            es_runtime_cli_common::upgrade::run_and_exit("esdev", env!("CARGO_PKG_VERSION"));
+            upgrade::run_and_exit(only);
         }
     }
 

@@ -24,6 +24,14 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **`esdev upgrade` also updates the `esrun` installed beside it**
+  (DECISIONS D204), each to its own newest release, checked against its
+  `checksums.txt`. `--only=esdev` or `--only=esrun` (install.sh's spelling)
+  limits it to one, and `--dry-run` reports on both. An `esrun` elsewhere on
+  `PATH` is left alone. This replaces `esrun upgrade`, which is removed.
+
 ### Fixed
 
 - `esdev upgrade` tries a download again when the network fails it (a

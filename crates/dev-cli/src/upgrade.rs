@@ -1,15 +1,15 @@
-//! `<binary> upgrade` — replace the running binary with the latest release.
+//! `esdev upgrade` — replace `esdev`, and the `esrun` installed beside it, with
+//! their latest releases.
 //!
-//! The same outcome as re-running `install.sh`, built in: find the newest
-//! GitHub release tagged for *this* binary, download the archive for this
+//! The same outcome as re-running `install.sh`, built in: for each binary,
+//! find the newest GitHub release tagged for it, download the archive for this
 //! platform, check it against the release's `checksums.txt`, and swap the
 //! executable in place (DECISIONS.md D198).
 //!
-//! It is shared because both binaries are installed the same way — `install.sh`
-//! fetches `esrun` and `esdev` from the same releases, under the same asset
-//! naming — so the machinery for updating one is the machinery for updating the
-//! other, and two copies of it would be two places for the tag format to drift.
-//! What differs per binary is one word: its name.
+//! It lives in `esdev` alone (D204). `esrun` is the binary a deployment runs,
+//! and a deployment pins its runtime in an image or an install step rather
+//! than letting the binary replace itself; on a developer's machine, where
+//! both are installed side by side, this one command updates both.
 
 use std::cmp::Ordering;
 use std::io::{IsTerminal, Read};
@@ -285,7 +285,7 @@ fn describe(binary: &str, current_version: &str, latest: Option<(&Version, bool)
         return format!("{binary} is already up to date ({current_version}).");
     }
     let mut message =
-        format!("{binary} {current_version} can upgrade to {version}: run `{binary} upgrade`.");
+        format!("{binary} {current_version} can upgrade to {version}: run `esdev upgrade`.");
     if !has_asset {
         message.push_str(&format!(
             " (this release published no {} build yet)",
@@ -715,6 +715,121 @@ fn installed_exe() -> Result<PathBuf, String> {
         .map_err(|e| format!("cannot resolve {}: {e}", exe.display()))
 }
 
+/// One installed binary an upgrade may replace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Installed {
+    /// `esdev` or `esrun`: the tag prefix its releases carry.
+    binary: &'static str,
+    /// The version it reports.
+    version: String,
+    /// The file to replace.
+    exe: PathBuf,
+}
+
+/// Which binaries `esdev upgrade` replaces — `install.sh`'s `--only=`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Only {
+    /// `esdev`, and the `esrun` installed beside it when there is one.
+    Both,
+    /// `--only=esdev`.
+    Esdev,
+    /// `--only=esrun`.
+    Esrun,
+}
+
+impl Only {
+    /// Parses `--only`'s value.
+    pub fn parse(value: &str) -> Result<Only, String> {
+        match value {
+            "esdev" => Ok(Only::Esdev),
+            "esrun" => Ok(Only::Esrun),
+            other => Err(format!(
+                "unknown --only value: {other} (expected esrun or esdev)"
+            )),
+        }
+    }
+}
+
+/// The `esrun` installed beside `esdev_exe`, with the version it reports;
+/// `None` when there is none.
+///
+/// Beside, because that is where `install.sh` puts both, and the only place
+/// `esdev` can know is the one a developer meant: an `esrun` elsewhere on
+/// `PATH` may be a system package or a container's, and is not this
+/// installation's to replace. Its version is asked of it with `--version`,
+/// which every release has answered as `esrun <version>`.
+fn esrun_beside(esdev_exe: &Path) -> Result<Option<Installed>, String> {
+    let dir = esdev_exe
+        .parent()
+        .ok_or_else(|| format!("{} has no directory", esdev_exe.display()))?;
+    let path = dir.join(binary_file("esrun"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let exe = es_runtime_default_providers::path::canonicalize(&path)
+        .map_err(|e| format!("cannot resolve {}: {e}", path.display()))?;
+    let output = std::process::Command::new(&exe)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run {} --version: {e}", exe.display()))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let version = text
+        .trim()
+        .strip_prefix("esrun ")
+        .filter(|_| output.status.success())
+        .ok_or_else(|| {
+            format!(
+                "{} --version did not answer `esrun <version>`",
+                exe.display()
+            )
+        })?;
+    Ok(Some(Installed {
+        binary: "esrun",
+        version: version.to_string(),
+        exe,
+    }))
+}
+
+/// The binaries `only` names, and a note for each one passed over.
+fn targets(only: Only) -> Result<(Vec<Installed>, Vec<String>), String> {
+    let exe = installed_exe()?;
+    let esdev = Installed {
+        binary: "esdev",
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        exe: exe.clone(),
+    };
+    let dir = exe.parent().unwrap_or(Path::new("")).display().to_string();
+    let mut notes = Vec::new();
+    let esrun = match (only, esrun_beside(&exe)) {
+        (Only::Esdev, _) => None,
+        (_, Ok(Some(esrun))) => Some(esrun),
+        (Only::Esrun, Ok(None)) => {
+            return Err(format!(
+                "no esrun is installed beside esdev (in {dir}); install it with \
+                 install.sh --only=esrun"
+            ));
+        }
+        (Only::Esrun, Err(e)) => return Err(e),
+        (Only::Both, Ok(None)) => {
+            notes.push(format!(
+                "note: no esrun beside esdev (in {dir}); esdev only."
+            ));
+            None
+        }
+        (Only::Both, Err(e)) => {
+            notes.push(format!("warning: {e}; leaving esrun as it is."));
+            None
+        }
+    };
+    let mut targets = Vec::new();
+    if only != Only::Esrun {
+        targets.push(esdev);
+    }
+    targets.extend(esrun);
+    Ok((targets, notes))
+}
+
 /// What one upgrade attempt did.
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {
@@ -722,20 +837,41 @@ enum Outcome {
     Upgraded(Version),
 }
 
-/// The upgrade, against a listing at `listing_url`, installing over `exe`.
-/// Separate from [`run`] so tests can point it at a local server and a
-/// scratch file.
+/// Upgrades each of `targets` against one release listing at `listing_url`.
+/// A failure of the listing fails them all; after that, each binary succeeds
+/// or fails on its own, so a broken `esrun` asset does not hold back `esdev`.
+/// `report` hears each outcome as it happens, so a binary's line is printed
+/// before the next one's download starts. Separate from [`run`] so tests can
+/// point it at a local server and scratch files.
 async fn upgrade(
     client: &HttpClient,
     listing_url: &str,
-    binary: &str,
-    current_version: &str,
-    exe: &Path,
+    targets: &[Installed],
+    mut report: impl FnMut(&'static str, &Result<Outcome, String>),
+) -> Result<Vec<(&'static str, Result<Outcome, String>)>, String> {
+    let listing = download(client, listing_url, LISTING_LIMIT, false).await?;
+    let mut outcomes = Vec::new();
+    for target in targets {
+        let outcome = upgrade_one(client, &listing, target).await;
+        report(target.binary, &outcome);
+        outcomes.push((target.binary, outcome));
+    }
+    Ok(outcomes)
+}
+
+async fn upgrade_one(
+    client: &HttpClient,
+    listing: &[u8],
+    installed: &Installed,
 ) -> Result<Outcome, String> {
+    let Installed {
+        binary,
+        version: current_version,
+        exe,
+    } = installed;
     #[cfg(windows)]
     let _ = std::fs::remove_file(set_aside(exe));
-    let listing = download(client, listing_url, LISTING_LIMIT, false).await?;
-    let releases = parse_releases(binary, &listing)?;
+    let releases = parse_releases(binary, listing)?;
     let Some(latest) = releases.first() else {
         return Ok(Outcome::Current(format!(
             "no {binary} releases found; nothing to upgrade to."
@@ -790,53 +926,65 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, String
         .map_err(|e| format!("cannot start the upgrade: {e}"))
 }
 
-/// Asks whether `binary` has a newer release, changing nothing.
-///
-/// The read half of [`run`]: the same release listing, but it stops at
-/// comparing versions instead of downloading. Returns the line to print.
-pub fn check(binary: &'static str, current_version: &str) -> Result<String, String> {
+/// Asks whether each binary `only` names has a newer release, changing
+/// nothing. Returns the lines to print.
+fn check(only: Only) -> Result<Vec<String>, String> {
+    let (targets, notes) = targets(only)?;
+    for note in notes {
+        eprintln!("{note}");
+    }
+    let mut lines = Vec::new();
     let listing =
         block_on(async { download(&client(), &releases_url(), LISTING_LIMIT, false).await })??;
-    let releases = parse_releases(binary, &listing)?;
-    let latest = releases.first().map(|release| {
-        (
-            &release.version,
-            release.asset(&archive_name(binary)).is_some(),
-        )
-    });
-    Ok(describe(binary, current_version, latest))
+    for target in &targets {
+        let releases = parse_releases(target.binary, &listing)?;
+        let latest = releases.first().map(|release| {
+            (
+                &release.version,
+                release.asset(&archive_name(target.binary)).is_some(),
+            )
+        });
+        lines.push(describe(target.binary, &target.version, latest));
+    }
+    Ok(lines)
 }
 
-/// Upgrades `binary` from `current_version` to the newest release, in place.
-///
-/// Returns the line to print. Runs on a runtime of its own, so a caller
-/// already inside one calls it from another thread ([`run_and_exit`]).
-pub fn run(binary: &'static str, current_version: &str) -> Result<String, String> {
-    let exe = installed_exe()?;
-    let outcome = block_on(async {
-        upgrade(&client(), &releases_url(), binary, current_version, &exe).await
+/// Upgrades each binary `only` names to its newest release, in place,
+/// printing each outcome as it happens. Returns whether every binary
+/// succeeded.
+fn run(only: Only) -> Result<bool, String> {
+    let (targets, notes) = targets(only)?;
+    for note in notes {
+        eprintln!("{note}");
+    }
+    let outcomes = block_on(async {
+        upgrade(
+            &client(),
+            &releases_url(),
+            &targets,
+            |binary, outcome| match outcome {
+                Ok(Outcome::Current(message)) => println!("{message}"),
+                Ok(Outcome::Upgraded(version)) => println!("Upgraded {binary} to {version}."),
+                Err(e) => eprintln!("error: {binary} upgrade failed: {e}"),
+            },
+        )
+        .await
     })??;
-    Ok(match outcome {
-        Outcome::Current(message) => message,
-        Outcome::Upgraded(version) => format!("Upgraded {binary} to {version}."),
-    })
+    Ok(outcomes.iter().all(|(_, outcome)| outcome.is_ok()))
 }
 
 /// Runs [`run`] on a thread of its own and prints the outcome, exiting the
 /// process either way.
 ///
-/// Both binaries dispatch `upgrade` from inside `#[tokio::main]`, where a
-/// second runtime cannot be started on the same thread, so the thread hop
-/// lives here with the reason it exists rather than being remembered twice.
-pub fn run_and_exit(binary: &'static str, current_version: &'static str) -> ! {
-    let result = std::thread::spawn(move || run(binary, current_version))
+/// `esdev` dispatches `upgrade` from inside `#[tokio::main]`, where a second
+/// runtime cannot be started on the same thread, so the thread hop lives here
+/// with the reason it exists.
+pub fn run_and_exit(only: Only) -> ! {
+    let result = std::thread::spawn(move || run(only))
         .join()
         .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
     match result {
-        Ok(message) => {
-            println!("{message}");
-            std::process::exit(0)
-        }
+        Ok(ok) => std::process::exit(if ok { 0 } else { 1 }),
         Err(e) => {
             eprintln!("error: upgrade failed: {e}");
             std::process::exit(1)
@@ -846,13 +994,15 @@ pub fn run_and_exit(binary: &'static str, current_version: &'static str) -> ! {
 
 /// Runs [`check`] on a thread of its own and prints the outcome, exiting the
 /// process either way. The same thread hop as [`run_and_exit`].
-pub fn check_and_exit(binary: &'static str, current_version: &'static str) -> ! {
-    let result = std::thread::spawn(move || check(binary, current_version))
+pub fn check_and_exit(only: Only) -> ! {
+    let result = std::thread::spawn(move || check(only))
         .join()
         .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
     match result {
-        Ok(message) => {
-            println!("{message}");
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
             std::process::exit(0)
         }
         Err(e) => {
@@ -1255,7 +1405,15 @@ mod tests {
         std::fs::write(&exe, b"OLD").unwrap();
         let client = HttpClient::new(&TrustStore::bundled());
         let url = format!("http://127.0.0.1:{listing_port}/releases");
-        let outcome = upgrade(&client, &url, "esrun", current, &exe).await;
+        let target = Installed {
+            binary: "esrun",
+            version: current.to_string(),
+            exe: exe.clone(),
+        };
+        let outcome = match upgrade(&client, &url, &[target], |_, _| {}).await {
+            Ok(mut outcomes) => outcomes.remove(0).1,
+            Err(e) => Err(e),
+        };
         let after = std::fs::read(&exe).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         (outcome, after)
@@ -1504,5 +1662,144 @@ mod tests {
         assert_eq!(size(1024.0), "1.0 KiB");
         assert_eq!(size(41_309_862.0), "39.4 MiB");
         assert_eq!(size(3.0 * 1024.0 * 1024.0 * 1024.0), "3.0 GiB");
+    }
+
+    #[test]
+    fn only_takes_the_names_install_sh_takes() {
+        assert_eq!(Only::parse("esdev"), Ok(Only::Esdev));
+        assert_eq!(Only::parse("esrun"), Ok(Only::Esrun));
+        let error = Only::parse("both").unwrap_err();
+        assert!(error.contains("expected esrun or esdev"), "{error}");
+    }
+
+    #[test]
+    fn an_esrun_check_points_at_esdev_upgrade() {
+        assert_eq!(
+            describe("esrun", "0.46.0", Some((&v("0.47.0"), true))),
+            "esrun 0.46.0 can upgrade to 0.47.0: run `esdev upgrade`."
+        );
+    }
+
+    /// `esdev` and an `esrun` beside it, upgraded from one listing: each
+    /// binary takes its own release, and one that cannot be installed does
+    /// not hold the other back.
+    #[tokio::test]
+    async fn both_binaries_upgrade_from_one_listing_each_on_its_own() {
+        let esdev_archive = if cfg!(windows) {
+            zip_of(&[("esdev.exe", b"NEW ESDEV")])
+        } else {
+            tar_gz(&[("esdev", Some(b"NEW ESDEV"))])
+        };
+        let mut files = HashMap::new();
+        files.insert("/esdev-archive".to_string(), esdev_archive.clone());
+        // esrun's archive is listed in checksums.txt under a hash it does not
+        // have, so its install fails while esdev's goes through.
+        let esdev_checksum = sha256_hex(&esdev_archive);
+        let checksums = format!(
+            "{esdev_checksum}  {}\n{}  {}\n",
+            archive_name("esdev"),
+            "0".repeat(64),
+            archive_name("esrun")
+        );
+        files.insert("/checksums.txt".to_string(), checksums.into_bytes());
+        files.insert("/esrun-archive".to_string(), b"not it".to_vec());
+        let port = release_server(files).await;
+        let asset = |name: String, path: &str| {
+            serde_json::json!({
+                "name": name,
+                "browser_download_url": format!("http://127.0.0.1:{port}/{path}"),
+            })
+        };
+        let listing = serde_json::json!([
+            { "tag_name": "esdev@0.30.0", "assets": [
+                asset(archive_name("esdev"), "esdev-archive"),
+                asset("checksums.txt".to_string(), "checksums.txt"),
+            ]},
+            { "tag_name": "esrun@0.50.0", "assets": [
+                asset(archive_name("esrun"), "esrun-archive"),
+                asset("checksums.txt".to_string(), "checksums.txt"),
+            ]},
+        ])
+        .to_string();
+        let mut listing_files = HashMap::new();
+        listing_files.insert("/releases".to_string(), listing.into_bytes());
+        let listing_port = release_server(listing_files).await;
+
+        let dir = scratch(&format!("both-{port}"));
+        let esdev_exe = dir.join("esdev");
+        let esrun_exe = dir.join("esrun");
+        std::fs::write(&esdev_exe, b"OLD").unwrap();
+        std::fs::write(&esrun_exe, b"OLD").unwrap();
+        let targets = [
+            Installed {
+                binary: "esdev",
+                version: "0.26.0".to_string(),
+                exe: esdev_exe.clone(),
+            },
+            Installed {
+                binary: "esrun",
+                version: "0.46.0".to_string(),
+                exe: esrun_exe.clone(),
+            },
+        ];
+        let url = format!("http://127.0.0.1:{listing_port}/releases");
+        let mut heard = Vec::new();
+        let outcomes = upgrade(&client(), &url, &targets, |binary, _| heard.push(binary))
+            .await
+            .unwrap();
+        assert_eq!(heard, ["esdev", "esrun"]);
+        assert_eq!(outcomes[0], ("esdev", Ok(Outcome::Upgraded(v("0.30.0")))));
+        assert_eq!(outcomes[1].0, "esrun");
+        let error = outcomes[1].1.as_ref().unwrap_err();
+        assert!(error.contains("does not match checksums.txt"), "{error}");
+        assert_eq!(std::fs::read(&esdev_exe).unwrap(), b"NEW ESDEV");
+        assert_eq!(std::fs::read(&esrun_exe).unwrap(), b"OLD");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_esrun_beside_esdev_is_none() {
+        let dir = scratch("beside-none");
+        let esdev = dir.join(binary_file("esdev"));
+        std::fs::write(&esdev, b"").unwrap();
+        assert_eq!(esrun_beside(&esdev), Ok(None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn fake_esrun(dir: &Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("esrun");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_esrun_beside_esdev_reports_its_version() {
+        let dir = scratch("beside-version");
+        let esdev = dir.join("esdev");
+        std::fs::write(&esdev, b"").unwrap();
+        fake_esrun(&dir, "#!/bin/sh\necho esrun 0.46.0\n");
+        let found = esrun_beside(&esdev).unwrap().unwrap();
+        assert_eq!(found.binary, "esrun");
+        assert_eq!(found.version, "0.46.0");
+        assert!(found.exe.ends_with("esrun"), "{}", found.exe.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_esrun_that_does_not_answer_its_version_is_refused() {
+        let dir = scratch("beside-garbled");
+        let esdev = dir.join("esdev");
+        std::fs::write(&esdev, b"").unwrap();
+        fake_esrun(&dir, "#!/bin/sh\necho something else\n");
+        let error = esrun_beside(&esdev).unwrap_err();
+        assert!(
+            error.contains("did not answer `esrun <version>`"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

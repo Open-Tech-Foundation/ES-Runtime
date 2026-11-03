@@ -120,6 +120,10 @@ sha2.workspace = true
 # are already in the tree through the runtime, so no image crate is added.
 flate2 = "1.1"
 crc32fast.workspace = true
+# `esdev upgrade` (DECISIONS D198, D204) reads the binary out of a release's
+# `.tar.gz` or `.zip`. Both already in the tree through `es-runtime`.
+tar.workspace = true
+zip.workspace = true
 
 # Sending a child the signal that starts its graceful drain. The same crate and
 # the same reason `default-providers` uses it for `runtime:system` — a typed

@@ -21,7 +21,7 @@ esdev build server.ts         # one deployable ES module
 esdev build --lib src         # a publishable library, with its .d.ts
 esdev --inspect app.ts        # attach a debugger
 esdev --trace-permissions app.ts   # print the esrun line to deploy with
-esdev upgrade                 # update esdev to the latest release
+esdev upgrade                 # update esdev and esrun to their latest releases
 ```
 
 <Callout type="warning" title="Not a deployment target">
@@ -55,7 +55,7 @@ that grants exactly what a run reached for. See
 
 ## Get it
 
-The [installer](/docs/install) places both binaries, and `esdev` updates itself
+The [installer](/docs/install) places both binaries, and `esdev` updates both
 from there:
 
 ```sh
@@ -63,10 +63,10 @@ curl -fsSL https://esrun.opentechf.org/install.sh | bash
 esdev upgrade                            # ...and later
 ```
 
-`esdev upgrade` replaces the running binary with the newest `esdev` release for
-your platform — the same thing `esrun upgrade` does for the other one, and the
-same outcome as re-running the installer. Each resolves its own release: the
-two are versioned separately and tagged separately.
+`esdev upgrade` replaces `esdev`, and the `esrun` installed beside it, with
+their newest releases for your platform — the same outcome as re-running the
+installer. Each resolves its own release: the two are versioned separately and
+tagged separately.
 
 From source:
 
@@ -160,7 +160,7 @@ a value is never a separate argument — and they come **before** the script.
 | `esdev bench [filter...]` | [Run the benchmark files](/esdev/test/bench) |
 | `esdev typecheck [args...]` | [Typecheck with the project's own `tsc`](/esdev/typescript) |
 | `esdev preview` | [Serve the release build before deploying it](/esdev/start/preview) |
-| `esdev upgrade [--dry-run]` | Replace this binary with the latest `esdev` release, or only say whether there is one |
+| `esdev upgrade [--only=esdev\|esrun] [--dry-run]` | Replace `esdev` and the `esrun` beside it with their latest releases (`--only=` for one), or only say whether there are newer ones |
 
 Each subcommand takes `--help`, and every `--help` is short on purpose: the
 grammar and the flags, then a link to the page that has the rest.

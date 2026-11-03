@@ -14,19 +14,8 @@ es-runtime-providers.workspace = true
 es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
-# `<binary> upgrade` (DECISIONS.md D198): the release listing parsed rather
-# than pattern-matched, the archive checked against `checksums.txt`, and the
-# binary read out of a `.tar.gz` or `.zip`. All already in the tree through
-# `es-runtime`, so naming them here adds no crate.
+# Reading `sources` back out of an inline source map (`sourcemap`).
 serde_json.workspace = true
-sha2.workspace = true
-flate2 = "1.1"
-tar.workspace = true
-zip.workspace = true
-url.workspace = true
-# The archive's body read chunk by chunk, for the progress bar and the stall
-# deadline. Already in the tree through `es-runtime-default-providers`.
-futures-util.workspace = true
 # Reading an inline source map back out of a bundle, to put a stack trace's
 # frames where they were written (`sourcemap`).
 base64.workspace = true

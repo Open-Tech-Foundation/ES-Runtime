@@ -51,8 +51,9 @@ $env:ES_RUNTIME_ONLY = 'esrun'; irm https://esrun.opentechf.org/install.ps1 | ie
 ```
 
 Each binary is released under its own tag — `esrun@…`, `esdev@…` — and
-pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade` and
-`esdev upgrade` each update their own binary in place.
+pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. On a development
+machine, `esdev upgrade` updates both in place; a server re-runs the installer
+with the version it pins.
 
 Or build from source — self-contained binaries, no extra files or asset
 directory:

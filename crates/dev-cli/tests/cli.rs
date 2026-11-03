@@ -577,7 +577,7 @@ fn types_is_refused_and_upgrade_is_a_subcommand() {
         .expect("spawn esdev upgrade");
     assert!(!extra.status.success());
     assert!(
-        stderr(&extra).contains("takes no arguments"),
+        stderr(&extra).contains("does not take 0.4.0"),
         "{}",
         stderr(&extra)
     );
@@ -597,7 +597,51 @@ fn upgrade_answers_help() {
         let text = stdout(&out);
         assert!(text.contains("esdev upgrade"), "{text}");
         assert!(text.contains("--dry-run"), "{text}");
+        assert!(text.contains("--only=esrun"), "{text}");
     }
+}
+
+/// `--only=` takes the names `install.sh`'s does, and nothing else — checked
+/// before anything reaches the network.
+#[test]
+fn upgrade_only_takes_esdev_or_esrun() {
+    for args in [
+        &["upgrade", "--only=both"][..],
+        &["upgrade", "--dry-run", "--only=node"][..],
+    ] {
+        let out = esdev().args(args).output().expect("spawn esdev upgrade");
+        assert!(!out.status.success(), "{args:?} should not succeed");
+        assert!(
+            stderr(&out).contains("expected esrun or esdev"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+/// `--only=esrun` with no esrun beside esdev is refused, naming the directory
+/// it looked in, before anything reaches the network. The build directory may
+/// hold an `esrun` beside the built `esdev`, so the check runs a copy of esdev
+/// from a directory of its own.
+#[cfg(unix)]
+#[test]
+fn upgrade_only_esrun_needs_an_esrun_beside_esdev() {
+    let dir = std::env::temp_dir().join(format!("esdev-upgrade-only-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join("esdev");
+    std::fs::copy(env!("CARGO_BIN_EXE_esdev"), &copy).unwrap();
+    let out = Command::new(&copy)
+        .args(["upgrade", "--dry-run", "--only=esrun"])
+        .output()
+        .expect("spawn the esdev copy");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no esrun is installed beside esdev"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// `--dry-run` is the read half of `upgrade`: it reaches the network, so what
@@ -612,7 +656,7 @@ fn upgrade_dry_run_takes_no_value() {
         .expect("spawn esdev upgrade --dry-run=yes");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("takes no arguments"),
+        stderr(&out).contains("does not take --dry-run=yes"),
         "{}",
         stderr(&out)
     );

@@ -1,10 +1,8 @@
-//! End-to-end tests for `esrun upgrade`'s argument handling.
+//! End-to-end tests for `esrun upgrade`'s removal (DECISIONS D204).
 //!
-//! The upgrade itself reaches the network, so what is pinned here is the
-//! grammar, offline: `--help` prints, `--dry-run` is accepted (the live check
-//! is exercised by hand), and anything else is refused by name. Refusing
-//! matters because the old behavior ran the replacement past a stray argument
-//! — `esrun upgrade --help` used to upgrade the binary.
+//! The command moved to `esdev upgrade`. What is pinned here is that the old
+//! word gets an answer that names where it went, rather than being read as a
+//! script path, and that the help no longer offers it.
 
 use std::process::{Command, Output};
 
@@ -26,36 +24,20 @@ fn stderr(out: &Output) -> String {
 }
 
 #[test]
-fn upgrade_answers_help() {
-    for flag in ["--help", "-h"] {
-        let out = esrun(&["upgrade", flag]);
-        assert!(out.status.success(), "{flag}: {}", stderr(&out));
-        let text = stdout(&out);
-        assert!(text.contains("esrun upgrade"), "{text}");
-        assert!(text.contains("--dry-run"), "{text}");
-    }
-}
-
-#[test]
-fn upgrade_refuses_stray_arguments() {
-    for args in [["upgrade", "0.24.0"], ["upgrade", "--dry-run=yes"]] {
-        let out = esrun(&args);
+fn upgrade_names_where_it_moved() {
+    for args in [&["upgrade"][..], &["upgrade", "--dry-run"][..]] {
+        let out = esrun(args);
         assert!(!out.status.success(), "{args:?} should not succeed");
-        assert!(
-            stderr(&out).contains("takes no arguments"),
-            "{args:?}: {}",
-            stderr(&out)
-        );
+        let text = stderr(&out);
+        assert!(text.contains("esrun no longer upgrades itself"), "{text}");
+        assert!(text.contains("esdev upgrade"), "{text}");
+        assert!(text.contains("ESRUN_VERSION="), "{text}");
     }
 }
 
 #[test]
-fn top_level_help_advertises_dry_run() {
+fn help_no_longer_offers_upgrade() {
     let out = esrun(&["--help"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(
-        stdout(&out).contains("upgrade [--dry-run]"),
-        "{}",
-        stdout(&out)
-    );
+    assert!(!stdout(&out).contains("upgrade"), "{}", stdout(&out));
 }
