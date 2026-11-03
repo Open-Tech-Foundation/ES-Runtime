@@ -14,13 +14,11 @@ ignore = [
     # removes the dependency.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained-only, transitive via the v8 crate, no fix available" },
     # `rsa` — "Marvin Attack" timing sidechannel (RUSTSEC-2023-0071, medium).
-    # Backs `crypto.subtle` RSA (DECISIONS.md D9). No fixed upgrade exists; the
-    # flaw is architectural in RustCrypto's RSA. Accepted (maintainer, 2026-06-12)
-    # as a documented security gap: RSA private-key ops are host-side (no guest
-    # timing oracle), and the alternatives (aws-lc-rs — ambient RNG + C backend;
-    # openssl-rs — system dependency) cost more than they buy. Mirrored in
-    # `.cargo/audit.toml`; revisit per SECURITY.md / D9.
-    { id = "RUSTSEC-2023-0071", reason = "Marvin timing sidechannel; no fix available; host-side RSA keys; documented gap (D9/SECURITY.md)" },
+    # Fixed upstream in 0.10 (constant-time arithmetic, blinding, implicit
+    # rejection); we pin 0.10.0-rc.20 (DECISIONS.md D203). The advisory still
+    # lists every version as affected, so the exception stays until RustSec
+    # records a patched range. Mirrored in `.cargo/audit.toml`.
+    { id = "RUSTSEC-2023-0071", reason = "fixed upstream in rsa 0.10 (pinned rc.20, D203); advisory not yet updated" },
 ]
 
 [licenses]

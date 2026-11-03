@@ -40,7 +40,6 @@ p256.workspace = true
 p384.workspace = true
 p521.workspace = true
 rsa.workspace = true
-sha1_rsa.workspace = true
 # runtime:hashing (DECISIONS.md D57).
 sha3.workspace = true
 md-5.workspace = true

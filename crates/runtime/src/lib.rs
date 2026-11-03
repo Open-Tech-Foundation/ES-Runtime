@@ -6165,6 +6165,63 @@ mod tests {
     }
 
     #[test]
+    fn subtle_rsa_matches_an_independent_implementation() {
+        // Known answers from OpenSSL (testdata/rsa-kat.json): what the runtime
+        // produces and accepts must agree byte for byte with another
+        // implementation, not only with itself (D203). PKCS#1 v1.5 signing is
+        // deterministic, so its signature must be identical; PSS and OAEP are
+        // randomised, so OpenSSL's must verify and decrypt here.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let fixture = include_str!("../testdata/rsa-kat.json");
+        let script = format!(
+            "const fx = {fixture}; \
+             const b = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); \
+             const same = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]); \
+             const subtle = crypto.subtle; \
+             const msg = new TextEncoder().encode('known answer'); \
+             const failed = []; \
+             const check = (name, ok) => {{ if (!ok) failed.push(name); }}; \
+             const rejects = async (name, run) => {{ try {{ await run(); failed.push(name); }} catch {{}} }}; \
+             const pkcs1 = {{ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }}; \
+             const priv = await subtle.importKey('pkcs8', b(fx.pkcs8), pkcs1, true, ['sign']); \
+             const pub = await subtle.importKey('spki', b(fx.spki), pkcs1, true, ['verify']); \
+             check('pkcs1 verifies openssl', await subtle.verify(pkcs1, pub, b(fx.pkcs1), msg)); \
+             const ours = new Uint8Array(await subtle.sign(pkcs1, priv, msg)); \
+             check('pkcs1 signature is openssl\\'s', same(ours, b(fx.pkcs1))); \
+             const tampered = b(fx.pkcs1); tampered[10] ^= 1; \
+             check('pkcs1 rejects a tampered signature', !(await subtle.verify(pkcs1, pub, tampered, msg))); \
+             const pss = {{ name: 'RSA-PSS', hash: 'SHA-256' }}; \
+             const pssPub = await subtle.importKey('spki', b(fx.spki), pss, true, ['verify']); \
+             check('pss verifies openssl', await subtle.verify({{ name: 'RSA-PSS', saltLength: 32 }}, pssPub, b(fx.pss), msg)); \
+             check('pss rejects the wrong salt length', !(await subtle.verify({{ name: 'RSA-PSS', saltLength: 20 }}, pssPub, b(fx.pss), msg))); \
+             const oaep = (hash) => subtle.importKey('pkcs8', b(fx.pkcs8), {{ name: 'RSA-OAEP', hash }}, false, ['decrypt']); \
+             const text = (buf) => new TextDecoder().decode(buf); \
+             const sha256 = await oaep('SHA-256'); \
+             check('oaep decrypts openssl', text(await subtle.decrypt({{ name: 'RSA-OAEP' }}, sha256, b(fx.oaep))) === 'oaep secret'); \
+             const binLabel = new Uint8Array([0xff, 0xfe, 0x00]); \
+             check('oaep takes a non-UTF-8 label', text(await subtle.decrypt({{ name: 'RSA-OAEP', label: binLabel }}, sha256, b(fx.oaepBin))) === 'oaep secret'); \
+             await rejects('oaep refuses the wrong label', () => subtle.decrypt({{ name: 'RSA-OAEP', label: new Uint8Array([1]) }}, sha256, b(fx.oaepBin))); \
+             const sha1 = await oaep('SHA-1'); \
+             check('oaep sha-1 with a label', text(await subtle.decrypt({{ name: 'RSA-OAEP', label: new TextEncoder().encode('ctx') }}, sha1, b(fx.oaepSha1))) === 'oaep secret'); \
+             const corrupt = b(fx.oaep); corrupt[0] ^= 1; \
+             await rejects('oaep refuses a corrupt ciphertext', () => subtle.decrypt({{ name: 'RSA-OAEP' }}, sha256, corrupt)); \
+             const fromJwk = await subtle.importKey('jwk', fx.jwk, pkcs1, true, ['sign']); \
+             check('a jwk-imported key signs as openssl', same(new Uint8Array(await subtle.sign(pkcs1, fromJwk, msg)), b(fx.pkcs1))); \
+             const exported = await subtle.exportKey('jwk', priv); \
+             for (const k of ['n', 'e', 'd', 'p', 'q', 'dp', 'dq', 'qi']) check(`jwk export ${{k}}`, exported[k] === fx.jwk[k]); \
+             const roundTrip = new Uint8Array(await subtle.exportKey('pkcs8', fromJwk)); \
+             check('jwk to pkcs8 signs alike', same(new Uint8Array(await subtle.sign(pkcs1, await subtle.importKey('pkcs8', roundTrip, pkcs1, false, ['sign']), msg)), b(fx.pkcs1))); \
+             check('a 512-bit key still imports, as upstream allows', (await subtle.importKey('pkcs8', b(fx.small), pkcs1, false, ['sign'])).type === 'private'); \
+             await rejects('a 512-bit modulus is not generated', () => subtle.generateKey({{ ...pkcs1, modulusLength: 512, publicExponent: new Uint8Array([1, 0, 1]) }}, true, ['sign'])); \
+             await rejects('a 9000-bit modulus is not generated', () => subtle.generateKey({{ ...pkcs1, modulusLength: 9000, publicExponent: new Uint8Array([1, 0, 1]) }}, true, ['sign'])); \
+             return failed.length === 0 ? 'all-ok' : failed.join('; ');"
+        );
+        let out = eval_async(&mut rt, &script);
+        assert_eq!(out, Value::String("all-ok".into()));
+    }
+
+    #[test]
     fn capability_gate_survives_js_tampering() {
         // The security boundary is in Rust (OpState owns the op table + the
         // capability set), so guest JS cannot tamper its way past a gate

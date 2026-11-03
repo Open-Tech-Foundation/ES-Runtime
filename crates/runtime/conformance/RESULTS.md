@@ -119,8 +119,7 @@ so the `runtime:fs` pipeline in `jsonl_test.js` runs without touching a disk.
 
 Deferred surface (tracked in SPEC §7) is deliberately untested here. The pure-JS
 pending items are: AES-CTR
-counter widths other than 32/64/128 bits (§2.10), and RSA-OAEP non-UTF-8 labels
-(§2.10). Surface that needs host I/O — streaming `fetch` request bodies, the
+counter widths other than 32/64/128 bits (§2.10). Surface that needs host I/O — streaming `fetch` request bodies, the
 WebSocket and `node_modules` edges — is covered (where covered at all) by the
 Rust integration tests; `fetch` itself is exercised there too (it needs a mock
 transport, not available in this pure-JS harness). Adding assertions here as

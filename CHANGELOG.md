@@ -11,6 +11,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to
+  RustCrypto `rsa` 0.10.0-rc.20, which fixes RUSTSEC-2023-0071 ("Marvin"):
+  constant-time private-key arithmetic, blinded signing and decryption, and
+  implicit rejection. All RSA randomness still comes from the injected
+  entropy provider. RSA-OAEP labels may now be any bytes, and `generateKey`
+  refuses a modulus outside 1024–8192 bits. Checked against OpenSSL-generated
+  keys, signatures and ciphertexts in both directions.
+
 ## [0.46.0] - 2026-11-03
 
 ### Security

@@ -321,6 +321,14 @@ revisited rather than forgotten.
 
 ### RSA timing sidechannel — RUSTSEC-2023-0071 ("Marvin Attack")
 
+- **Status (2026-11-03): fixed upstream, adopted (DECISIONS D203).** `rsa`
+  0.10.0-rc.20 does its private-key arithmetic in constant time, blinds
+  signing and decryption, and uses implicit rejection for PKCS#1 v1.5
+  decryption; the runtime pins it and passes the injected `Entropy` provider to
+  every private-key operation. The advisory still lists every version as
+  affected, so `deny.toml` and `.cargo/audit.toml` keep their exception until
+  RustSec records a patched range. The history below is kept for the record.
+
 - **What.** `crypto.subtle` RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP) is backed
   by the RustCrypto `rsa` crate (`docs/DECISIONS.md` D9). That crate carries
   RUSTSEC-2023-0071, a medium-severity (5.9) timing sidechannel in RSA

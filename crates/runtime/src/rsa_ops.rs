@@ -7,17 +7,20 @@
 //! are exchanged via a small length-prefixed framing ([`frame`]) and assembled
 //! into JWK objects by the prelude.
 //!
-//! Randomness — RSA key generation, PSS salts, PKCS#1 v1.5 blinding, and OAEP
-//! padding — is drawn from the injected [`Entropy`] provider (via the shared
-//! [`crate::ec_ops::EntropyRng`] adapter), never ambient `OsRng`. The message
+//! Randomness — RSA key generation, PSS salts, OAEP padding, and the blinding
+//! of every private-key operation (signing and decryption) — is drawn from the
+//! injected [`Entropy`] provider (via the shared [`crate::ec_ops::EntropyRng`]
+//! adapter), never ambient `OsRng`: the crate's `getrandom` feature is off, so
+//! each private-key call here passes the RNG explicitly (D203). The message
 //! prehash honours an arbitrary `algorithm.hash`, computed with our `sha2`
-//! 0.11 ([`crate::ec_ops::prehash`]); the DigestInfo prefix uses the curve
-//! crates' `digest` 0.10 hash types (`rsa::sha2`, plus `sha1_rsa` for SHA-1,
-//! which `rsa` does not re-export).
+//! 0.11 ([`crate::ec_ops::prehash`]), and the DigestInfo prefix uses the same
+//! `sha1`/`sha2` 0.11 types.
 //!
-//! Note: the `rsa` 0.9 OAEP API takes the label as a `&str`, so non-UTF-8
-//! labels are rejected with `NotSupportedError` (SPEC §7); labels are rarely
-//! used and usually empty.
+//! `rsa` 0.10 does its private-key arithmetic in constant time
+//! (crypto-bigint), blinds it, and checks padding without branching on secret
+//! data — the fixes for RUSTSEC-2023-0071. Secret components are therefore
+//! decoded at a fixed width taken from the public modulus, never sized from
+//! their own bytes.
 
 use std::sync::Arc;
 
@@ -26,13 +29,13 @@ use es_runtime_providers::Entropy;
 
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-use rsa::{BigUint, Oaep, Pkcs1v15Sign, Pss, RsaPrivateKey, RsaPublicKey};
+use rsa::{BoxedUint, Oaep, Pkcs1v15Sign, Pss, RsaPrivateKey, RsaPublicKey};
 
 use crate::Result;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 use crate::ec_ops::{EntropyRng, prehash};
 
-/// Binds a hash name to the matching `digest` 0.10 type (with `AssociatedOid`)
+/// Binds a hash name to the matching `digest` 0.11 type (with `AssociatedOid`)
 /// the `rsa` padding schemes need for their DigestInfo prefix, then evaluates
 /// `$body` with that type bound to `$d`. Unknown hashes `return` an error from
 /// the enclosing function.
@@ -40,19 +43,19 @@ macro_rules! with_oid_digest {
     ($hash:expr, $d:ident => $body:expr) => {
         match $hash {
             "SHA-1" => {
-                type $d = sha1_rsa::Sha1;
+                type $d = sha1::Sha1;
                 $body
             }
             "SHA-256" => {
-                type $d = rsa::sha2::Sha256;
+                type $d = sha2::Sha256;
                 $body
             }
             "SHA-384" => {
-                type $d = rsa::sha2::Sha384;
+                type $d = sha2::Sha384;
                 $body
             }
             "SHA-512" => {
-                type $d = rsa::sha2::Sha512;
+                type $d = sha2::Sha512;
                 $body
             }
             other => return Err(not_supported(format!("unsupported RSA hash: {other}"))),
@@ -165,7 +168,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    let oaep_entropy = entropy;
+    let oaep_entropy = entropy.clone();
     engine.register_op(OpDecl::sync("rsa_oaep_encrypt", move |args| {
         let hash = arg_str(&args, 0)?;
         let label = arg_bytes(&args, 1)?;
@@ -180,12 +183,19 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("rsa_oaep_decrypt", |args| {
+    let decrypt_entropy = entropy;
+    engine.register_op(OpDecl::sync("rsa_oaep_decrypt", move |args| {
         let hash = arg_str(&args, 0)?;
         let label = arg_bytes(&args, 1)?;
         let pkcs8 = arg_bytes(&args, 2)?;
         let data = arg_bytes(&args, 3)?;
-        Ok(Value::Bytes(oaep_decrypt(&hash, &label, &pkcs8, &data)?))
+        Ok(Value::Bytes(oaep_decrypt(
+            decrypt_entropy.as_ref(),
+            &hash,
+            &label,
+            &pkcs8,
+            &data,
+        )?))
     }))?;
 
     Ok(())
@@ -196,12 +206,19 @@ fn generate(
     bits: usize,
     exp: &[u8],
 ) -> std::result::Result<Vec<u8>, OpError> {
-    let e = BigUint::from_bytes_be(exp);
+    if !(RsaPublicKey::MIN_SIZE..=RsaPublicKey::MAX_SIZE).contains(&bits) {
+        return Err(operation_error(format!(
+            "RSA modulusLength must be between {} and {} bits",
+            RsaPublicKey::MIN_SIZE,
+            RsaPublicKey::MAX_SIZE
+        )));
+    }
+    let e = BoxedUint::from_be_slice_vartime(exp);
     let mut rng = EntropyRng {
         entropy,
         failed: false,
     };
-    let key = RsaPrivateKey::new_with_exp(&mut rng, bits, &e)
+    let key = RsaPrivateKey::new_with_exp(&mut rng, bits, e)
         .map_err(|_| operation_error("RSA key generation failed"))?;
     if rng.failed {
         return Err(operation_error(
@@ -232,7 +249,14 @@ fn import_spki(der: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
 fn jwk_public_params(spki: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     let key = RsaPublicKey::from_public_key_der(spki)
         .map_err(|_| data_error("invalid RSA public key"))?;
-    Ok(frame(&[&key.n().to_bytes_be(), &key.e().to_bytes_be()]))
+    Ok(frame(&[&trimmed(key.n()), &trimmed(key.e())]))
+}
+
+/// A JWK component: big-endian, without leading zero octets (RFC 7518
+/// §2, `Base64urlUInt`). Variable-time in the value's length — export is the
+/// one place a component's bytes are handed out on purpose.
+fn trimmed(value: &BoxedUint) -> Vec<u8> {
+    value.to_be_bytes_trimmed_vartime().into_vec()
 }
 
 fn jwk_private_params(pkcs8: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
@@ -245,25 +269,18 @@ fn jwk_private_params(pkcs8: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     if primes.len() != 2 {
         return Err(not_supported("multi-prime RSA keys are not supported"));
     }
-    let dp = key
-        .dp()
-        .ok_or_else(|| operation_error("missing RSA dp"))?
-        .to_bytes_be();
-    let dq = key
-        .dq()
-        .ok_or_else(|| operation_error("missing RSA dq"))?
-        .to_bytes_be();
-    let qi = key
-        .qinv()
-        .ok_or_else(|| operation_error("missing RSA qi"))?
-        .to_bytes_be()
-        .1; // magnitude of the (positive) inverse
+    let dp = trimmed(key.dp().ok_or_else(|| operation_error("missing RSA dp"))?);
+    let dq = trimmed(key.dq().ok_or_else(|| operation_error("missing RSA dq"))?);
+    let qi = trimmed(
+        &key.crt_coefficient()
+            .ok_or_else(|| operation_error("missing RSA qi"))?,
+    );
     Ok(frame(&[
-        &key.n().to_bytes_be(),
-        &key.e().to_bytes_be(),
-        &key.d().to_bytes_be(),
-        &primes[0].to_bytes_be(),
-        &primes[1].to_bytes_be(),
+        &trimmed(key.n()),
+        &trimmed(key.e()),
+        &trimmed(key.d()),
+        &trimmed(primes[0].as_ref()),
+        &trimmed(primes[1].as_ref()),
         &dp,
         &dq,
         &qi,
@@ -271,8 +288,11 @@ fn jwk_private_params(pkcs8: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
 }
 
 fn spki_from_jwk(n: &[u8], e: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
-    let key = RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e))
-        .map_err(|_| data_error("invalid RSA public key components"))?;
+    let key = RsaPublicKey::new(
+        BoxedUint::from_be_slice_vartime(n),
+        BoxedUint::from_be_slice_vartime(e),
+    )
+    .map_err(|_| data_error("invalid RSA public key components"))?;
     encode_spki(&key)
 }
 
@@ -283,13 +303,19 @@ fn pkcs8_from_jwk(
     p: &[u8],
     q: &[u8],
 ) -> std::result::Result<Vec<u8>, OpError> {
+    let invalid = || data_error("invalid RSA private key components");
+    // `n` and `e` are public. The secrets are decoded at the modulus's width,
+    // a public quantity, so their own lengths never choose the arithmetic.
+    let n = BoxedUint::from_be_slice_vartime(n);
+    let width = n.bits_precision();
+    let secret = |bytes: &[u8]| BoxedUint::from_be_slice(bytes, width).map_err(|_| invalid());
     let key = RsaPrivateKey::from_components(
-        BigUint::from_bytes_be(n),
-        BigUint::from_bytes_be(e),
-        BigUint::from_bytes_be(d),
-        vec![BigUint::from_bytes_be(p), BigUint::from_bytes_be(q)],
+        n,
+        BoxedUint::from_be_slice_vartime(e),
+        secret(d)?,
+        vec![secret(p)?, secret(q)?],
     )
-    .map_err(|_| data_error("invalid RSA private key components"))?;
+    .map_err(|_| invalid())?;
     encode_pkcs8(&key)
 }
 
@@ -344,7 +370,7 @@ fn pss_sign(
         entropy,
         failed: false,
     };
-    let sig = with_oid_digest!(hash, D => key.sign_with_rng(&mut rng, Pss::new_with_salt::<D>(salt_len), &hashed))
+    let sig = with_oid_digest!(hash, D => key.sign_with_rng(&mut rng, Pss::<D>::new_with_salt(salt_len), &hashed))
         .map_err(|_| operation_error("RSA-PSS signing failed"))?;
     if rng.failed {
         return Err(operation_error("entropy provider failed during signing"));
@@ -363,7 +389,7 @@ fn pss_verify(
         .map_err(|_| data_error("invalid RSA public key"))?;
     let hashed = prehash(hash, data)?;
     Ok(
-        with_oid_digest!(hash, D => key.verify(Pss::new_with_salt::<D>(salt_len), &hashed, signature))
+        with_oid_digest!(hash, D => key.verify(Pss::<D>::new_with_salt(salt_len), &hashed, signature))
             .is_ok(),
     )
 }
@@ -381,7 +407,7 @@ pub(crate) fn oaep_encrypt(
         entropy,
         failed: false,
     };
-    let ct = with_oid_digest!(hash, D => key.encrypt(&mut rng, oaep_padding::<D>(label)?, data))
+    let ct = with_oid_digest!(hash, D => key.encrypt(&mut rng, oaep_padding::<D>(label), data))
         .map_err(|_| operation_error("RSA-OAEP encryption failed"))?;
     if rng.failed {
         return Err(operation_error("entropy provider failed during encryption"));
@@ -390,6 +416,7 @@ pub(crate) fn oaep_encrypt(
 }
 
 fn oaep_decrypt(
+    entropy: &dyn Entropy,
     hash: &str,
     label: &[u8],
     pkcs8: &[u8],
@@ -397,22 +424,31 @@ fn oaep_decrypt(
 ) -> std::result::Result<Vec<u8>, OpError> {
     let key =
         RsaPrivateKey::from_pkcs8_der(pkcs8).map_err(|_| data_error("invalid RSA private key"))?;
-    with_oid_digest!(hash, D => key.decrypt(oaep_padding::<D>(label)?, data))
-        .map_err(|_| operation_error("RSA-OAEP decryption failed"))
+    let mut rng = EntropyRng {
+        entropy,
+        failed: false,
+    };
+    // Blinded explicitly: without the crate's `getrandom` feature, plain
+    // `decrypt` would run the private-key operation unblinded.
+    let pt =
+        with_oid_digest!(hash, D => key.decrypt_blinded(&mut rng, oaep_padding::<D>(label), data))
+            .map_err(|_| operation_error("RSA-OAEP decryption failed"))?;
+    if rng.failed {
+        return Err(operation_error("entropy provider failed during decryption"));
+    }
+    Ok(pt)
 }
 
-/// Builds an OAEP padding, applying the (optional) label. `rsa` 0.9 takes the
-/// label as a `&str`, so non-UTF-8 labels are unsupported.
-fn oaep_padding<D>(label: &[u8]) -> std::result::Result<Oaep, OpError>
+/// An OAEP padding with `label` — any bytes, as WebCrypto allows.
+fn oaep_padding<D>(label: &[u8]) -> Oaep<D>
 where
-    D: 'static + rsa::signature::digest::Digest + rsa::signature::digest::DynDigest + Send + Sync,
+    D: rsa::signature::digest::Digest + rsa::signature::digest::FixedOutputReset,
 {
     if label.is_empty() {
-        return Ok(Oaep::new::<D>());
+        Oaep::<D>::new()
+    } else {
+        Oaep::<D>::new_with_label(label.to_vec())
     }
-    let label = std::str::from_utf8(label)
-        .map_err(|_| not_supported("RSA-OAEP label must be valid UTF-8"))?;
-    Ok(Oaep::new_with_label::<D, &str>(label))
 }
 
 fn encode_pkcs8(key: &RsaPrivateKey) -> std::result::Result<Vec<u8>, OpError> {
