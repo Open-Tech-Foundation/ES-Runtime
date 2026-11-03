@@ -219,7 +219,8 @@ await fetch(url, { signal: AbortSignal.timeout(5000) }); // TimeoutError
 ## Certificates
 
 `fetch` verifies HTTPS servers against the process trust store: the bundled
-Mozilla roots, or what [`--tls-ca`](/api/cli#tls-trust) lists.
+Mozilla roots, or what [`--tls-ca`](/api/cli#tls-trust) lists. It goes through
+a proxy only when [`--proxy`](/api/cli#outbound-proxy) names one.
 
 A request can bring its own TLS material with `tls` (Bun's name):
 

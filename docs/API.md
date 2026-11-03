@@ -150,7 +150,8 @@ await fetch(url, { signal: AbortSignal.timeout(5000) });
 `fetch` verifies HTTPS servers against the process trust store shared by every
 TLS client: the bundled Mozilla roots, or exactly what `--tls-ca` lists
 (DECISIONS D197), checked against `--tls-crl`. The operating system's store is
-not consulted.
+not consulted. It goes through an outbound proxy only when `--proxy` names one
+(D205; esdev also reads `HTTP(S)_PROXY`).
 
 A request can bring its own TLS material with the non-standard `tls` member of
 its init — Bun's name (D201):
@@ -5702,6 +5703,7 @@ try {
 | `ERR_UNREACHABLE` | The host or network is unreachable. |
 | `ERR_DNS` | Name resolution failed. |
 | `ERR_TLS` | TLS handshake or certificate verification failed. |
+| `ERR_PROXY_TUNNEL` | The outbound proxy (`--proxy`) refused to open a tunnel; its status is in the message. |
 | `ERR_TOO_MANY_REDIRECTS` | A redirect chain exceeded the Fetch specification's cap of 20. |
 | `ERR_CANCELLED` | The operation was cancelled. |
 | `ERR_IMAGE_DECODE_FAILED` | `runtime:images`: the bytes are not a valid image of their format. |

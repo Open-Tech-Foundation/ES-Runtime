@@ -79,6 +79,12 @@ OPTIONS:
                                 (repeatable; `bundled` is the public roots).
                                 Default: the bundled Mozilla roots
     --tls-crl=<file>            Check servers against these CRLs (repeatable)
+    --proxy=<url>               Send fetch, WebSocket and --otel through this
+                                http:// or https:// proxy (user:pass@ for
+                                credentials). No environment variable is read
+    --no-proxy=<list>           Targets that go direct: domains, IPs, CIDR
+                                blocks, host:port (repeatable). Loopback
+                                always does
 
 Nothing is granted by default: a run reaches what the command line that started
 it named, and nothing else. Widen it in one of two directions, never both, so

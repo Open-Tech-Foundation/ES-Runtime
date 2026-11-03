@@ -69,6 +69,15 @@ pub struct RunOptions {
     /// PEM CRL files every TLS client checks servers against, via
     /// `--tls-crl=<file>` (repeatable, DECISIONS D202).
     pub tls_crl: Vec<std::path::PathBuf>,
+    /// The outbound proxy's URL, via `--proxy=<url>` (DECISIONS D205).
+    pub proxy: Option<String>,
+    /// Targets that go direct, via `--no-proxy=<list>` (repeatable). `None`
+    /// when the flag was not given, so esdev can tell "not given" (use
+    /// `NO_PROXY`) from "given empty".
+    pub no_proxy: Option<Vec<String>>,
+    /// Read `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` when the flags do not say
+    /// (D205). Set by esdev; never by esrun.
+    pub proxy_from_env: bool,
 }
 
 impl Default for RunOptions {
@@ -87,6 +96,9 @@ impl Default for RunOptions {
             otel_sample: None,
             tls_ca: Vec::new(),
             tls_crl: Vec::new(),
+            proxy: None,
+            no_proxy: None,
+            proxy_from_env: false,
         }
     }
 }
@@ -148,6 +160,14 @@ impl RunOptions {
             "--tls-crl" => {
                 self.tls_crl.push(require_value(flag, value)?.into());
             }
+            "--proxy" => {
+                self.proxy = Some(require_value(flag, value)?.to_string());
+            }
+            "--no-proxy" => {
+                self.no_proxy
+                    .get_or_insert_with(Vec::new)
+                    .push(require_value(flag, value)?.to_string());
+            }
             "--env-override" => {
                 reject_value(flag, value)?;
                 self.env_override = true;
@@ -187,6 +207,8 @@ impl RunOptions {
                 | "--shutdown-grace"
                 | "--tls-ca"
                 | "--tls-crl"
+                | "--proxy"
+                | "--no-proxy"
         )
     }
 }

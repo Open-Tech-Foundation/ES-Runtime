@@ -38,6 +38,8 @@ esrun --tls-ca=<file|bundled>
                             Trust exactly these CAs for every TLS client;
                             repeatable (default: the bundled Mozilla roots)
 esrun --tls-crl=<file>      Check servers against these CRLs; repeatable
+esrun --proxy=<url>         Send fetch, WebSocket and --otel through a proxy
+esrun --no-proxy=<list>     Targets that go direct; repeatable
 esrun -h, --help            Show this help
 esrun -v, --version         Show the version
 ```
@@ -79,6 +81,8 @@ script that genuinely wants a flag esrun also knows.
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
 | `--tls-ca=<file\|bundled>` | The certificate authorities every TLS client trusts; repeatable. Default: the bundled Mozilla roots. See [TLS trust](#tls-trust). |
 | `--tls-crl=<file>` | CRLs every TLS client checks servers against; repeatable. See [TLS trust](#tls-trust). |
+| `--proxy=<url>` | The outbound proxy for `fetch`, `WebSocket` and `--otel`. See [Outbound proxy](#outbound-proxy). |
+| `--no-proxy=<list>` | Targets that go direct; requires `--proxy`; repeatable. See [Outbound proxy](#outbound-proxy). |
 | `--otel[=<url>]` | Export OpenTelemetry traces to a collector. Bare, it uses `http://localhost:4318`. The **runtime** exports — your program needs no capability and no code. See [Telemetry](#telemetry). |
 | `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
 | `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |
@@ -328,6 +332,54 @@ Nothing else changes trust: no environment variable (`SSL_CERT_FILE`,
 when one of the JavaScript runtimes' is set), no operating-system store, and no
 option to skip verification. A per-connection `ca` adds to the store for that
 connection. See [TLS trust internals](/docs/internals/tls).
+
+## Outbound proxy
+
+`--proxy=<url>` sends `fetch`, the `WebSocket` client and the `--otel` exporter
+through a forward proxy. Without it nothing is proxied, and no environment
+variable is read: `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` are ignored, and
+esrun warns when one is set.
+
+```sh
+esrun --allow-net --proxy=http://proxy.corp:3128 server.js
+esrun --allow-net --proxy=https://user:pass@proxy.corp:443 \
+      --no-proxy=.internal,10.0.0.0/8 server.js
+```
+
+| `--proxy` | |
+| --- | --- |
+| `http://host[:port]` | Spoken to in plain HTTP. Default port 80 |
+| `https://host[:port]` | Spoken to over TLS, verified against [the trust store](#tls-trust). Default port 443 |
+| `user:pass@` | Sent as `Proxy-Authorization: Basic`, percent-decoded. Never printed |
+
+Any other scheme, such as `socks5://`, stops the run at startup.
+
+| Target | Through the proxy |
+| --- | --- |
+| `http:` | Forwarded: the request goes to the proxy with its full URL |
+| `https:`, `ws:`, `wss:` | Tunnelled with `CONNECT`; the target's TLS runs inside the tunnel |
+
+`--no-proxy=<list>` names targets that go direct, comma-separated, and is
+repeatable:
+
+| Entry | Matches |
+| --- | --- |
+| `*` | Every target |
+| `example.com`, `.example.com`, `*.example.com` | `example.com` and its subdomains |
+| `10.1.2.3`, `[fd00::1]` | That address |
+| `10.0.0.0/8`, `fd00::/8` | Every address in the block |
+| any of the above with `:port` | That host on that port only (not blocks) |
+
+`localhost`, `*.localhost`, `127.0.0.0/8` and `::1` always go direct.
+
+`--allow-net` still decides which targets a program may reach, on every
+redirect, exactly as without a proxy; the proxy's own address needs no grant.
+A proxy that refuses a tunnel rejects the request with code `ERR_PROXY_TUNNEL`
+and its status in the message (`407` when it wants credentials). A proxy that
+cannot be reached is the usual connect error, naming the proxy.
+
+`runtime:net`, the database drivers and servers are never proxied. See
+[D205](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
 
 ## Memory
 

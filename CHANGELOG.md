@@ -16,6 +16,19 @@ namespace) is unstable and may change between minor releases until the API freez
 - `runtime:websocket`'s `serve()` serves `wss:` with `secureTransport: "on"`,
   `cert` and `key`, like `runtime:http`'s `serve`.
 
+- **`--proxy=<url>` and `--no-proxy=<list>`** (DECISIONS D205): `fetch`, the
+  `WebSocket` client and the `--otel` exporter go through an `http://` or
+  `https://` forward proxy — `http:` targets forwarded, `https:`/`ws:`/`wss:`
+  tunnelled with `CONNECT`, credentials from the URL sent as
+  `Proxy-Authorization` and never printed. `--allow-net` still judges the
+  target. Exceptions take domains, IPs, CIDR blocks and `host:port`;
+  loopback always goes direct. No environment variable is read: esrun warns
+  when `HTTP(S)_PROXY` is set. A refused tunnel is the new code
+  `ERR_PROXY_TUNNEL`.
+- The `WebSocket` client has the 30s connect deadline `fetch` has, and its
+  connect errors carry codes (`ERR_DNS`, `ERR_CONNECTION_REFUSED`, `ERR_TLS`,
+  `ERR_TIMED_OUT`).
+
 ### Removed
 
 - **`esrun upgrade`** (DECISIONS D204). A deployment pins its esrun in its

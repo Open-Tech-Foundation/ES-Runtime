@@ -39,6 +39,8 @@ pub struct HttpTransport {
     allow: Option<Arc<HostAllowlist>>,
     /// The process trust store (D197).
     trust: crate::TrustStore,
+    /// The outbound proxy (`--proxy`, D205). `None` ⇒ direct.
+    proxies: Option<Arc<crate::Proxies>>,
 }
 
 impl HttpTransport {
@@ -49,6 +51,7 @@ impl HttpTransport {
             client: OnceLock::new(),
             tls_clients: Mutex::default(),
             allow: None,
+            proxies: None,
             trust: crate::TrustStore::bundled(),
         })
     }
@@ -67,6 +70,14 @@ impl HttpTransport {
         self
     }
 
+    /// Sends through `proxies` (D205): a `http:` URL is forwarded to the
+    /// proxy, an `https:` one tunnelled. `--allow-net` still judges the URL.
+    #[must_use]
+    pub fn with_proxy(mut self, proxies: Option<Arc<crate::Proxies>>) -> Self {
+        self.proxies = proxies;
+        self
+    }
+
     /// Verifies HTTPS servers against `trust` — the process store `--tls-ca`
     /// describes (D197) — instead of the bundled Mozilla roots.
     #[must_use]
@@ -79,7 +90,7 @@ impl HttpTransport {
         if tls.is_empty() {
             return Ok(self
                 .client
-                .get_or_init(|| HttpClient::new(&self.trust))
+                .get_or_init(|| HttpClient::new(&self.trust).with_proxy(self.proxies.clone()))
                 .clone());
         }
         use sha2::Digest;
@@ -93,7 +104,8 @@ impl HttpTransport {
         if let Some(client) = clients.get(&key) {
             return Ok(client.clone());
         }
-        let client = HttpClient::with_tls(&self.trust, &tls.ca, &tls.identity)?;
+        let client = HttpClient::with_tls(&self.trust, &tls.ca, &tls.identity)?
+            .with_proxy(self.proxies.clone());
         // Bounded: a program that mints material per request would otherwise
         // grow this without end. Dropping a client drops its idle connections.
         if clients.len() >= MAX_TLS_CLIENTS {

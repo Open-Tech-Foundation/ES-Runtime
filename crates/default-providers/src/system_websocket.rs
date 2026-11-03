@@ -41,6 +41,8 @@ use tracing::Instrument;
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 use crate::peer_limit::{PeerLimit, PeerSlot};
+use crate::proxy::BoxWire;
+use es_runtime_common::ErrorCode;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 /// RFC 6455 §7.4.2's "Try Again Later" — the honest answer to a peer whose
@@ -173,6 +175,9 @@ pub struct SystemWebSocket {
     trust: crate::TrustStore,
     /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
     allow: Option<Arc<crate::HostAllowlist>>,
+    /// The outbound proxy (`--proxy`, D205) a client `connect` tunnels
+    /// through. `None` ⇒ direct.
+    proxies: Option<Arc<crate::Proxies>>,
 }
 
 impl SystemWebSocket {
@@ -188,6 +193,15 @@ impl SystemWebSocket {
     #[must_use]
     pub fn with_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
         self.allow = Some(Arc::new(allow));
+        self
+    }
+
+    /// Tunnels client connections through `proxies` (D205) — `ws:` and `wss:`
+    /// alike, with `CONNECT`, since an upgrade through a forwarding proxy is
+    /// not reliable.
+    #[must_use]
+    pub fn with_proxy(mut self, proxies: Option<Arc<crate::Proxies>>) -> Self {
+        self.proxies = proxies;
         self
     }
 
@@ -353,6 +367,10 @@ fn err(e: impl ToString) -> ProviderError {
     ProviderError::Other(e.to_string())
 }
 
+fn coded(code: ErrorCode, message: String) -> ProviderError {
+    ProviderError::Coded { code, message }
+}
+
 /// A tungstenite frame for one outbound message (text ⇒ Text, bytes ⇒ Binary).
 fn into_message(message: WsMessage) -> Message {
     match message {
@@ -406,32 +424,60 @@ impl WebSocketProvider for SystemWebSocket {
                 request.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, value);
             }
 
-            let tcp = TcpStream::connect((host.as_str(), port))
-                .await
-                .map_err(err)?;
-            let _ = tcp.set_nodelay(true);
-
-            let id = this.id();
-            let (info, slot) = if secure {
-                let server_name = ServerName::try_from(host.clone())
-                    .map_err(|_| err("invalid TLS server name"))?;
+            // Reaching the server — directly or through the proxy — and its
+            // TLS, within the same deadline `fetch` has (D198).
+            let target = host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string();
+            let dial = async {
+                let proxy = this
+                    .proxies
+                    .as_ref()
+                    .and_then(|p| p.for_target(parsed.scheme(), &target, port));
+                let wire: BoxWire = match proxy {
+                    Some(server) => server
+                        .tunnel(&this.tls_connector(), &target, port)
+                        .await
+                        .map_err(|e| coded(e.code, e.message))?,
+                    None => {
+                        let tcp = TcpStream::connect((target.as_str(), port))
+                            .await
+                            .map_err(|e| coded(ErrorCode::from_io_kind(e.kind()), e.to_string()))?;
+                        let _ = tcp.set_nodelay(true);
+                        Box::new(tcp)
+                    }
+                };
+                if !secure {
+                    return Ok::<BoxWire, ProviderError>(wire);
+                }
+                let server_name = ServerName::try_from(target.clone())
+                    .map_err(|_| coded(ErrorCode::Tls, "invalid TLS server name".to_string()))?;
                 let tls = this
                     .tls_connector()
-                    .connect(server_name, tcp)
+                    .connect(server_name, wire)
                     .await
-                    .map_err(err)?;
-                let (stream, response) = client_async(request, tls).await.map_err(err)?;
-                (
-                    info_of(&response),
-                    SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
-                )
-            } else {
-                let (stream, response) = client_async(request, tcp).await.map_err(err)?;
-                (
-                    info_of(&response),
-                    SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
-                )
+                    .map_err(|e| coded(ErrorCode::Tls, format!("TLS: {e}")))?;
+                Ok(Box::new(tls))
             };
+            let wire = tokio::time::timeout(crate::http_client::CONNECT_TIMEOUT, dial)
+                .await
+                .map_err(|_| {
+                    coded(
+                        ErrorCode::TimedOut,
+                        format!(
+                            "no connection within {}s",
+                            crate::http_client::CONNECT_TIMEOUT.as_secs()
+                        ),
+                    )
+                })??;
+
+            let id = this.id();
+            let (stream, response) = client_async(request, wire).await.map_err(err)?;
+            let (info, slot) = (
+                info_of(&response),
+                SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
+            );
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
         })
@@ -1233,6 +1279,133 @@ mod tests {
             .unwrap();
         server.await.unwrap();
         assert!(client.recv(id).await.unwrap().is_none());
+    }
+
+    // --- The outbound proxy (D205) ------------------------------------------
+
+    /// A one-connection WebSocket echo server on loopback, plain or TLS.
+    async fn echo_once(leaf: Option<crate::trust::test_pki::Leaf>) -> u16 {
+        use tokio_rustls::rustls::ServerConfig;
+        use tokio_rustls::rustls::crypto::aws_lc_rs;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            async fn echo<S>(stream: S)
+            where
+                S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+            {
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                if let Some(Ok(message)) = ws.next().await {
+                    let _ = ws.send(message).await;
+                }
+            }
+            match leaf {
+                None => echo(tcp).await,
+                Some(leaf) => {
+                    let config = ServerConfig::builder_with_provider(Arc::new(
+                        aws_lc_rs::default_provider(),
+                    ))
+                    .with_safe_default_protocol_versions()
+                    .unwrap()
+                    .with_no_client_auth()
+                    .with_single_cert(leaf.chain, leaf.key)
+                    .unwrap();
+                    let tls = tokio_rustls::TlsAcceptor::from(Arc::new(config))
+                        .accept(tcp)
+                        .await
+                        .unwrap();
+                    echo(tls).await;
+                }
+            }
+        });
+        port
+    }
+
+    fn proxied(proxy_port: u16, no_proxy: &[&str]) -> Option<Arc<crate::Proxies>> {
+        let list: Vec<String> = no_proxy.iter().map(|s| s.to_string()).collect();
+        Some(
+            crate::Proxies::from_flags(&format!("http://u:p@127.0.0.1:{proxy_port}"), &list)
+                .unwrap()
+                .shared(),
+        )
+    }
+
+    async fn round_trip(client: &SystemWebSocket, url: String) {
+        let (id, _) = client.connect(url, vec![]).await.unwrap();
+        client
+            .send(id, WsMessage::Text("through".to_string()))
+            .await
+            .unwrap();
+        match client.recv(id).await.unwrap() {
+            Some(WsIncoming::Text(t)) => assert_eq!(t, "through"),
+            _ => panic!("expected the echo"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ws_client_tunnels_through_the_proxy_with_credentials() {
+        use crate::proxy::test_proxy::{self, Mode};
+        let port = echo_once(None).await;
+        let proxy = test_proxy::start(Mode::Auth("Basic dTpw")).await;
+        let client = SystemWebSocket::new().with_proxy(proxied(proxy.port, &[]));
+        round_trip(&client, format!("ws://chat.test:{port}/room")).await;
+        let heads = proxy.heads();
+        assert!(
+            heads[0].starts_with(&format!("CONNECT chat.test:{port} HTTP/1.1\r\n")),
+            "{heads:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wss_client_verifies_the_server_inside_the_tunnel() {
+        use crate::proxy::test_proxy::{self, Mode};
+        use crate::trust::test_pki::Ca;
+        let ca = Ca::new("WS Proxy CA");
+        let port = echo_once(Some(ca.leaf(&["chat.test"]))).await;
+        let proxy = test_proxy::start(Mode::Auth("Basic dTpw")).await;
+        let client = SystemWebSocket::new()
+            .with_trust(ca.trust())
+            .with_proxy(proxied(proxy.port, &[]));
+        round_trip(&client, format!("wss://chat.test:{port}/")).await;
+        assert_eq!(proxy.heads().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_ws_exception_goes_direct() {
+        use crate::proxy::test_proxy::{self, Mode};
+        let proxy = test_proxy::start(Mode::Open).await;
+        let client = SystemWebSocket::new().with_proxy(proxied(proxy.port, &["chat.test"]));
+        // Direct, `chat.test` does not resolve: proof it did not go through.
+        let Err(error) = client
+            .connect("ws://chat.test:9/".to_string(), vec![])
+            .await
+        else {
+            panic!("an exception was proxied");
+        };
+        assert!(error.code().is_some(), "an uncoded connect error: {error}");
+        assert!(proxy.heads().is_empty());
+        // Loopback always goes direct, whatever the list says.
+        let port = echo_once(None).await;
+        let client = SystemWebSocket::new().with_proxy(proxied(proxy.port, &[]));
+        round_trip(&client, format!("ws://127.0.0.1:{port}/")).await;
+        assert!(proxy.heads().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refused_ws_tunnel_is_err_proxy_tunnel() {
+        use crate::proxy::test_proxy::{self, Mode};
+        let proxy = test_proxy::start(Mode::Refuse).await;
+        let client = SystemWebSocket::new().with_proxy(proxied(proxy.port, &[]));
+        let Err(error) = client.connect("wss://chat.test/".to_string(), vec![]).await else {
+            panic!("a refused tunnel connected");
+        };
+        assert_eq!(
+            error.code(),
+            Some(es_runtime_common::ErrorCode::ProxyTunnel),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("u:p"), "{error}");
     }
 
     #[tokio::test]

@@ -134,6 +134,9 @@ pub enum ErrorCode {
     Tls,
     /// A redirect chain exceeded the Fetch specification's cap of 20.
     TooManyRedirects,
+    /// An outbound proxy refused to open a tunnel (`--proxy`, D205): its
+    /// answer to `CONNECT` was not a 2xx.
+    ProxyTunnel,
     /// Archive bytes are not a well-formed archive of the detected format.
     ArchiveDecodeFailed,
     /// The archive uses a format or a compression method this runtime does not
@@ -176,6 +179,7 @@ impl ErrorCode {
             ErrorCode::Dns => "ERR_DNS",
             ErrorCode::Tls => "ERR_TLS",
             ErrorCode::TooManyRedirects => "ERR_TOO_MANY_REDIRECTS",
+            ErrorCode::ProxyTunnel => "ERR_PROXY_TUNNEL",
             ErrorCode::ArchiveDecodeFailed => "ERR_ARCHIVE_DECODE_FAILED",
             ErrorCode::ArchiveFormatUnsupported => "ERR_ARCHIVE_FORMAT_UNSUPPORTED",
             ErrorCode::ArchiveEncrypted => "ERR_ARCHIVE_ENCRYPTED",

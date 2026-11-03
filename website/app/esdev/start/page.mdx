@@ -129,6 +129,8 @@ pin the endpoint.
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 | `--tls-ca=<file\|bundled>` | The CAs the server and an `https` [proxy](#forward-api-requests) target are verified against, as [esrun's](/api/cli#tls-trust); repeatable |
 | `--tls-crl=<file>` | CRLs they are checked against, as [esrun's](/api/cli#tls-trust); repeatable |
+| `--proxy=<url>` | The server's outbound proxy, as [esrun's](/api/cli#outbound-proxy). Default: `HTTPS_PROXY`/`HTTP_PROXY` |
+| `--no-proxy=<list>` | Targets it reaches directly, as [esrun's](/api/cli#outbound-proxy). Default: `NO_PROXY` |
 
 ```json
 "dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 8080 }, "outDir": ".dev" }

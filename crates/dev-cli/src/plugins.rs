@@ -291,7 +291,11 @@ pub(crate) async fn launch(
                 scopes: std::collections::HashMap::new(),
                 // Granted everything above, so every socket path too (D140).
                 permissive: true,
-                options: es_runtime_cli_common::args::RunOptions::default(),
+                // D205: esdev's programs follow the developer's proxy.
+                options: es_runtime_cli_common::args::RunOptions {
+                    proxy_from_env: true,
+                    ..es_runtime_cli_common::args::RunOptions::default()
+                },
                 transform: Some(Arc::new(Recording {
                     inner: crate::transform::TypeStripper::new(),
                     files: Arc::clone(&recorded),

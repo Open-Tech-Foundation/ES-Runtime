@@ -682,6 +682,64 @@ const IGNORED_CA_VARIABLES: [&str; 4] = [
     "DENO_TLS_CA_STORE",
 ];
 
+/// The outbound proxy the command line (and, for esdev, the environment)
+/// names (D205). Parsed before anything runs, so a malformed URL stops the
+/// process rather than its first request.
+pub fn resolve_proxies(
+    options: &RunOptions,
+) -> Result<Option<Arc<es_runtime_default_providers::Proxies>>, String> {
+    use es_runtime_default_providers::Proxies;
+    if options.proxy_from_env {
+        return Ok(Proxies::from_flags_or_env(
+            options.proxy.as_deref(),
+            options.no_proxy.as_deref(),
+            |name| std::env::var(name).ok(),
+        )?
+        .map(Proxies::shared));
+    }
+    match (&options.proxy, &options.no_proxy) {
+        (Some(url), no_proxy) => Ok(Some(
+            Proxies::from_flags(url, no_proxy.as_deref().unwrap_or_default())?.shared(),
+        )),
+        (None, Some(_)) => Err(
+            "--no-proxy needs --proxy=<url>: there is no proxy to except \
+                                anything from"
+                .to_string(),
+        ),
+        (None, None) => Ok(None),
+    }
+}
+
+/// The proxy variables esrun does not read (D205).
+const IGNORED_PROXY_VARIABLES: [&str; 6] = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+/// Says once that a proxy variable is set and not used — the same courtesy
+/// as [`warn_ignored_ca_variables`]: someone who exported `HTTPS_PROXY` is
+/// owed an answer before their first request fails to connect.
+fn warn_ignored_proxy_variables(bin: &str, options: &RunOptions) {
+    if options.proxy_from_env || options.proxy.is_some() {
+        return;
+    }
+    let set: Vec<&str> = IGNORED_PROXY_VARIABLES
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
+        .collect();
+    if !set.is_empty() {
+        eprintln!(
+            "{bin}: warning: {} is ignored; {bin} reads no proxy from the environment. \
+             Name it with --proxy=<url>.",
+            set.join(", ")
+        );
+    }
+}
+
 fn warn_ignored_ca_variables(bin: &str) {
     let set: Vec<&str> = IGNORED_CA_VARIABLES
         .into_iter()
@@ -814,9 +872,14 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // rather than a handshake in production.
     let trust = TrustStore::load(&options.tls_ca)?.with_crl_files(&options.tls_crl)?;
     warn_ignored_ca_variables(bin);
+    // Where outbound HTTP goes (D205): `fetch`, the WebSocket client and the
+    // exporter, one setting.
+    let proxies = resolve_proxies(&options)?;
+    warn_ignored_proxy_variables(bin, &options);
     let transport = HttpTransport::new()
         .map_err(|e| format!("http transport: {e}"))?
-        .with_trust(trust.clone());
+        .with_trust(trust.clone())
+        .with_proxy(proxies.clone());
     let net = Arc::new(match allow_net.clone() {
         Some(allow) => transport.with_allowlist(allow),
         None => transport,
@@ -924,7 +987,8 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Some(allow) => SystemWebSocket::new().with_allowlist(allow),
         None => SystemWebSocket::new(),
     }
-    .with_trust(trust.clone());
+    .with_trust(trust.clone())
+    .with_proxy(proxies.clone());
     let commands = match config.scopes.get(&Capability::Run) {
         Some(programs) => SystemCommands::new().with_allowlist(programs.clone()),
         None => SystemCommands::new(),
@@ -974,7 +1038,11 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             ..es_runtime::diagnostics::Filter::default()
         };
         providers = providers.with_telemetry(
-            Arc::new(OtlpHttpSink::new(endpoint.clone()).with_trust(&trust)),
+            Arc::new(
+                OtlpHttpSink::new(endpoint.clone())
+                    .with_proxy(proxies.clone())
+                    .with_trust(&trust),
+            ),
             es_runtime::TelemetryConfig {
                 sink: None,
                 // The entry's file name is a better default than a constant:

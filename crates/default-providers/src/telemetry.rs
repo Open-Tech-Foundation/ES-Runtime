@@ -27,6 +27,8 @@ const EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Posts OTLP/JSON to an `OTEL_EXPORTER_OTLP_ENDPOINT`-style base URL.
 pub struct OtlpHttpSink {
     client: HttpClient,
+    /// The outbound proxy (`--proxy`, D205), kept so `with_trust` keeps it.
+    proxies: Option<Arc<crate::Proxies>>,
     endpoint: String,
     /// Latches the first delivery failure so a collector that is down produces
     /// one line in the log rather than one per turn.
@@ -49,6 +51,7 @@ impl OtlpHttpSink {
         let endpoint = endpoint.into();
         OtlpHttpSink {
             client: HttpClient::new(&crate::TrustStore::bundled()),
+            proxies: None,
             endpoint: endpoint.trim_end_matches('/').to_string(),
             warned: Arc::new(AtomicBool::new(false)),
             in_flight: Arc::new(AtomicUsize::new(0)),
@@ -62,7 +65,15 @@ impl OtlpHttpSink {
     /// `--tls-ca` describes (D197).
     #[must_use]
     pub fn with_trust(mut self, trust: &crate::TrustStore) -> Self {
-        self.client = HttpClient::new(trust);
+        self.client = HttpClient::new(trust).with_proxy(self.proxies.clone());
+        self
+    }
+
+    /// Exports through `proxies` (D205), as `fetch` does.
+    #[must_use]
+    pub fn with_proxy(mut self, proxies: Option<Arc<crate::Proxies>>) -> Self {
+        self.proxies = proxies.clone();
+        self.client = self.client.with_proxy(proxies);
         self
     }
 }

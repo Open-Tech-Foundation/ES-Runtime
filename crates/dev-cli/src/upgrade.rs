@@ -726,6 +726,9 @@ struct Installed {
     exe: PathBuf,
 }
 
+/// The outbound proxy the upgrade goes through (D205).
+pub type Proxy = Option<std::sync::Arc<es_runtime_default_providers::Proxies>>;
+
 /// Which binaries `esdev upgrade` replaces — `install.sh`'s `--only=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Only {
@@ -918,6 +921,10 @@ fn client() -> HttpClient {
     HttpClient::new(&TrustStore::bundled())
 }
 
+fn client_via(proxies: Proxy) -> HttpClient {
+    client().with_proxy(proxies)
+}
+
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -928,14 +935,15 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> Result<T, String
 
 /// Asks whether each binary `only` names has a newer release, changing
 /// nothing. Returns the lines to print.
-fn check(only: Only) -> Result<Vec<String>, String> {
+fn check(only: Only, proxies: Proxy) -> Result<Vec<String>, String> {
     let (targets, notes) = targets(only)?;
     for note in notes {
         eprintln!("{note}");
     }
     let mut lines = Vec::new();
-    let listing =
-        block_on(async { download(&client(), &releases_url(), LISTING_LIMIT, false).await })??;
+    let listing = block_on(async {
+        download(&client_via(proxies), &releases_url(), LISTING_LIMIT, false).await
+    })??;
     for target in &targets {
         let releases = parse_releases(target.binary, &listing)?;
         let latest = releases.first().map(|release| {
@@ -952,14 +960,14 @@ fn check(only: Only) -> Result<Vec<String>, String> {
 /// Upgrades each binary `only` names to its newest release, in place,
 /// printing each outcome as it happens. Returns whether every binary
 /// succeeded.
-fn run(only: Only) -> Result<bool, String> {
+fn run(only: Only, proxies: Proxy) -> Result<bool, String> {
     let (targets, notes) = targets(only)?;
     for note in notes {
         eprintln!("{note}");
     }
     let outcomes = block_on(async {
         upgrade(
-            &client(),
+            &client_via(proxies),
             &releases_url(),
             &targets,
             |binary, outcome| match outcome {
@@ -979,8 +987,8 @@ fn run(only: Only) -> Result<bool, String> {
 /// `esdev` dispatches `upgrade` from inside `#[tokio::main]`, where a second
 /// runtime cannot be started on the same thread, so the thread hop lives here
 /// with the reason it exists.
-pub fn run_and_exit(only: Only) -> ! {
-    let result = std::thread::spawn(move || run(only))
+pub fn run_and_exit(only: Only, proxies: Proxy) -> ! {
+    let result = std::thread::spawn(move || run(only, proxies))
         .join()
         .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
     match result {
@@ -994,8 +1002,8 @@ pub fn run_and_exit(only: Only) -> ! {
 
 /// Runs [`check`] on a thread of its own and prints the outcome, exiting the
 /// process either way. The same thread hop as [`run_and_exit`].
-pub fn check_and_exit(only: Only) -> ! {
-    let result = std::thread::spawn(move || check(only))
+pub fn check_and_exit(only: Only, proxies: Proxy) -> ! {
+    let result = std::thread::spawn(move || check(only, proxies))
         .join()
         .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
     match result {

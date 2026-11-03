@@ -39,7 +39,7 @@ costs time a script that never fetches should not pay.
 | Connect timeout | 30s, DNS, TCP and TLS together |
 | TCP keepalive | 60s on pooled connections |
 | `TCP_NODELAY` | On |
-| Proxy | None. `HTTP_PROXY` and the like are not read |
+| Proxy | Only with [`--proxy`](/api/cli#outbound-proxy): `http:` forwarded, `https:` tunnelled with `CONNECT`. esrun reads no variable; esdev reads `HTTP(S)_PROXY` |
 
 `Accept-Encoding` is left out of a request that has a `Range`, since a range of
 a compressed representation is not a range of the resource. `TCP_NODELAY` is

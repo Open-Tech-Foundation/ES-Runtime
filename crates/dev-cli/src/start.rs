@@ -252,6 +252,12 @@ pub struct StartConfig {
     pub tls_ca: Vec<TrustSource>,
     /// `--tls-crl`: the CRLs they check servers against (D202).
     pub tls_crl: Vec<PathBuf>,
+    /// `--proxy`/`--no-proxy` (D205), passed to the server child as given.
+    /// Without them the child reads `HTTP(S)_PROXY` itself, as every program
+    /// esdev runs does.
+    pub proxy: Option<String>,
+    /// `--no-proxy`, likewise.
+    pub no_proxy: Option<Vec<String>>,
 }
 
 /// Runs the dev loop until the user interrupts it.
@@ -276,6 +282,14 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 .map(|path| format!("--tls-crl={}", path.display()))
                 .map_err(|e| format!("--tls-crl={}: {e}", path.display()))
         }))
+        .chain(config.proxy.iter().map(|url| Ok(format!("--proxy={url}"))))
+        .chain(
+            config
+                .no_proxy
+                .iter()
+                .flatten()
+                .map(|list| Ok(format!("--no-proxy={list}"))),
+        )
         .collect::<Result<_, String>>()?;
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;

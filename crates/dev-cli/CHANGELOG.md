@@ -12,17 +12,28 @@ providers, same capability enforcement. So what changes here is everything
 of the runtime's own; the standard library itself is `esrun`'s and changes in the
 root [CHANGELOG.md](../../CHANGELOG.md).
 
-Two things differ deliberately, and only these two. The **default grant**:
+Three things differ deliberately, and only these three. The **default grant**:
 `esdev` starts from every capability and `esrun` from none (DECISIONS D65), so
 that an inner loop needs no flags and a deployment states what it may reach. And
 the **extra modules**: `runtime:build`, `runtime:test` and `runtime:watch` exist
 only in this binary, so code that imports one does not run under `esrun` — which
-is the point, since none of the three has any business in a deployment.
+is the point, since none of the three has any business in a deployment. And
+the **proxy environment**: `esdev` reads `HTTP(S)_PROXY`/`NO_PROXY` like the
+rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 `esdev` is **not a deployment target**: ship the artifact and run it under
 `esrun`, which has no development surface to attack.
 
 ## [Unreleased]
+
+### Added
+
+- **An outbound proxy** (DECISIONS D205). `fetch`, the `WebSocket` client
+  and the `--otel` exporter — in the programs esdev runs, `esdev start`'s
+  server, `esdev create`'s registry lookups and `esdev upgrade` — follow
+  `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (lowercase first), as npm and git do.
+  `--proxy=<url>` and `--no-proxy=<list>` override them; `--no-proxy=*` turns
+  the proxy off.
 
 ### Changed
 

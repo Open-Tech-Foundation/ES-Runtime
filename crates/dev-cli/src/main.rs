@@ -188,6 +188,10 @@ RUN OPTIONS (esrun's, with one deliberate difference):
     --tls-ca=<file|bundled>     Trust exactly these CAs (repeatable; default:
                                 the bundled Mozilla roots)
     --tls-crl=<file>            Check servers against these CRLs (repeatable)
+    --proxy=<url>               Send fetch, WebSocket and --otel through this
+                                proxy. Default: HTTPS_PROXY/HTTP_PROXY
+    --no-proxy=<list>           Targets that go direct (repeatable; `*` for
+                                none). Default: NO_PROXY
 
 TypeScript and JSX are stripped as they load — types erased, never checked.
 Imports resolve the way `esdev build` resolves them: `./util` finds util.ts,
@@ -387,6 +391,8 @@ USAGE:
     esdev upgrade --only=esrun  Just the esrun beside esdev
     esdev upgrade --dry-run     Say whether newer releases exist, and change
                                 nothing (combines with --only)
+    esdev upgrade --proxy=<url> Download through this proxy (default:
+                                HTTPS_PROXY); --no-proxy=<list> as elsewhere
     esdev upgrade -h, --help    Show this help
 
 Each archive is checked against its release's checksums.txt before anything
@@ -398,12 +404,22 @@ esrun in its image or install step instead (install.sh, ESRUN_VERSION=).
 /// only check (`--dry-run`). Anything else is refused by name — running the
 /// replacement past a stray argument would replace a binary nobody asked to
 /// move. `-h`/`--help` prints and exits.
-fn parse_upgrade_args(argv: impl Iterator<Item = String>) -> Result<(upgrade::Only, bool), String> {
+fn parse_upgrade_args(
+    argv: impl Iterator<Item = String>,
+) -> Result<(upgrade::Only, bool, upgrade::Proxy), String> {
     let mut only = upgrade::Only::Both;
     let mut dry_run = false;
+    let mut proxy: Option<String> = None;
+    let mut no_proxy: Option<Vec<String>> = None;
     for arg in argv {
         let (flag, value) = split_flag_value(&arg);
         match (flag, value) {
+            ("--proxy", Some(value)) => proxy = Some(value.to_string()),
+            ("--no-proxy", Some(value)) => {
+                no_proxy
+                    .get_or_insert_with(Vec::new)
+                    .push(value.to_string());
+            }
             ("-h" | "--help", None) => {
                 println!("{UPGRADE_USAGE}");
                 std::process::exit(0);
@@ -417,7 +433,8 @@ fn parse_upgrade_args(argv: impl Iterator<Item = String>) -> Result<(upgrade::On
             }
         }
     }
-    Ok((only, dry_run))
+    let proxies = outbound_proxies(proxy.as_deref(), no_proxy.as_deref())?;
+    Ok((only, dry_run, proxies))
 }
 
 const INIT_USAGE: &str = "\
@@ -482,6 +499,9 @@ OPTIONS:
     -y, --yes                   Take every default; never ask
     --force                     Write into a directory that already holds
                                 something. It still never replaces a file
+    --proxy=<url>               Reach the registry through this proxy
+                                (default: HTTPS_PROXY)
+    --no-proxy=<list>           Hosts reached directly (default: NO_PROXY)
 
 What you get is a project that runs and one page — its name, what it was built
 with, and the file to edit — with its esdev.json written, its entry named by
@@ -523,6 +543,9 @@ OPTIONS:
     --tls-ca=<file|bundled>     Trust exactly these CAs, in the server and for
                                 an https dev.server.proxy target (repeatable)
     --tls-crl=<file>            Check servers against these CRLs (repeatable)
+    --proxy=<url>               The server's outbound proxy (default:
+                                HTTPS_PROXY/HTTP_PROXY)
+    --no-proxy=<list>           Targets it reaches directly (default: NO_PROXY)
     -h, --help                  Show this help
 
 It is `esdev build` on a loop. A dev build differs from a release build in
@@ -677,16 +700,20 @@ fn parse_args() -> Result<Command, String> {
             return Ok(Command::Typecheck(args));
         }
         if first == "upgrade" {
-            let (only, dry_run) = parse_upgrade_args(argv)?;
+            let (only, dry_run, proxies) = parse_upgrade_args(argv)?;
             if dry_run {
-                upgrade::check_and_exit(only);
+                upgrade::check_and_exit(only, proxies);
             }
-            upgrade::run_and_exit(only);
+            upgrade::run_and_exit(only, proxies);
         }
     }
 
     let mut options = RunOptions {
         env_defaults: settings::runtime_env("development"),
+        // D205: on a developer's machine, the proxy npm and git already use —
+        // `HTTP(S)_PROXY`/`NO_PROXY` — unless `--proxy`/`--no-proxy` say
+        // otherwise. esrun never reads them.
+        proxy_from_env: true,
         ..RunOptions::default()
     };
     let mut permissions = Permissions::new(Baseline::Everything);
@@ -1331,6 +1358,8 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     let mut install: Option<Option<String>> = None;
     let mut force = false;
     let mut yes = false;
+    let mut proxy: Option<String> = None;
+    let mut no_proxy: Option<Vec<String>> = None;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -1339,6 +1368,10 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 println!("{CREATE_USAGE}");
                 std::process::exit(0);
             }
+            "--proxy" => proxy = Some(require_value(flag, value)?.to_string()),
+            "--no-proxy" => no_proxy
+                .get_or_insert_with(Vec::new)
+                .push(require_value(flag, value)?.to_string()),
             "--list" => {
                 reject_value(flag, value)?;
                 print!("{}", create::list());
@@ -1410,7 +1443,23 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         manager,
         install,
         yes,
+        proxies: outbound_proxies(proxy.as_deref(), no_proxy.as_deref())?,
     })
+}
+
+/// The outbound proxy for esdev's own requests — `esdev create`'s registry
+/// lookups, `esdev upgrade` (D205): `--proxy`/`--no-proxy` when given,
+/// `HTTP(S)_PROXY`/`NO_PROXY` otherwise, as for the programs esdev runs.
+pub(crate) fn outbound_proxies(
+    proxy: Option<&str>,
+    no_proxy: Option<&[String]>,
+) -> Result<Option<std::sync::Arc<es_runtime_default_providers::Proxies>>, String> {
+    Ok(
+        es_runtime_default_providers::Proxies::from_flags_or_env(proxy, no_proxy, |name| {
+            std::env::var(name).ok()
+        })?
+        .map(es_runtime_default_providers::Proxies::shared),
+    )
 }
 
 /// Parses `esdev init [dir] [options]`.
@@ -1496,7 +1545,11 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         // shape a restricted run; `start` uses esdev's normal development
         // permissions for its server child, so those flags are refused below.
         // `--tls-ca` names whom the server child and the dev proxy trust.
-        if flag == "--shutdown-grace" || flag == "--tls-ca" || flag == "--tls-crl" {
+        // `--proxy`/`--no-proxy` (D205) are passed to it as they are.
+        if matches!(
+            flag,
+            "--shutdown-grace" | "--tls-ca" | "--tls-crl" | "--proxy" | "--no-proxy"
+        ) {
             options.try_flag(flag, value)?;
             continue;
         }
@@ -1556,6 +1609,8 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         grace: options.shutdown_grace,
         tls_ca: options.tls_ca,
         tls_crl: options.tls_crl,
+        proxy: options.proxy,
+        no_proxy: options.no_proxy,
     })
 }
 
@@ -2893,6 +2948,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             options: RunOptions {
                 track_pending_work: config.run.detect_leaks,
                 env_defaults: settings::runtime_env("test"),
+                proxy_from_env: true,
                 ..RunOptions::default()
             },
             stripper,
@@ -3100,6 +3156,7 @@ pub(crate) async fn run_tests_unisolated(
             permissive,
             options: RunOptions {
                 env_defaults: settings::runtime_env("test"),
+                proxy_from_env: true,
                 ..RunOptions::default()
             },
             stripper: TypeStripper::new(),

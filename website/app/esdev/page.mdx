@@ -49,6 +49,13 @@ esdev server.ts                              # everything granted
 esdev --deny-all --allow-listen=8080 server.ts   # ...or exactly esrun's grant
 ```
 
+Outbound traffic follows your machine's proxy: `esdev` reads `HTTPS_PROXY`,
+`HTTP_PROXY` and `NO_PROXY` — for the programs it runs, `esdev create` and
+`esdev upgrade` — the way npm and git do, and
+[`--proxy`/`--no-proxy`](/api/cli#outbound-proxy) override them
+(`--no-proxy=*` turns the proxy off). `esrun` reads none of them; a deployment
+names its proxy with `--proxy`.
+
 `esdev --trace-permissions server.ts` closes the gap: it prints the `esrun` line
 that grants exactly what a run reached for. See
 [Tracing permissions](/esdev/permissions).

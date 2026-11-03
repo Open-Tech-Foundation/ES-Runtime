@@ -28,6 +28,8 @@ tempfile.workspace = true
 # seam speaks (D55).
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tokio-rustls.workspace = true
+# `Proxy-Authorization: Basic` for an outbound proxy's credentials (D205).
+base64.workspace = true
 # The SHA-256 fingerprint of a verified peer certificate (D201). Already in the
 # tree through `es-runtime`.
 sha2.workspace = true

@@ -247,6 +247,8 @@ pub struct CreateConfig {
     pub install: Option<Option<String>>,
     /// `-y`: take every default and never ask, even on a terminal.
     pub yes: bool,
+    /// The outbound proxy for the registry lookups (D205).
+    pub proxies: Option<std::sync::Arc<es_runtime_default_providers::Proxies>>,
 }
 
 /// What a bare `--install` means.
@@ -523,7 +525,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         .map(|(path, contents)| (path.clone(), contents.clone()))
         .collect();
     let packages = registry_packages(&pending)?;
-    let versions = resolve_registry_versions(&packages).await?;
+    let versions = resolve_registry_versions(&packages, config.proxies.clone()).await?;
 
     let mut written = 0usize;
     let mut skipped = Vec::new();
@@ -1950,6 +1952,7 @@ async fn registry_version_with_retries(
 /// parallel so a slow package does not hold up the other registry lookups.
 async fn resolve_registry_versions(
     packages: &BTreeSet<String>,
+    proxies: Option<std::sync::Arc<es_runtime_default_providers::Proxies>>,
 ) -> Result<HashMap<String, String>, String> {
     if packages.is_empty() {
         return Ok(HashMap::new());
@@ -1962,7 +1965,7 @@ async fn resolve_registry_versions(
             .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
     );
     let registry = configured_registry()?;
-    let client = HttpClient::new(&TrustStore::bundled());
+    let client = HttpClient::new(&TrustStore::bundled()).with_proxy(proxies);
     let requests = packages.iter().map(|package| {
         let client = client.clone();
         let registry = registry.clone();

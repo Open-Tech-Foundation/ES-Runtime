@@ -167,6 +167,8 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
             permissive,
             options: RunOptions {
                 env_defaults: crate::settings::runtime_env("test"),
+                // D205: esdev's programs follow the developer's proxy.
+                proxy_from_env: true,
                 ..RunOptions::default()
             },
             stripper: TypeStripper::new(),

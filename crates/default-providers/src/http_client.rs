@@ -32,6 +32,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use url::Url;
 
+use crate::proxy::{BoxWire, Proxies, ProxyError};
 use crate::{HostAllowlist, TrustStore};
 
 /// The Fetch specification's redirect cap ("request's redirect count" is
@@ -159,6 +160,12 @@ impl Inbound {
 #[derive(Clone)]
 pub struct HttpClient {
     client: Client<Connector, RequestBody>,
+    /// What [`with_proxy`](Self::with_proxy) rebuilds the pool from.
+    config: Arc<tokio_rustls::rustls::ClientConfig>,
+    proxy_tls: TlsConnector,
+    timeout: Duration,
+    /// The outbound proxy (D205), consulted per target.
+    proxies: Option<Arc<Proxies>>,
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -183,15 +190,38 @@ impl HttpClient {
         identity: &es_runtime_providers::ClientIdentity,
     ) -> Result<Self, ProviderError> {
         let config = trust.client_config_for(ca, identity, &["h2", "http/1.1"])?;
-        Ok(Self::from_config(config, CONNECT_TIMEOUT))
+        Ok(Self::from_config(
+            Arc::new(config),
+            proxy_tls(trust),
+            CONNECT_TIMEOUT,
+            None,
+        ))
     }
 
     /// As [`new`](Self::new), with a different connect deadline.
     pub fn with_connect_timeout(trust: &TrustStore, timeout: Duration) -> Self {
-        Self::from_config(trust.client_config(&["h2", "http/1.1"]), timeout)
+        Self::from_config(
+            Arc::new(trust.client_config(&["h2", "http/1.1"])),
+            proxy_tls(trust),
+            timeout,
+            None,
+        )
     }
 
-    fn from_config(config: tokio_rustls::rustls::ClientConfig, timeout: Duration) -> Self {
+    /// This client, sending through `proxies` (D205): a `http:` target is
+    /// forwarded to the proxy, an `https:` one tunnelled with `CONNECT`. A
+    /// fresh pool, since a pooled connection is direct or proxied for good.
+    #[must_use]
+    pub fn with_proxy(self, proxies: Option<Arc<Proxies>>) -> Self {
+        Self::from_config(self.config, self.proxy_tls, self.timeout, proxies)
+    }
+
+    fn from_config(
+        config: Arc<tokio_rustls::rustls::ClientConfig>,
+        proxy_tls: TlsConnector,
+        timeout: Duration,
+        proxies: Option<Arc<Proxies>>,
+    ) -> Self {
         let mut http = HttpConnector::new();
         // `https` URIs are this connector's to wrap in TLS, below.
         http.enforce_http(false);
@@ -202,13 +232,38 @@ impl HttpClient {
         // The deadline covers DNS, TCP and TLS together, around the whole
         // connector; this one would bound only the TCP connect.
         http.set_connect_timeout(None);
-        let tls = TlsConnector::from(Arc::new(config));
-        let connector = Connector { http, tls, timeout };
+        let tls = TlsConnector::from(config.clone());
+        let connector = Connector {
+            http,
+            tls,
+            timeout,
+            proxies: proxies.clone(),
+            proxy_tls: proxy_tls.clone(),
+        };
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(POOL_IDLE)
             .pool_timer(TokioTimer::new())
             .build(connector);
-        HttpClient { client }
+        HttpClient {
+            client,
+            config,
+            proxy_tls,
+            timeout,
+            proxies,
+        }
+    }
+
+    /// The `Proxy-Authorization` a forwarded request to `url` carries: set
+    /// when `url` is `http:`, goes through a proxy, and the proxy URL had
+    /// credentials. A tunnelled request carries it on the `CONNECT` instead.
+    fn forward_authorization(&self, url: &Url) -> Option<HeaderValue> {
+        let proxies = self.proxies.as_ref()?;
+        if url.scheme() != "http" {
+            return None;
+        }
+        let port = url.port_or_known_default()?;
+        let server = proxies.for_target("http", url.host_str()?, port)?;
+        HeaderValue::from_str(server.authorization()?).ok()
     }
 
     /// Sends `request`, following redirects as it asks, and resolves once the
@@ -242,9 +297,19 @@ impl HttpClient {
                 Body::Stream(stream) => (Body::Stream(stream), Body::Empty),
             };
             let streamed = matches!(this_body, Body::Stream(_));
+            // Per hop: a redirect may move between a proxied and a direct
+            // target, or between schemes.
+            let hop_headers = match self.forward_authorization(&url) {
+                Some(auth) => {
+                    let mut with = headers.clone();
+                    with.insert(header::PROXY_AUTHORIZATION, auth);
+                    std::borrow::Cow::Owned(with)
+                }
+                None => std::borrow::Cow::Borrowed(&headers),
+            };
             let response = self
                 .client
-                .request(build(&method, &url, &headers, this_body)?)
+                .request(build(&method, &url, &hop_headers, this_body)?)
                 .await
                 .map_err(classify)?;
             let status = response.status();
@@ -563,6 +628,21 @@ impl std::fmt::Display for ConnectError {
 
 impl std::error::Error for ConnectError {}
 
+impl From<ProxyError> for ConnectError {
+    fn from(e: ProxyError) -> Self {
+        ConnectError {
+            code: e.code,
+            message: e.message,
+        }
+    }
+}
+
+/// The connector to an `https://` proxy: the process trust store, no ALPN —
+/// the proxy is spoken to over HTTP/1.1, whatever the target negotiates.
+fn proxy_tls(trust: &TrustStore) -> TlsConnector {
+    TlsConnector::from(Arc::new(trust.client_config(&[])))
+}
+
 /// Classifies a send failure with a stable guest-facing code where one can be
 /// derived (SPEC §6 Phase 13). Never includes the URL: its credentials and
 /// query are the program's secrets, and the message is for logs (D141).
@@ -623,6 +703,8 @@ struct Connector {
     http: HttpConnector,
     tls: TlsConnector,
     timeout: Duration,
+    proxies: Option<Arc<Proxies>>,
+    proxy_tls: TlsConnector,
 }
 
 impl tower_service::Service<Uri> for Connector {
@@ -641,6 +723,8 @@ impl tower_service::Service<Uri> for Connector {
         let mut http = self.http.clone();
         let tls = self.tls.clone();
         let timeout = self.timeout;
+        let proxies = self.proxies.clone();
+        let proxy_tls = self.proxy_tls.clone();
         Box::pin(async move {
             let connect = async move {
                 let secure = match uri.scheme_str() {
@@ -660,6 +744,30 @@ impl tower_service::Service<Uri> for Connector {
                     .trim_start_matches('[')
                     .trim_end_matches(']')
                     .to_string();
+                let port = uri.port_u16().unwrap_or(if secure { 443 } else { 80 });
+                let via = proxies
+                    .as_ref()
+                    .and_then(|p| p.for_target(if secure { "https" } else { "http" }, &host, port));
+                if let Some(server) = via {
+                    if !secure {
+                        // Forwarded: hyper sends the request in absolute form
+                        // to a connection marked as proxied.
+                        let wire = server.connect(&proxy_tls).await?;
+                        return Ok(Conn::Proxied(Box::new(TokioIo::new(wire)), false, true));
+                    }
+                    let wire = server.tunnel(&proxy_tls, &host, port).await?;
+                    let name = ServerName::try_from(host).map_err(|_| ConnectError {
+                        code: ErrorCode::Tls,
+                        message: "the host is not a name TLS can verify".to_string(),
+                    })?;
+                    let stream = tls.connect(name, wire).await.map_err(|e| ConnectError {
+                        code: ErrorCode::Tls,
+                        message: format!("TLS: {e}"),
+                    })?;
+                    let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
+                    let wire: BoxWire = Box::new(stream);
+                    return Ok(Conn::Proxied(Box::new(TokioIo::new(wire)), h2, false));
+                }
                 let tcp = tower_service::Service::call(&mut http, uri)
                     .await
                     .map_err(|e| tcp_error(&e))?;
@@ -716,18 +824,23 @@ fn tcp_error(e: &(dyn std::error::Error + 'static)) -> ConnectError {
     }
 }
 
-/// A connection, plain or TLS.
+/// A connection, plain or TLS, direct or through a proxy.
 enum Conn {
     Plain(TokioIo<TcpStream>),
     /// The stream, and whether ALPN chose HTTP/2. Boxed: a TLS session is a
     /// kilobyte, and the pool holds many plain connections too.
     Tls(Box<TokioIo<TlsStream<TcpStream>>>, bool),
+    /// Through the proxy (D205): the stream, whether ALPN chose HTTP/2, and
+    /// whether requests are forwarded (absolute form to the proxy) rather than
+    /// tunnelled.
+    Proxied(Box<TokioIo<BoxWire>>, bool, bool),
 }
 
 impl Connection for Conn {
     fn connected(&self) -> Connected {
         match self {
-            Conn::Tls(_, true) => Connected::new().negotiated_h2(),
+            Conn::Tls(_, true) | Conn::Proxied(_, true, _) => Connected::new().negotiated_h2(),
+            Conn::Proxied(_, _, true) => Connected::new().proxy(true),
             _ => Connected::new(),
         }
     }
@@ -742,6 +855,7 @@ impl hyper::rt::Read for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_read(cx, buf),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_read(cx, buf),
+            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_read(cx, buf),
         }
     }
 }
@@ -755,6 +869,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_write(cx, buf),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_write(cx, buf),
+            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_write(cx, buf),
         }
     }
 
@@ -762,6 +877,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_flush(cx),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_flush(cx),
+            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_flush(cx),
         }
     }
 
@@ -769,6 +885,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_shutdown(cx),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_shutdown(cx),
+            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_shutdown(cx),
         }
     }
 
@@ -776,6 +893,7 @@ impl hyper::rt::Write for Conn {
         match self {
             Conn::Plain(io) => io.is_write_vectored(),
             Conn::Tls(io, _) => io.is_write_vectored(),
+            Conn::Proxied(io, ..) => io.is_write_vectored(),
         }
     }
 
@@ -787,6 +905,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_write_vectored(cx, bufs),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_write_vectored(cx, bufs),
+            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_write_vectored(cx, bufs),
         }
     }
 }
@@ -1539,5 +1658,180 @@ mod tests {
         assert!(!same_origin(&u("http://a/"), &u("http://b/")));
         assert!(!same_origin(&u("http://a/"), &u("http://a:8080/")));
         assert!(same_origin(&u("https://a/"), &u("https://a:443/")));
+    }
+
+    // --- The outbound proxy (D205) ------------------------------------------
+
+    use crate::proxy::test_proxy::{self, Mode};
+    use crate::trust::test_pki::{Ca, tls_server};
+
+    /// An origin on loopback answering every request with `body`, recording
+    /// each request head it received.
+    async fn origin(body: &'static str) -> (u16, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let seen = heads.clone();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(socket);
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        head.push_str(&line);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    seen.lock().unwrap().push(head);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = reader.get_mut().write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (port, heads)
+    }
+
+    fn via(url: &str, no_proxy: &[&str]) -> Option<Arc<Proxies>> {
+        let list: Vec<String> = no_proxy.iter().map(|s| s.to_string()).collect();
+        Some(Proxies::from_flags(url, &list).unwrap().shared())
+    }
+
+    async fn proxied_text(client: &HttpClient, request: Outbound) -> Result<String, ProviderError> {
+        let response = client.send(request).await?;
+        assert_eq!(response.status, StatusCode::OK);
+        let bytes = response.bytes(1 << 20).await?;
+        Ok(String::from_utf8(bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn an_http_target_is_forwarded_in_absolute_form_with_credentials() {
+        let (port, origin_heads) = origin("forwarded").await;
+        let proxy = test_proxy::start(Mode::Auth("Basic dTpw")).await;
+        let client = client().with_proxy(via(&format!("http://u:p@127.0.0.1:{}", proxy.port), &[]));
+        let url = Url::parse(&format!("http://api.test:{port}/a?b=1")).unwrap();
+        let mut request = Outbound::get(url);
+        // The program's own value is replaced, never passed on beside ours.
+        request.headers = vec![("proxy-authorization".into(), "Basic forged".into())];
+        assert_eq!(proxied_text(&client, request).await.unwrap(), "forwarded");
+        let heads = proxy.heads();
+        assert_eq!(heads.len(), 1, "{heads:?}");
+        assert!(
+            heads[0].starts_with(&format!("GET http://api.test:{port}/a?b=1 HTTP/1.1\r\n")),
+            "{}",
+            heads[0]
+        );
+        assert!(
+            heads[0].contains("proxy-authorization: Basic dTpw\r\n"),
+            "{}",
+            heads[0]
+        );
+        assert!(!heads[0].contains("forged"), "{}", heads[0]);
+        assert_eq!(origin_heads.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_https_target_is_tunnelled_and_verified_inside_it() {
+        let ca = Ca::new("Proxy Test CA");
+        let (port, server) = tls_server(
+            ca.leaf(&["api.test"]),
+            &["http/1.1"],
+            b"HTTP/1.1 200 OK\r\ncontent-length: 8\r\nconnection: close\r\n\r\ntunneled",
+        )
+        .await;
+        let proxy = test_proxy::start(Mode::Open).await;
+        let client = HttpClient::new(&ca.trust())
+            .with_proxy(via(&format!("http://127.0.0.1:{}", proxy.port), &[]));
+        let url = Url::parse(&format!("https://api.test:{port}/")).unwrap();
+        assert_eq!(
+            proxied_text(&client, Outbound::get(url)).await.unwrap(),
+            "tunneled"
+        );
+        assert!(
+            server.await.unwrap().is_some(),
+            "the target's handshake failed"
+        );
+        let heads = proxy.heads();
+        assert!(heads[0].starts_with(&format!("CONNECT api.test:{port} HTTP/1.1\r\n")));
+    }
+
+    #[tokio::test]
+    async fn an_https_proxy_is_verified_against_the_trust_store() {
+        let ca = Ca::new("Proxy Test CA");
+        let (port, _origin_heads) = origin("over tls").await;
+        let proxy = test_proxy::start_tls(Mode::Open, ca.leaf(&["localhost"])).await;
+        let url = Url::parse(&format!("http://api.test:{port}/")).unwrap();
+        let trusted = HttpClient::new(&ca.trust())
+            .with_proxy(via(&format!("https://localhost:{}", proxy.port), &[]));
+        assert_eq!(
+            proxied_text(&trusted, Outbound::get(url.clone()))
+                .await
+                .unwrap(),
+            "over tls"
+        );
+        // The same proxy, not trusted: refused at its certificate.
+        let untrusted = client().with_proxy(via(&format!("https://localhost:{}", proxy.port), &[]));
+        let Err(error) = untrusted.send(Outbound::get(url)).await else {
+            panic!("an untrusted proxy was used");
+        };
+        assert_eq!(error.code(), Some(ErrorCode::Tls), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_exception_goes_direct_and_the_proxy_sees_nothing() {
+        let proxy = test_proxy::start(Mode::Open).await;
+        let client = client().with_proxy(via(
+            &format!("http://127.0.0.1:{}", proxy.port),
+            &["api.test"],
+        ));
+        // Direct, `api.test` does not resolve: proof it did not go through.
+        let url = Url::parse("http://api.test:9/").unwrap();
+        let Err(error) = client.send(Outbound::get(url)).await else {
+            panic!("an exception was proxied");
+        };
+        assert_eq!(error.code(), Some(ErrorCode::Dns), "{error}");
+        assert!(proxy.heads().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_allowlist_still_judges_the_target_not_the_proxy() {
+        let proxy = test_proxy::start(Mode::Open).await;
+        let client = client().with_proxy(via(&format!("http://127.0.0.1:{}", proxy.port), &[]));
+        let mut request = Outbound::get(Url::parse("http://denied.test:80/").unwrap());
+        request.allow = Some(Arc::new(
+            HostAllowlist::parse(&["allowed.test".to_string()]).unwrap(),
+        ));
+        let Err(error) = client.send(request).await else {
+            panic!("a denied host was fetched");
+        };
+        assert_eq!(error.code(), Some(ErrorCode::PermissionDenied), "{error}");
+        assert!(
+            proxy.heads().is_empty(),
+            "the proxy was asked for a denied host"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_tunnel_reaches_fetch_as_err_proxy_tunnel() {
+        let proxy = test_proxy::start(Mode::Refuse).await;
+        let client = client().with_proxy(via(&format!("http://127.0.0.1:{}", proxy.port), &[]));
+        let Err(error) = client
+            .send(Outbound::get(Url::parse("https://api.test/").unwrap()))
+            .await
+        else {
+            panic!("a refused tunnel succeeded");
+        };
+        assert_eq!(error.code(), Some(ErrorCode::ProxyTunnel), "{error}");
+        assert!(error.to_string().contains("403"), "{error}");
     }
 }

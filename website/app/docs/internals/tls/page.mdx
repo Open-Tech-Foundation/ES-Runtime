@@ -82,8 +82,10 @@ Windows needs platform-binding crates, and it would make trust a property of the
 machine rather than of the command line. On Linux the distribution's bundle is a
 file, and `--tls-ca=/etc/ssl/certs/ca-certificates.crt` uses it.
 
-For the same reason, `fetch` and the exporter ignore `HTTP_PROXY`,
-`HTTPS_PROXY` and `ALL_PROXY`.
+For the same reason, esrun ignores `HTTP_PROXY`, `HTTPS_PROXY` and
+`ALL_PROXY`: a proxy is named with [`--proxy`](/api/cli#outbound-proxy), which
+an `https://` proxy is verified against this store for. Only esdev, on a
+developer's machine, reads the variables.
 
 ## Replacing a certificate while serving
 
