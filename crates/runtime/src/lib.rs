@@ -6212,7 +6212,9 @@ mod tests {
              for (const k of ['n', 'e', 'd', 'p', 'q', 'dp', 'dq', 'qi']) check(`jwk export ${{k}}`, exported[k] === fx.jwk[k]); \
              const roundTrip = new Uint8Array(await subtle.exportKey('pkcs8', fromJwk)); \
              check('jwk to pkcs8 signs alike', same(new Uint8Array(await subtle.sign(pkcs1, await subtle.importKey('pkcs8', roundTrip, pkcs1, false, ['sign']), msg)), b(fx.pkcs1))); \
-             check('a 512-bit key still imports, as upstream allows', (await subtle.importKey('pkcs8', b(fx.small), pkcs1, false, ['sign'])).type === 'private'); \
+             await rejects('a 512-bit private key is refused', () => subtle.importKey('pkcs8', b(fx.small), pkcs1, false, ['sign'])); \
+             const smallPub = await (async () => {{ try {{ await subtle.importKey('pkcs8', b(fx.small), pkcs1, true, ['sign']); }} catch (e) {{ return e.name; }} }})(); \
+             check('the refusal is a DataError', smallPub === 'DataError'); \
              await rejects('a 512-bit modulus is not generated', () => subtle.generateKey({{ ...pkcs1, modulusLength: 512, publicExponent: new Uint8Array([1, 0, 1]) }}, true, ['sign'])); \
              await rejects('a 9000-bit modulus is not generated', () => subtle.generateKey({{ ...pkcs1, modulusLength: 9000, publicExponent: new Uint8Array([1, 0, 1]) }}, true, ['sign'])); \
              return failed.length === 0 ? 'all-ok' : failed.join('; ');"

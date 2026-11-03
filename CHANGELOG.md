@@ -17,8 +17,9 @@ namespace) is unstable and may change between minor releases until the API freez
   RustCrypto `rsa` 0.10.0-rc.20, which fixes RUSTSEC-2023-0071 ("Marvin"):
   constant-time private-key arithmetic, blinded signing and decryption, and
   implicit rejection. All RSA randomness still comes from the injected
-  entropy provider. RSA-OAEP labels may now be any bytes, and `generateKey`
-  refuses a modulus outside 1024–8192 bits. Checked against OpenSSL-generated
+  entropy provider. RSA-OAEP labels may now be any bytes; `generateKey`
+  refuses a modulus outside 1024–8192 bits, and `importKey` refuses an RSA
+  key under 1024 bits with a `DataError`. Checked against OpenSSL-generated
   keys, signatures and ciphertexts in both directions.
 
 ## [0.46.0] - 2026-11-03

@@ -234,15 +234,30 @@ fn public_spki(pkcs8: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     encode_spki(&key.to_public_key())
 }
 
+/// Refuses a key whose modulus is below 1024 bits (D203): such keys can be
+/// factored, so a signature or ciphertext made with one proves nothing.
+/// Generation already refuses them; this holds every import to the same floor.
+fn check_size(key: &impl PublicKeyParts) -> std::result::Result<(), OpError> {
+    if (key.n().bits() as usize) < RsaPublicKey::MIN_SIZE {
+        return Err(data_error(format!(
+            "RSA keys under {} bits can be broken and are refused",
+            RsaPublicKey::MIN_SIZE
+        )));
+    }
+    Ok(())
+}
+
 fn import_pkcs8(der: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     let key =
         RsaPrivateKey::from_pkcs8_der(der).map_err(|_| data_error("invalid RSA private key"))?;
+    check_size(&key)?;
     encode_pkcs8(&key)
 }
 
 fn import_spki(der: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     let key =
         RsaPublicKey::from_public_key_der(der).map_err(|_| data_error("invalid RSA public key"))?;
+    check_size(&key)?;
     encode_spki(&key)
 }
 
@@ -293,6 +308,7 @@ fn spki_from_jwk(n: &[u8], e: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
         BoxedUint::from_be_slice_vartime(e),
     )
     .map_err(|_| data_error("invalid RSA public key components"))?;
+    check_size(&key)?;
     encode_spki(&key)
 }
 
@@ -316,6 +332,7 @@ fn pkcs8_from_jwk(
         vec![secret(p)?, secret(q)?],
     )
     .map_err(|_| invalid())?;
+    check_size(&key)?;
     encode_pkcs8(&key)
 }
 

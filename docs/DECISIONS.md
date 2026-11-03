@@ -4254,7 +4254,7 @@ Deno replaced reqwest in `fetch` with a hyper-util client of its own (deno#24237
 - **`rsa = "=0.10.0-rc.20"`**, an exact pin, moved to 0.10.0 when it is released.
 - **No `getrandom` feature.** Every private-key operation is given the injected `Entropy` provider explicitly — key generation, PSS salts, OAEP padding, signing blinding, and decryption through `decrypt_blinded` (without `getrandom`, plain `decrypt` would be unblinded).
 - **Secret key components are decoded at a fixed width taken from the public modulus**, never sized from their own bytes; only public values (`n`, `e`) use variable-time decoding, and a JWK export trims leading zeros as RFC 7518 requires.
-- **What changes for programs:** an RSA-OAEP label may be any bytes (0.9 required UTF-8); `generateKey` refuses a modulus outside 1024–8192 bits; key import keeps 0.10's behaviour and accepts a smaller key.
+- **What changes for programs:** an RSA-OAEP label may be any bytes (0.9 required UTF-8); `generateKey` refuses a modulus outside 1024–8192 bits, and every import (PKCS#8, SPKI, JWK) refuses a key under 1024 bits with a `DataError` — such keys can be factored, so nothing signed or encrypted with one is worth checking. *(Import floor added 2026-11-03, maintainer.)*
 - **Known answers from an independent implementation**: OpenSSL-generated keys, signatures and ciphertexts (`crates/runtime/testdata/rsa-kat.json`) must verify, decrypt, and — for deterministic PKCS#1 v1.5 — match byte for byte; JWK import and export must reproduce OpenSSL's components.
 
 **Rejected:**
