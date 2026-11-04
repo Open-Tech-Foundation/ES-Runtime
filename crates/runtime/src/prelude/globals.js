@@ -52,14 +52,13 @@
       ? error.stack
       : String(error);
 
-  globalThis.reportError = (error) => {
-    // Report an exception the way the platform does: dispatch an "error"
-    // ErrorEvent on the global scope, and fall back to console.error only if
-    // nothing handled it (no listener called preventDefault). That makes
-    // `addEventListener("error", …)` and `onerror` work, and keeps an
-    // unhandled report visible on the console as before.
+  // `context` is a line printed before the stack when nothing handles the
+  // event — `runtime:http`'s "GET /path failed (trace …)" (D206). The event's
+  // `error` stays the program's own object; only the console fallback gains it.
+  const report = (error, context) => {
+    const text = context ? `${context}\n${stackOf(error)}` : stackOf(error);
     if (reporting) {
-      globalThis.console.error(stackOf(error));
+      globalThis.console.error(text);
       return;
     }
     const event = new ErrorEvent("error", {
@@ -79,8 +78,17 @@
     // instead — and since the parent reports what *it* does not claim, writing
     // it to this agent's console too would report one failure twice.
     if (__internal.failure.unclaimed?.(error)) return;
-    globalThis.console.error(stackOf(error));
+    globalThis.console.error(text);
   };
+  // Report an exception the way the platform does: dispatch an "error"
+  // ErrorEvent on the global scope, and fall back to console.error only if
+  // nothing handled it (no listener called preventDefault). That makes
+  // `addEventListener("error", …)` and `onerror` work, and keeps an
+  // unhandled report visible on the console as before.
+  globalThis.reportError = (error) => report(error, null);
+  // For runtime:http (D206): a report with a context line. In the `failure`
+  // slot because `__internal` is frozen.
+  __internal.failure.report = report;
 
   // ---- import.meta.resolve -------------------------------------------------
   //

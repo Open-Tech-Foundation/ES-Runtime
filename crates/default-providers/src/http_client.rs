@@ -649,6 +649,21 @@ fn proxy_tls(trust: &TrustStore) -> TlsConnector {
 fn classify(e: hyper_util::client::legacy::Error) -> ProviderError {
     let message = format!("request failed: {}", chain(&e));
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    // The server closed the connection before its response was complete. A
+    // sentence and a code (D206), not the client library's chain of wrappers.
+    while let Some(err) = source {
+        if err
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_incomplete_message)
+        {
+            return ProviderError::Coded {
+                code: ErrorCode::ConnectionReset,
+                message: "the connection closed before the response completed".to_string(),
+            };
+        }
+        source = err.source();
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
     let mut io_fallback = None;
     while let Some(err) = source {
         if let Some(connect) = err.downcast_ref::<ConnectError>() {
@@ -1833,5 +1848,30 @@ mod tests {
         };
         assert_eq!(error.code(), Some(ErrorCode::ProxyTunnel), "{error}");
         assert!(error.to_string().contains("403"), "{error}");
+    }
+
+    // D206: a response the server cut short is ERR_CONNECTION_RESET with a
+    // sentence, not hyper's chain of wrappers.
+    #[tokio::test]
+    async fn a_response_cut_short_is_a_coded_reset() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            // Nothing at all: the connection closes before a response.
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let Err(error) = client().send(Outbound::get(url)).await else {
+            panic!("an empty answer was a response");
+        };
+        assert_eq!(error.code(), Some(ErrorCode::ConnectionReset), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "the connection closed before the response completed"
+        );
     }
 }

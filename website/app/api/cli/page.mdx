@@ -439,7 +439,9 @@ fetch  http://…/api/users (CLIENT, trace 3bf2e15b)
 
 | | |
 | --- | --- |
-| Protocol | OTLP/JSON over HTTP, to `<url>/v1/traces`. Protobuf is not implemented. |
+| Protocol | OTLP/JSON over HTTP: traces to `<url>/v1/traces`, metrics to `<url>/v1/metrics`. Protobuf is not implemented. |
+| Request spans | `http.response.status_code` and, for a `5xx` or a throw, `error.type`; the span's status is `ERROR` then. A `4xx` is the client's and stays `OK`. |
+| Metrics | `http.server.request.duration`: a histogram in seconds by `http.request.method`, `http.response.status_code` and `error.type`, with the semantic-convention buckets. Cumulative, exported every 60s and at exit. Counts every request: `--otel-sample` and `--otel-min-duration` thin traces only. |
 | Attributes | Semantic conventions: `file.path`, `db.query.text`, `url.full`, `process.command`, `http.request.method`, `url.path`. |
 | Capability | **None.** The runtime exports, so your code holds neither `net` to reach the collector nor `diagnostics` to read its own traces. |
 | Collector down | Logged once, then dropped. It never fails or delays your program. |

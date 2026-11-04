@@ -359,6 +359,48 @@ fn a_handler_that_throws_or_returns_a_non_response_is_a_500() {
     assert!(s.contains("HANDLER_CONTRACT_OK"), "{s}");
 }
 
+/// `serve({ onError })` and the unhandled report (D206): `onError`'s Response
+/// is sent and its error is not reported; one that throws is reported and the
+/// plain 500 sent; an unhandled report names the method, the path without its
+/// query, and the trace.
+#[test]
+fn on_error_answers_and_an_unhandled_failure_names_its_request() {
+    let out = run_file("http-on-error.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        s.contains(r#"/orders/1?token=secret 503 {"error":"handled by onError","path":"/orders/1","trace":32}"#),
+        "{s}"
+    );
+    assert!(
+        s.contains("/object 503"),
+        "a non-Response return reaches onError: {s}"
+    );
+    assert!(s.contains("/b 500 Internal Server Error"), "{s}");
+    assert!(
+        s.contains("/p?token=secret 500 Internal Server Error"),
+        "{s}"
+    );
+    assert!(
+        s.contains("option:TypeError:serve(): onError must be a function"),
+        "{s}"
+    );
+    assert!(s.contains("ON_ERROR_OK"), "{s}");
+    let err = stderr(&out);
+    assert!(
+        !err.contains("handled by onError"),
+        "a handled error was reported: {err}"
+    );
+    assert!(err.contains("onError itself failed"), "{err}");
+    assert!(err.contains("runtime:http: GET /b failed (trace "), "{err}");
+    assert!(err.contains("runtime:http: GET /p failed (trace "), "{err}");
+    assert!(err.contains("RangeError: unhandled in plain"), "{err}");
+    assert!(
+        !err.contains("token=secret"),
+        "the query reached the report: {err}"
+    );
+}
+
 /// Fetch network errors reject with `TypeError`, which is how a caller tells a
 /// transport failure from a programming one. Aborts and capability denials are
 /// not network errors and keep their own types.

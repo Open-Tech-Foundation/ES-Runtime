@@ -22,7 +22,9 @@
 //! unit of work — so it is a *metric*, not a span, and is left out of the trace
 //! payload. `metrics()` covers the same ground for a reader who wants it.
 
-use es_runtime_engine::diagnostics::{AttrValue, SpanKind, SpanRecord, SpanStatus};
+use es_runtime_engine::diagnostics::{
+    AttrValue, HTTP_DURATION_BOUNDS, HttpServerMetrics, SpanKind, SpanRecord, SpanStatus,
+};
 
 /// Converts the runtime's monotonic milliseconds into the absolute Unix
 /// nanoseconds OTLP wants.
@@ -110,6 +112,92 @@ pub fn encode_traces(
         version = json_string(env!("CARGO_PKG_VERSION")),
         spans = spans,
     ))
+}
+
+/// Encodes `http.server.request.duration` (D206) as an OTLP
+/// `ExportMetricsServiceRequest` in JSON: one cumulative explicit-bucket
+/// histogram, a data point per attribute set, counted since `started_ms`.
+///
+/// Returns `None` when nothing has been counted, so a server that has served
+/// nothing exports nothing.
+pub fn encode_metrics(
+    metrics: &HttpServerMetrics,
+    service_name: &str,
+    origin: TimeOrigin,
+    started_ms: f64,
+    now_ms: f64,
+) -> Option<String> {
+    if metrics.series.is_empty() {
+        return None;
+    }
+    let start = origin.nanos(started_ms);
+    let now = origin.nanos(now_ms);
+    let bounds = HTTP_DURATION_BOUNDS
+        .iter()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let points = metrics
+        .series
+        .iter()
+        .map(|((method, status, error_type), series)| {
+            let mut attributes = vec![attribute("http.request.method", method)];
+            if let Some(status) = status {
+                // An int attribute, as the convention types it.
+                attributes.push(format!(
+                    r#"{{"key":"http.response.status_code","value":{{"intValue":{}}}}}"#,
+                    json_string(status)
+                ));
+            }
+            if let Some(error_type) = error_type {
+                attributes.push(attribute("error.type", error_type));
+            }
+            let buckets = series
+                .buckets
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                concat!(
+                    r#"{{"attributes":[{attributes}],"startTimeUnixNano":"{start}","#,
+                    r#""timeUnixNano":"{now}","count":"{count}","sum":{sum},"#,
+                    r#""min":{min},"max":{max},"bucketCounts":[{buckets}],"#,
+                    r#""explicitBounds":[{bounds}]}}"#
+                ),
+                attributes = attributes.join(","),
+                start = start,
+                now = now,
+                count = series.count,
+                sum = series.sum,
+                min = series.min,
+                max = series.max,
+                buckets = buckets,
+                bounds = bounds,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        concat!(
+            r#"{{"resourceMetrics":[{{"resource":{{"attributes":[{resource}]}},"#,
+            r#""scopeMetrics":[{{"scope":{{"name":"esrun","version":{version}}},"#,
+            r#""metrics":[{{"name":"http.server.request.duration","unit":"s","#,
+            r#""description":"Duration of HTTP server requests.","#,
+            r#""histogram":{{"aggregationTemporality":2,"dataPoints":[{points}]}}}}]}}]}}]}}"#
+        ),
+        resource = resource_attributes(service_name),
+        version = json_string(env!("CARGO_PKG_VERSION")),
+        points = points,
+    ))
+}
+
+fn attribute(key: &str, value: &str) -> String {
+    format!(
+        r#"{{"key":{},"value":{{"stringValue":{}}}}}"#,
+        json_string(key),
+        json_string(value)
+    )
 }
 
 /// The resource every exported span belongs to.
@@ -270,6 +358,11 @@ fn encode_attributes(out: &mut String, record: &SpanRecord) {
         out.push_str(&json_string(key));
         out.push_str(r#","value":{"#);
         match value {
+            // The status code crosses from JS as text; the convention types
+            // it an int (D206).
+            AttrValue::Str(s) if key == "http.response.status_code" && s.parse::<u16>().is_ok() => {
+                out.push_str(&format!(r#""intValue":"{s}""#));
+            }
             AttrValue::Str(s) => {
                 out.push_str(r#""stringValue":"#);
                 out.push_str(&json_string(s));

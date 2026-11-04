@@ -4305,3 +4305,18 @@ How the mainstream tools split it: Node has no self-upgrade (version managers, i
 - **Proxying `runtime:net`**: no peer does; a database behind an egress proxy is reached through the platform's own routing.
 
 **Consequences:** `fetch`, `WebSocket` and the exporter work behind a forward proxy when the command line says so, and `esdev` works behind one the way the rest of a developer's tools already do. Pooling is per target, as before: a forwarded `http:` request reuses a connection to the proxy only for the same target. **Not solved here:** a proxy that requires anything but Basic (NTLM, Negotiate), and `--trace-permissions` does not print the proxy, since a deployment's proxy is rarely the developer's.
+
+### D206 — Server errors: `onError`, a report that names the request, request status on spans, and the duration metric · *Accepted (2026-11-04)*
+
+**Context:** feedback that the server side "lacks error reporting". Measured: a throwing handler is a plain `500` and a `reportError` with the stack only — no method, path or trace id, so under concurrency nobody can tell which request failed; there is no per-server hook to shape the error response (Deno.serve `onError`, Bun.serve `error`); with `--otel` the request `SERVER` span always closes `OK`, even for a `500`, and carries no `http.response.status_code`; no metrics are exported at all; and `esdev`'s error overlay shows build errors but not a server's.
+
+**Decision (maintainer, 2026-11-04):**
+- **`serve({ onError(error, request) })`** — Deno's name, plus the request (as Hono's `app.onError` has it). Called for a thrown handler and a non-`Response` return; its `Response` is sent. An error it receives is handled, so it is not reported; if it throws or returns no `Response`, that is reported and the plain `500` is sent. Owned by the runtime because `serve()` is used directly, without a framework, exactly as `Deno.serve` is; under a framework it never fires, since the framework catches first.
+- **The unhandled report names the request**: `runtime:http: GET /path failed (trace <id>)` before the stack, the path without its query (D141). The `error` event's `error` is the program's own object, unchanged; only the console fallback gains the line.
+- **Request spans carry the outcome**: `http.response.status_code`, and `error.type` (the error's class for a throw, the status for a `5xx`); the span is `ERROR` for a `5xx` or a throw, as OpenTelemetry's HTTP server convention says (`4xx` is not a server error).
+- **`--otel` exports `http.server.request.duration`**: an explicit-bucket histogram in seconds with the semantic-convention boundaries, attributes `http.request.method`, `http.response.status_code`, `error.type`; cumulative, exported every 60s and at exit to `<url>/v1/metrics`. Counted before `--otel-sample`/`--otel-min-duration`, which thin traces, not counts.
+- **Rough edges**: `fetch` reports a response the server dropped part-way as `ERR_CONNECTION_RESET` with a sentence, not the client library's chain.
+
+**Rejected:** a `clientError`-style hook (Node) for malformed requests and failed handshakes — handled correctly today, and no peer but Node exposes it; `http.route` (no router); a development error *page* in the runtime (Bun) — esrun never sends a stack to a client, and esdev already has an overlay (below).
+
+**Follow-up in this decision:** `esdev start` sends a server's unhandled request error to the page's error overlay, beside build errors.

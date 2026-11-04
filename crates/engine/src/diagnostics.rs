@@ -184,6 +184,102 @@ pub struct SpanRecord {
     pub tick: u64,
 }
 
+/// `http.server.request.duration`'s bucket boundaries, in seconds — the
+/// OpenTelemetry HTTP semantic convention's advice (D206).
+pub const HTTP_DURATION_BOUNDS: [f64; 14] = [
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+];
+
+/// One attribute set's share of the duration histogram.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DurationSeries {
+    /// One count per bucket: `HTTP_DURATION_BOUNDS.len() + 1`, the last open.
+    pub buckets: [u64; HTTP_DURATION_BOUNDS.len() + 1],
+    /// Requests counted.
+    pub count: u64,
+    /// Their total duration, in seconds.
+    pub sum: f64,
+    /// The shortest, in seconds.
+    pub min: f64,
+    /// The longest, in seconds.
+    pub max: f64,
+}
+
+impl DurationSeries {
+    fn new() -> Self {
+        DurationSeries {
+            buckets: [0; HTTP_DURATION_BOUNDS.len() + 1],
+            count: 0,
+            sum: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+        }
+    }
+
+    fn observe(&mut self, seconds: f64) {
+        // A value equal to a bound belongs to that bound's bucket: OTLP's
+        // buckets are `(previous, bound]`.
+        let index = HTTP_DURATION_BOUNDS
+            .iter()
+            .position(|&bound| seconds <= bound)
+            .unwrap_or(HTTP_DURATION_BOUNDS.len());
+        self.buckets[index] += 1;
+        self.count += 1;
+        self.sum += seconds;
+        self.min = self.min.min(seconds);
+        self.max = self.max.max(seconds);
+    }
+}
+
+/// The attributes a duration is counted under: method, status code, and
+/// `error.type` when the request failed.
+pub type DurationKey = (Rc<str>, Option<Rc<str>>, Option<Rc<str>>);
+
+/// `http.server.request.duration` (D206): every request's duration, by
+/// attribute set, since the exporter started. Cumulative, so a collector that
+/// misses an export loses nothing.
+#[derive(Clone, Debug, Default)]
+pub struct HttpServerMetrics {
+    /// One histogram per attribute set.
+    pub series: std::collections::BTreeMap<DurationKey, DurationSeries>,
+}
+
+impl HttpServerMetrics {
+    /// The methods counted under their own name; anything else is `_OTHER`,
+    /// as the convention says, so a client cannot mint a series per request.
+    const METHODS: [&'static str; 9] = [
+        "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+    ];
+
+    fn observe(&mut self, record: &SpanRecord) {
+        let attribute = |name: &str| {
+            record
+                .attributes
+                .iter()
+                .find_map(|(key, value)| match value {
+                    AttrValue::Str(text) if &**key == name => Some(text.clone()),
+                    _ => None,
+                })
+        };
+        let method = attribute("http.request.method").unwrap_or_else(|| record.name.clone());
+        let method: Rc<str> = if Self::METHODS.contains(&&*method) {
+            method
+        } else {
+            Rc::from("_OTHER")
+        };
+        let key = (
+            method,
+            attribute("http.response.status_code"),
+            attribute("error.type"),
+        );
+        let seconds = ((record.ended_at - record.started_at) / 1000.0).max(0.0);
+        self.series
+            .entry(key)
+            .or_insert_with(DurationSeries::new)
+            .observe(seconds);
+    }
+}
+
 /// A subscription's filter, already reduced to the form the recording path
 /// tests: names resolved to a mask, fractions to integers.
 #[derive(Clone, Debug)]
@@ -339,6 +435,10 @@ pub struct Recorder {
     /// runtime hands it one backed by the `Clock` provider, so a test with a
     /// fake clock sees fake timestamps here too (D5: no ambient authority).
     clock: Option<Rc<dyn Fn() -> f64>>,
+    /// The request-duration histogram, when the exporter asked for it (D206).
+    /// Fed before any subscription's filter, so sampling thins traces and
+    /// never counts.
+    http_metrics: Option<HttpServerMetrics>,
 }
 
 impl Recorder {
@@ -358,7 +458,19 @@ impl Recorder {
             tick_ended_at: 0.0,
             loop_metrics: LoopMetrics::default(),
             clock: None,
+            http_metrics: None,
         }
+    }
+
+    /// Starts counting request durations (D206).
+    pub fn enable_http_metrics(&mut self) {
+        self.http_metrics
+            .get_or_insert_with(HttpServerMetrics::default);
+    }
+
+    /// The request-duration histogram so far, when it is being counted.
+    pub fn http_metrics(&self) -> Option<&HttpServerMetrics> {
+        self.http_metrics.as_ref()
     }
 
     /// The loop's own numbers, for `metrics()`.
@@ -542,6 +654,11 @@ impl Recorder {
     /// owns what it holds and a subscriber that closes must be able to drop its
     /// records without consulting the others.
     pub fn record(&mut self, record: SpanRecord) {
+        if record.kind == SpanKind::Request
+            && let Some(metrics) = &mut self.http_metrics
+        {
+            metrics.observe(&record);
+        }
         if self.wanted == 0 {
             return;
         }
@@ -969,6 +1086,54 @@ fn read_pairs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(method: &str, status: &str, error: Option<&str>, ms: f64) -> SpanRecord {
+        let mut r = record(SpanKind::Request, Some("t"), 0.0, ms);
+        r.attributes = vec![
+            (
+                Rc::from("http.request.method"),
+                AttrValue::Str(Rc::from(method)),
+            ),
+            (
+                Rc::from("http.response.status_code"),
+                AttrValue::Str(Rc::from(status)),
+            ),
+        ];
+        if let Some(error) = error {
+            r.attributes
+                .push((Rc::from("error.type"), AttrValue::Str(Rc::from(error))));
+        }
+        r
+    }
+
+    // D206: counted with no subscription at all, by attribute set; a duration
+    // on a bound lands in that bound's bucket; an unknown method is `_OTHER`.
+    #[test]
+    fn request_durations_are_counted_by_attribute_set() {
+        let mut rec = Recorder::new();
+        rec.enable_http_metrics();
+        rec.record(request("GET", "200", None, 5.0));
+        rec.record(request("GET", "200", None, 20_000.0));
+        rec.record(request("BREW", "500", Some("TypeError"), 1.0));
+        rec.record(record(SpanKind::Op, Some("t"), 0.0, 1.0));
+        let series = &rec.http_metrics().unwrap().series;
+        assert_eq!(series.len(), 2);
+        let ok = &series[&(Rc::from("GET"), Some(Rc::from("200")), None)];
+        assert_eq!(ok.count, 2);
+        assert_eq!(ok.buckets[0], 1, "5ms is the 0.005s bucket");
+        assert_eq!(
+            ok.buckets[HTTP_DURATION_BOUNDS.len()],
+            1,
+            "20s is past the last bound"
+        );
+        assert_eq!((ok.min, ok.max), (0.005, 20.0));
+        let other = &series[&(
+            Rc::from("_OTHER"),
+            Some(Rc::from("500")),
+            Some(Rc::from("TypeError")),
+        )];
+        assert_eq!(other.count, 1);
+    }
 
     fn record(kind: SpanKind, trace: Option<&str>, started: f64, ended: f64) -> SpanRecord {
         SpanRecord {

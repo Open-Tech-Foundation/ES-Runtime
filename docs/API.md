@@ -2353,7 +2353,7 @@ await server.stop();
 | `CookieMap`                       | `class`                                       | Cookies by name, from a `Cookie` header; records `Set-Cookie` changes. See [Cookies](#cookies). |
 | `CSRF`                            | `object`                                      | `generate`/`verify` CSRF tokens bound to a session. See [CSRF](#csrf). |
 | `Webhook`, `WebhookVerificationError` | `class`                                  | Sign and verify Standard Webhooks deliveries. See [Webhooks](#webhooks). |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders?, onError? }, Handler) => Server` | Start a server bound to `options`. `onError(error, request)` answers for a handler that threw or returned no `Response` (D206); without it that is a `500`, reported with the request's method, path and trace id. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.

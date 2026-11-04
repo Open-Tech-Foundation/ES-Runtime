@@ -15,7 +15,8 @@ An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes
 </Callout>
 
 <Callout type="warning" title="All I/O is async">
-  A handler error or a non-`Response` return becomes a `500`. Request and
+  A handler error or a non-`Response` return becomes a `500`, or what
+  [`onError`](#handler-errors) answers. Request and
   response bodies stream with backpressure; string/byte bodies use the buffered
   fast path (`Content-Length`). HTTP/1.1 and HTTP/2 are both served on one port —
   ALPN over TLS, h2c by prior knowledge on cleartext — and the version never
@@ -34,7 +35,7 @@ import { serve, trailersOf, withTrailers, Cookie, CookieMap, CSRF, Webhook, Webh
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `requestCert`, `ca` and `crl` require client certificates — see [Client certificates](#client-certificates). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, requestCert?, ca?, crl?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort?, trustTraceHeaders?, onError? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `requestCert`, `ca` and `crl` require client certificates — see [Client certificates](#client-certificates). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 
@@ -54,6 +55,38 @@ const server = serve({ port: 8080 }, async (request) => {
 const { hostname, port } = await server.addr;
 console.log(`listening on http://${hostname}:${port}`);
 ```
+
+## Handler errors
+
+A handler that throws, or returns something other than a `Response`, is a plain
+`500 Internal Server Error`. The error is reported with the request it belongs
+to: method, path (never the query) and trace id. A `runtime:http` handler error
+never reaches the client.
+
+```text
+runtime:http: GET /orders/42 failed (trace 4bf92f3577b34da6a3ce929d0e0e4736)
+RangeError: db exploded
+    at …
+```
+
+`onError(error, request)` answers instead, for a JSON API or an error page:
+
+```js
+serve({
+  port: 8080,
+  onError: (error, request) =>
+    Response.json({ error: "internal" }, { status: 500 }),
+}, handler);
+```
+
+| `onError` | What happens |
+| --- | --- |
+| Returns a `Response` | It is sent; the error counts as handled and is not reported |
+| Throws, or returns no `Response` | That is reported, and the plain `500` is sent |
+
+The report is an `error` event on `globalThis`; the request line is printed
+only when nothing handles the event. A framework catches its own handler
+errors, so under one `onError` does not fire.
 
 ## Trailers
 

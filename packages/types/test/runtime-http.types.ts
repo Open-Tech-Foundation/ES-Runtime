@@ -54,3 +54,14 @@ const headers: string[] = map.toSetCookieHeaders();
 // @ts-expect-error — sameSite is one of three values.
 new Cookie("a", "b", { sameSite: "sometimes" });
 void [header, expired, headers];
+
+// D206: onError answers with a Response, and is given the request.
+serve(
+  {
+    onError: (error, request) =>
+      Response.json({ error: String(error), url: request.url }, { status: 500 }),
+  },
+  () => new Response("ok"),
+);
+// @ts-expect-error onError must return a Response
+serve({ onError: () => "nope" }, () => new Response("ok"));

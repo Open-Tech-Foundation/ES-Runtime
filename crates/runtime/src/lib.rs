@@ -98,7 +98,15 @@ struct Telemetry {
     origin: otlp::TimeOrigin,
     subscription: u64,
     recorder: Rc<RefCell<diagnostics::Recorder>>,
+    /// When counting began, and when metrics were last exported (D206):
+    /// monotonic milliseconds.
+    metrics_started_at: f64,
+    metrics_exported_at: f64,
 }
+
+/// How often the request-duration metric is exported: OpenTelemetry's default
+/// metric export interval (`OTEL_METRIC_EXPORT_INTERVAL`, 60s), and at exit.
+const METRICS_INTERVAL_MS: f64 = 60_000.0;
 
 /// How a runtime exports OpenTelemetry (DECISIONS.md D89).
 #[derive(Clone, Default)]
@@ -694,11 +702,15 @@ impl Runtime {
             true,
             diagnostics::Sink::Host,
         );
+        recorder.borrow_mut().enable_http_metrics();
+        let now = recorder.borrow().now();
         self.telemetry = Some(Telemetry {
             config,
             origin,
             subscription: id,
             recorder,
+            metrics_started_at: now,
+            metrics_exported_at: now,
         });
     }
 
@@ -708,6 +720,7 @@ impl Runtime {
     /// one. A failure to export is the sink's to absorb: telemetry that cannot
     /// be delivered must never fail the program that produced it.
     fn export_telemetry(&mut self) {
+        self.export_metrics(false);
         let Some(telemetry) = &self.telemetry else {
             return;
         };
@@ -732,6 +745,35 @@ impl Runtime {
                 // is being exported.
                 drop(sink.export("traces", payload));
             }
+        }
+    }
+
+    /// Ships `http.server.request.duration` (D206) when the interval has
+    /// passed, or now when `force` — at exit. Cumulative, so each export
+    /// carries everything since the start, and a lost one costs nothing.
+    fn export_metrics(&mut self, force: bool) {
+        let Some(telemetry) = &mut self.telemetry else {
+            return;
+        };
+        let now = telemetry.recorder.borrow().now();
+        if !force && now - telemetry.metrics_exported_at < METRICS_INTERVAL_MS {
+            return;
+        }
+        telemetry.metrics_exported_at = now;
+        let payload = {
+            let recorder = telemetry.recorder.borrow();
+            recorder.http_metrics().and_then(|metrics| {
+                otlp::encode_metrics(
+                    metrics,
+                    &telemetry.config.service_name,
+                    telemetry.origin,
+                    telemetry.metrics_started_at,
+                    now,
+                )
+            })
+        };
+        if let (Some(payload), Some(sink)) = (payload, &telemetry.config.sink) {
+            drop(sink.export("metrics", payload));
         }
     }
 
@@ -1463,6 +1505,7 @@ impl Runtime {
         // The last turn's records were never drained, because the drain happens
         // at the *end* of a turn and the loop has stopped.
         self.export_telemetry();
+        self.export_metrics(true);
         let sink = self
             .telemetry
             .as_ref()

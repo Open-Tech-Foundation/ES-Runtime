@@ -385,6 +385,16 @@ declare module "runtime:http" {
      * @defaultValue `false`
      */
     trustTraceHeaders?: boolean;
+    /**
+     * Answers for a handler that threw or returned something other than a
+     * `Response` — Deno's `onError`, with the request. Its `Response` is sent,
+     * and the error it was given is not reported. If it throws or returns no
+     * `Response`, that is reported and a plain `500` is sent.
+     *
+     * Without it a failure is a plain `500`, reported with the request's
+     * method, path and trace id.
+     */
+    onError?: (error: unknown, request: Request) => Response | Promise<Response>;
   }
 
   /**

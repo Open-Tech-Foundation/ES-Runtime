@@ -265,7 +265,7 @@ async function trailersOf(response) {
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
 // the only honest signal once the status line is on the wire.
-async function pumpResponseBody(stream, id, trailers) {
+async function pumpResponseBody(stream, id, trailers, context) {
   let reader;
   try {
     reader = stream.getReader(); // throws on a locked/consumed stream
@@ -294,8 +294,9 @@ async function pumpResponseBody(stream, id, trailers) {
     // and left the server's own author nothing to go on: `serve` has no error
     // hook, so a handler whose stream yields a bad chunk saw a connection reset
     // and no reason for it. Reported so it surfaces where uncaught errors do.
-    reportError(e);
+    __internal.failure.report(e, context());
     await ops.http_response_body_close(id, String((e && e.message) || e));
+    return e;
   } finally {
     if (reader) reader.releaseLock();
   }
@@ -462,9 +463,17 @@ function inRequestSpan(method, url, run) {
   }
   // `run()` hands back the handler's promise, so the span ends when the response
   // is complete rather than when the handler first yields.
+  // The handler's outcome (D206): the status sent, and what failed. A 5xx
+  // or a throw is a server error; a 4xx is the client's, and the span is OK.
   return Promise.resolve(result).then(
     (value) => {
-      finish("ok");
+      if (value && typeof value === "object" && "status" in value) {
+        attributes.push("http.response.status_code", String(value.status));
+        if (value.errorType !== null) attributes.push("error.type", value.errorType);
+        finish(value.errorType !== null ? "error" : "ok");
+      } else {
+        finish("ok");
+      }
       return value;
     },
     (error) => {
@@ -474,7 +483,41 @@ function inRequestSpan(method, url, run) {
   );
 }
 
-async function handleRequest(entry, handler) {
+// The line an unhandled request error is reported with (D206): method, path
+// without its query (D141 — a query is where tokens travel), and the trace id
+// when there is one.
+function requestContext(method, url) {
+  const trace = globalThis.__ctx_trace?.() ?? null;
+  return `runtime:http: ${method} ${pathOf(url)} failed${trace ? ` (trace ${trace})` : ""}`;
+}
+
+// What a thrown value is, in the one word `error.type` wants.
+function errorTypeOf(e) {
+  return (e && typeof e === "object" && e.constructor?.name) || "Error";
+}
+
+// The response for a handler that failed: `onError`'s when it gives one,
+// otherwise the plain 500 after the error is reported. An error `onError`
+// receives is handled; one it throws, or a non-Response it returns, is not.
+async function failedResponse(error, request, onError, context) {
+  if (onError !== null) {
+    try {
+      const response = await onError(error, request ?? null);
+      if (response instanceof Response) return response;
+      __internal.failure.report(
+        new TypeError(`serve() onError returned ${describeReturn(response)} instead of a Response`),
+        context(),
+      );
+    } catch (e) {
+      __internal.failure.report(e, context());
+    }
+    return new Response("Internal Server Error", { status: 500 });
+  }
+  __internal.failure.report(error, context());
+  return new Response("Internal Server Error", { status: 500 });
+}
+
+async function handleRequest(entry, handler, onError) {
   const requestId = entry[0];
   // Flipped once the response has been handed over, which is also when the
   // host stops holding anything for this request. Shared with the body stream
@@ -490,6 +533,10 @@ async function handleRequest(entry, handler) {
   let response;
   let request;
   let cookies = null;
+  // What failed, for the span: the error's class for a throw, the status for a
+  // 5xx a handler chose to return.
+  let errorType = null;
+  const context = () => requestContext(method, url);
   try {
     const init = { method, headers };
     // The body streams from the host chunk-by-chunk; nothing is buffered until
@@ -524,19 +571,19 @@ async function handleRequest(entry, handler) {
       // out as the body "[object Object]", successfully. It is a 500, and the
       // reason is reported so it is not invisible — the response itself says
       // nothing, since a handler's mistake is not the client's business.
-      reportError(
-        new TypeError(
-          `runtime:http handler returned ${describeReturn(response)} instead of a Response`,
-        ),
+      const error = new TypeError(
+        `runtime:http handler returned ${describeReturn(response)} instead of a Response`,
       );
-      response = new Response("Internal Server Error", { status: 500 });
+      errorType = "TypeError";
+      response = await failedResponse(error, request, onError, context);
     }
   } catch (e) {
     cookies = request ? (requestCookieMaps.get(request) ?? null) : null;
     // Same reasoning: a thrown handler is a 500 to the client and a reported
-    // error to the developer, rather than a silent one.
-    reportError(e);
-    response = new Response("Internal Server Error", { status: 500 });
+    // error to the developer, rather than a silent one — unless `onError`
+    // answers for it.
+    errorType = errorTypeOf(e);
+    response = await failedResponse(e, request, onError, context);
   }
 
   // Fast path: hand a buffered body to http_respond without an async round-trip.
@@ -607,18 +654,21 @@ async function handleRequest(entry, handler) {
     // already answered with a 500; one refused FileRead is thrown here, before
     // the request was given up, so it is answered here.
     try {
-      ops.http_respond_file(...args).catch(reportError);
+      ops.http_respond_file(...args).catch((e) => __internal.failure.report(e, context()));
     } catch (e) {
-      reportError(e);
+      __internal.failure.report(e, context());
       ops.http_respond(requestId, 500, null, null, null);
     }
   } else {
     ops.http_respond(...args);
   }
   if (stream) {
-    await pumpResponseBody(stream, streamId, trailers);
+    const failed = await pumpResponseBody(stream, streamId, trailers, context);
     answered.done = true;
+    if (failed !== undefined && errorType === null) errorType = errorTypeOf(failed);
   }
+  if (errorType === null && parts.status >= 500) errorType = String(parts.status);
+  return { status: parts.status, errorType };
 }
 
 // The handle returned by serve(): `addr` resolves to the bound address,
@@ -634,6 +684,7 @@ class Server {
     reusePort,
     trustTraceHeaders,
     handler,
+    onError,
   ) {
     let resolveAddr, rejectAddr, resolveFinished, rejectFinished;
     this.addr = new Promise((res, rej) => {
@@ -722,7 +773,7 @@ class Server {
           // loop that dispatched it.
           const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort, peerCertificate];
           inRequestScope(headers, trustTraceHeaders, method, url, () =>
-            handleRequest(entry, handler),
+            handleRequest(entry, handler, onError),
           );
         }
       }
@@ -1296,7 +1347,18 @@ function serve(options, handler) {
     parseReusePort(options),
     parseTrustTraceHeaders(options),
     handler,
+    parseOnError(options),
   );
+}
+
+// `onError(error, request)` (D206): optional, a function.
+function parseOnError(options) {
+  const onError = options.onError;
+  if (onError === undefined || onError === null) return null;
+  if (typeof onError !== "function") {
+    throw new TypeError("serve(): onError must be a function");
+  }
+  return onError;
 }
 
 // ---- CSRF tokens (D162) ----------------------------------------------------

@@ -25,9 +25,23 @@ namespace) is unstable and may change between minor releases until the API freez
   loopback always goes direct. No environment variable is read: esrun warns
   when `HTTP(S)_PROXY` is set. A refused tunnel is the new code
   `ERR_PROXY_TUNNEL`.
+- **`serve({ onError(error, request) })`** (DECISIONS D206): answers for a
+  handler that threw or returned no `Response`. Without it the `500`'s report
+  now names the request: `runtime:http: GET /path failed (trace …)`, the query
+  left out.
+- **`--otel` reports the outcome of a request**: its span carries
+  `http.response.status_code` and `error.type` and is `ERROR` for a `5xx` or a
+  throw, and `http.server.request.duration` is exported to `/v1/metrics` —
+  counted before sampling. A request span used to close `OK` whatever happened.
 - The `WebSocket` client has the 30s connect deadline `fetch` has, and its
   connect errors carry codes (`ERR_DNS`, `ERR_CONNECTION_REFUSED`, `ERR_TLS`,
   `ERR_TIMED_OUT`).
+
+### Fixed
+
+- A response the server cut short fails `fetch` with `ERR_CONNECTION_RESET`
+  and "the connection closed before the response completed", instead of the
+  HTTP client's chain of wrappers.
 
 ### Removed
 

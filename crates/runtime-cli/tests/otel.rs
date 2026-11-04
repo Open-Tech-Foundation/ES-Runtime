@@ -187,15 +187,24 @@ fn an_unmodified_program_exports_a_usable_trace() {
         ],
     );
     assert!(!payloads.is_empty(), "nothing was exported");
-    // Every payload is OTLP, on the traces signal, with the service named.
+    // Every payload is OTLP with the service named: traces on the traces
+    // signal, and the request-duration metric on the metrics one (D206).
     for payload in &payloads {
-        assert!(
-            payload.starts_with("/v1/traces\n"),
-            "wrong signal: {payload}"
-        );
-        assert!(payload.contains(r#""resourceSpans""#));
+        if payload.starts_with("/v1/metrics\n") {
+            assert!(payload.contains(r#""resourceMetrics""#));
+        } else {
+            assert!(
+                payload.starts_with("/v1/traces\n"),
+                "wrong signal: {payload}"
+            );
+            assert!(payload.contains(r#""resourceSpans""#));
+        }
         assert!(payload.contains(r#""key":"service.name""#));
     }
+    let payloads: Vec<String> = payloads
+        .into_iter()
+        .filter(|p| p.starts_with("/v1/traces\n"))
+        .collect();
 
     let spans = spans(&payloads);
     // The request is a SERVER span (kind 2) and is the root of its trace.
@@ -626,4 +635,95 @@ fn exported_spans_carry_resource_and_scope_identity() {
     // Everything exported was sampled by definition — it would not be here
     // otherwise — so the flag says so rather than being left unset.
     assert!(body.contains(r#""flags":1"#), "no sampled flag: {body}");
+}
+
+/// D206: a request span carries its status code and is an error for a 5xx;
+/// `http.server.request.duration` counts every request — sampling included —
+/// by method, status and `error.type`, on `/v1/metrics`.
+#[test]
+fn request_spans_carry_their_status_and_durations_are_counted() {
+    let payloads = export(
+        "request-metrics",
+        r#"
+        import { serve } from "runtime:http";
+        const server = serve({ hostname: "127.0.0.1", port: 0 }, (request) => {
+          const path = new URL(request.url).pathname;
+          if (path === "/boom") throw new RangeError("x");
+          if (path === "/missing") return new Response("no", { status: 404 });
+          return new Response("ok");
+        });
+        const { port } = await server.addr;
+        for (const path of ["/ok", "/ok", "/boom", "/missing"]) {
+          await (await fetch(`http://127.0.0.1:${port}${path}`)).text();
+        }
+        await server.stop();
+        "#,
+        // Traces sampled away entirely: the counts must not be.
+        &["--allow-net", "--allow-listen", "--otel-sample=0"],
+    );
+    let metrics: Vec<&String> = payloads
+        .iter()
+        .filter(|p| p.starts_with("/v1/metrics\n"))
+        .collect();
+    assert_eq!(metrics.len(), 1, "one export at exit: {payloads:?}");
+    let body = metrics[0];
+    assert!(
+        body.contains(r#""name":"http.server.request.duration","unit":"s""#),
+        "{body}"
+    );
+    assert!(body.contains(r#""aggregationTemporality":2"#), "{body}");
+    for (status, count) in [("200", 2), ("404", 1), ("500", 1)] {
+        let point = body
+            .split(r#"{"attributes":"#)
+            .find(|p| p.contains(&format!(r#""intValue":"{status}""#)))
+            .unwrap_or_else(|| panic!("no {status} series in {body}"));
+        assert!(
+            point.contains(&format!(r#""count":"{count}""#)),
+            "{status}: {point}"
+        );
+    }
+    assert!(
+        body.contains(r#"{"key":"error.type","value":{"stringValue":"RangeError"}}"#),
+        "{body}"
+    );
+    assert!(
+        !payloads.iter().any(|p| p.starts_with("/v1/traces\n")),
+        "--otel-sample=0 exported traces"
+    );
+
+    // Unsampled, the 500's span is an error and says why.
+    let payloads = export(
+        "request-span-status",
+        r#"
+        import { serve } from "runtime:http";
+        const server = serve({ hostname: "127.0.0.1", port: 0 }, () => {
+          throw new RangeError("x");
+        });
+        const { port } = await server.addr;
+        await (await fetch(`http://127.0.0.1:${port}/boom`)).text();
+        await server.stop();
+        "#,
+        &["--allow-net", "--allow-listen"],
+    );
+    let traces: String = payloads
+        .iter()
+        .filter(|p| p.starts_with("/v1/traces\n"))
+        .cloned()
+        .collect();
+    let server_span = traces
+        .split(r#"{"traceId":""#)
+        .find(|s| s.contains(r#""kind":2"#))
+        .expect("a SERVER span");
+    assert!(
+        server_span.contains(r#""status":{"code":2"#),
+        "{server_span}"
+    );
+    assert!(
+        server_span.contains(r#"{"key":"http.response.status_code","value":{"intValue":"500"}}"#),
+        "{server_span}"
+    );
+    assert!(
+        server_span.contains(r#""stringValue":"RangeError""#),
+        "{server_span}"
+    );
 }
