@@ -28,6 +28,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **Server errors in the overlay** (DECISIONS D207). When the server
+  `esdev start` runs fails a request or crashes, open pages show it under
+  **Server error**, with the request's method, path and trace id.
+- `esdev start` and its server are linked: a restart drains in-flight
+  requests on every platform, Windows included (it used to kill the server
+  there), the loop learns the server is listening when `serve()` binds, and a
+  server whose `esdev start` is killed exits instead of holding its port.
 - **An outbound proxy** (DECISIONS D205). `fetch`, the `WebSocket` client
   and the `--otel` exporter — in the programs esdev runs, `esdev start`'s
   server, `esdev create`'s registry lookups and `esdev upgrade` — follow

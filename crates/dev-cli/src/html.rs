@@ -461,7 +461,8 @@ fn reload_client(port: u16) -> String {
     )
 }
 
-/// Shows a build failure full-screen, and clears it on the next update.
+/// Shows a build failure — or a server's error (D207), under the heading its
+/// message carries — full-screen, and clears it on the next update.
 ///
 /// Plain text, not a format string: it is interpolated into the client as
 /// data, so its braces ship as written. Built once and reused: a second
@@ -481,14 +482,14 @@ fn overlay_script() -> &'static str {
     if(!d){\
     d=document.createElement('div');d.id='__esdev_err';\
     d.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(24,4,4,.94);color:#ffd9d9;padding:24px;overflow:auto;font:14px/1.5 monospace;';\
-    var h=document.createElement('div');\
-    h.textContent='Build failed \\u2014 fix and save';\
+    var h=document.createElement('div');h.id='__esdev_err_h';\
     h.style.cssText='font-weight:bold;margin-bottom:12px;';\
     var p=document.createElement('pre');p.id='__esdev_err_pre';\
     p.style.cssText='margin:0;white-space:pre-wrap;word-break:break-word;';\
     d.appendChild(h);d.appendChild(p);\
     (document.body||document.documentElement).appendChild(d);\
     }\
+    document.getElementById('__esdev_err_h').textContent=m.title||'Build failed \\u2014 fix and save';\
     document.getElementById('__esdev_err_pre').textContent=m.message||'Build failed';\
     }"
 }

@@ -213,6 +213,8 @@ fn parse_args() -> Result<Config, String> {
                     // one: a debugger port would undo every --deny-* the
                     // deployment was started with (D59).
                     inspector: None,
+                    console: None,
+                    on_start: None,
                 });
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -263,6 +265,8 @@ fn parse_args() -> Result<Config, String> {
                     // one: a debugger port would undo every --deny-* the
                     // deployment was started with (D59).
                     inspector: None,
+                    console: None,
+                    on_start: None,
                 });
             }
         }

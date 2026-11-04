@@ -310,6 +310,8 @@ pub(crate) async fn launch(
                 extensions: crate::guest::extensions_hosting(hosted),
                 observer: None,
                 inspector: None,
+                console: None,
+                on_start: None,
             };
             if let Err(err) = runtime.block_on(es_runtime_cli_common::run("esdev", config)) {
                 let message = err.to_string();

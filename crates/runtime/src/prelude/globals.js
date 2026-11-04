@@ -2,6 +2,7 @@
 // Loaded after console so reportError can route through it.
 (() => {
   "use strict";
+  const ops = globalThis.__ops;
 
   globalThis.queueMicrotask = (callback) => {
     if (typeof callback !== "function") {
@@ -47,6 +48,8 @@
     error && typeof error === "object" && "message" in error
       ? String(error.message)
       : String(error);
+  const nameOf = (error) =>
+    (error && typeof error === "object" && error.constructor?.name) || "Error";
   const stackOf = (error) =>
     error && typeof error === "object" && "stack" in error
       ? error.stack
@@ -79,6 +82,9 @@
     // it to this agent's console too would report one failure twice.
     if (__internal.failure.unclaimed?.(error)) return;
     globalThis.console.error(text);
+    // The same failure as data, for a host that shows it elsewhere — esdev's
+    // overlay (D207). A no-op under esrun.
+    ops.console_report(context ?? null, nameOf(error), messageOf(error), stackOf(error));
   };
   // Report an exception the way the platform does: dispatch an "error"
   // ErrorEvent on the global scope, and fall back to console.error only if

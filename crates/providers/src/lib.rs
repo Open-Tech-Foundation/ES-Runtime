@@ -2558,6 +2558,25 @@ pub trait HttpServerProvider: Send + Sync {
 pub trait Console: Send + Sync {
     /// Records one already-formatted console message at `level`.
     fn write(&self, level: ConsoleLevel, message: &str);
+
+    /// An error nothing handled, as data, after it was written (D207). How a
+    /// development host shows it somewhere besides the terminal; the default
+    /// does nothing, and `esrun` keeps it.
+    fn report(&self, _report: &ErrorReport<'_>) {}
+}
+
+/// An unhandled error, as [`Console::report`] receives it.
+#[derive(Debug, Clone, Copy)]
+pub struct ErrorReport<'a> {
+    /// What it belongs to, when the reporter knew: `runtime:http`'s
+    /// `GET /path failed (trace …)`.
+    pub context: Option<&'a str>,
+    /// The error's class name, `Error` when it had none.
+    pub name: &'a str,
+    /// Its message.
+    pub message: &'a str,
+    /// Its stack, or the message again when it had none.
+    pub stack: &'a str,
 }
 
 /// A parameter bound to a statement — the value half of the binding.

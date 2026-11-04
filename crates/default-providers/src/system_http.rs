@@ -197,6 +197,10 @@ pub struct SystemHttpServer {
     next_id: Arc<AtomicU64>,
     /// Addresses `serve` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
     allow_listen: Option<Arc<crate::HostAllowlist>>,
+    /// Ports bound so far, in order, and a wake-up for whoever waits on the
+    /// next — how esdev's link says `ready {port}` (D207) without polling.
+    bound: Arc<Mutex<Vec<u16>>>,
+    bound_notify: Arc<tokio::sync::Notify>,
 }
 
 impl SystemHttpServer {
@@ -216,6 +220,17 @@ impl SystemHttpServer {
 
     fn id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Every port a `serve()` has bound so far, in the order bound.
+    pub fn bound_ports(&self) -> Vec<u16> {
+        self.bound.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Resolves once a port is bound after the last call (or ever, on the
+    /// first). One waiter: a bind with nobody waiting is kept for the next.
+    pub async fn port_bound(&self) {
+        self.bound_notify.notified().await;
     }
 
     /// Stops every live server from accepting, and returns how many there were.
@@ -723,6 +738,13 @@ impl HttpServerProvider for SystemHttpServer {
                 crate::listener::bind(options.host.as_str(), options.port, options.reuse_port)
                     .await?;
             let local = listener.local_addr().ok();
+            if let Some(addr) = local {
+                this.bound
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(addr.port());
+                this.bound_notify.notify_one();
+            }
             let authority = local.map(|a| a.to_string()).unwrap_or_default();
             // The scheme the guest sees in `request.url`. A TLS listener serves
             // https:, and reporting http: there would misdescribe the request to

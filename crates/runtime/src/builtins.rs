@@ -191,6 +191,7 @@ pub(crate) fn install(
 /// `__ops.console(level, message)` → the [`Console`] sink. The prelude formats
 /// arguments into `message`; the level is one of debug/info/log/warn/error.
 fn install_console(engine: &mut dyn Engine, console: Arc<dyn Console>) -> Result<()> {
+    let console_for_report = console.clone();
     engine.register_op(OpDecl::sync("console", move |args| {
         let level = match args.first().and_then(Value::as_str) {
             Some("debug") => ConsoleLevel::Debug,
@@ -201,6 +202,19 @@ fn install_console(engine: &mut dyn Engine, console: Arc<dyn Console>) -> Result
         };
         let message = args.get(1).and_then(Value::as_str).unwrap_or("");
         console.write(level, message);
+        Ok(Value::Undefined)
+    }))?;
+    // `__ops.console_report(context, name, message, stack)`: an unhandled
+    // error, as data, after the prelude has written it (D207).
+    let reporter = console_for_report;
+    engine.register_op(OpDecl::sync("console_report", move |args| {
+        let text = |i: usize| args.get(i).and_then(Value::as_str).unwrap_or("");
+        reporter.report(&es_runtime_providers::ErrorReport {
+            context: args.first().and_then(Value::as_str),
+            name: text(1),
+            message: text(2),
+            stack: text(3),
+        });
         Ok(Value::Undefined)
     }))?;
     Ok(())

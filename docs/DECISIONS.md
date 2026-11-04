@@ -4319,4 +4319,27 @@ How the mainstream tools split it: Node has no self-upgrade (version managers, i
 
 **Rejected:** a `clientError`-style hook (Node) for malformed requests and failed handshakes — handled correctly today, and no peer but Node exposes it; `http.route` (no router); a development error *page* in the runtime (Bun) — esrun never sends a stack to a client, and esdev already has an overlay (below).
 
-**Follow-up in this decision:** `esdev start` sends a server's unhandled request error to the page's error overlay, beside build errors.
+**Follow-up:** `esdev start` sends a server's unhandled request error to the page's error overlay, beside build errors — through the link D207 introduced for it.
+
+### D207 — `esdev start` leads its servers over a link: errors, readiness, stop · *Accepted (2026-11-05)* · *amends D62, D206*
+
+**Context:** D206 left a server's errors out of the overlay: the server is a child process (D62) whose output goes straight to the terminal, and esdev heard nothing from it but its exit. The same gap had three other symptoms. Readiness was a TCP connect polled every 10ms. A restart was `SIGTERM`, which Windows does not have, so there it was a kill and in-flight requests were dropped. And D62 recorded that a child outlives a supervisor killed with `SIGKILL`. A first proposal — the child POSTing console lines it recognised by prefix to the dev server — was rejected as fragile: text matching, one-way, and no lifecycle.
+
+How the peers compare: Next.js and Bun put the server, the bundler and the overlay in one process, which is how their overlays see server errors; Vite stays out of the backend, so a separately run backend's errors never reach its overlay; Node's `fork()` gives parent and child an inherited IPC channel (`'ipc'` stdio, `NODE_CHANNEL_FD`); .NET Aspire collects its services' telemetry over OTLP and controls their processes separately.
+
+**Decision (maintainer, 2026-11-05):** `esdev start` is the leader, and each server child holds one link to it.
+
+- **Transport: a local socket.** A Unix socket in a directory created `0700` under the temp directory; a named pipe with a random name on Windows, remote clients rejected. Both are tokio's, so no crate is added. The child gets the endpoint as a hidden `--dev-link=<endpoint>` and a one-time token in `ESDEV_LINK_TOKEN` — the environment, because a command line is readable by every user and a process's environment only by its owner. The leader hangs up on a connection that does not open with the right token within 5s; the token is compared without early exit.
+- **Protocol: JSON, one message per line, versioned in `hello`.** The volume is a few messages per restart or error and the payload is text, so a binary format buys nothing and JSON is readable in a log; CBOR is the choice if the link ever carries bulk or binary data. Messages: child → leader `hello {version, token, pid}`, `ready {port}`, `error {context, name, message, stack}`, `crash {message}`; leader → child `stop`. A leader ignores a message type it does not know, so a newer child does not break an older leader.
+- **Errors come as data, not text.** `Console` gains `report(&ErrorReport)`, a no-op by default; the prelude calls it after it writes an unhandled error, through one op. esdev's linked child runs with a console that writes as before and also sends `error`. `esrun` keeps the default and has no link code: `cli-common` gains only two generic hooks, a console and an `on_start` callback.
+- **Lifecycle.** `ready` is sent as `serve()` binds (`SystemHttpServer` records each bound port); the connect poll stays as the fallback for a server that listens through `runtime:net`. `stop` runs the same drain `SIGTERM` does (`shutdown::drain`), on every platform; the signal stays the fallback for an unlinked child. A child whose link closes drains and exits — the orphan D62 left open.
+- **The overlay** shows `error` and `crash` under the heading **Server error**, cleared by the next update and not replayed to pages that connect later.
+
+**Rejected:**
+- **The server in esdev's process** (Vite's module runner, Bun's single process): no fresh process per restart, a crash takes the tooling down, and development stops running the production file (D62).
+- **An inherited channel** (Node's `fork()`): the strongest isolation, but passing an extra handle needs `unsafe` spawning on Unix and Win32 handle inheritance, which means a platform-binding crate.
+- **Loopback TCP with a token**: one code path everywhere, but a port any local process or browser page can reach; the local socket has no network surface.
+- **OTLP as the channel** (Aspire): the production path, but one-way — no `ready`, no `stop` — and tracing every op in development costs ~20 spans a request.
+- **Inferring the proxy from the targets** (an `index.html` target plus a server target, wired with no config): esdev cannot know which paths are the API, so it would be a guess.
+
+**Consequences:** server errors reach the overlay for any framework on `serve()`, since they come from the runtime, not from framework code; a restart drains on Windows; no orphaned servers. **Not solved here:** several servers (`dev.run` as a list, a proxy naming a target), next; a server bound through `runtime:net` alone still has no `ready`.

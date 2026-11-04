@@ -67,6 +67,7 @@ mod inline_snapshot;
 mod inspect;
 mod install;
 mod jsx;
+mod link;
 mod module_mocks;
 mod module_url;
 mod plugins;
@@ -735,6 +736,10 @@ fn parse_args() -> Result<Command, String> {
             continue;
         }
         match flag {
+            // Set by `esdev start` on the server it runs (D207), never typed.
+            link::FLAG => {
+                let _ = DEV_LINK.set(require_value(flag, value)?.to_string());
+            }
             "--watch" => {
                 reject_value(flag, value)?;
                 watching = true;
@@ -2109,8 +2114,29 @@ async fn run_module(
     let settings = settings::Settings::load(config)?;
     let mut config = settings.source.run_config(run).await?;
     attach_debugger(&mut config, inspect)?;
-    es_runtime_cli_common::run("esdev", config).await
+    let Some(endpoint) = DEV_LINK.get().cloned() else {
+        return es_runtime_cli_common::run("esdev", config).await;
+    };
+    // Run by `esdev start` (D207): report to it, and stop when it says or
+    // when it is gone.
+    let token = std::env::var(link::TOKEN_VAR).unwrap_or_default();
+    let (child, queued, flushed) = link::Child::new();
+    config.console = Some(std::sync::Arc::new(link::LinkConsole {
+        inner: std::sync::Arc::new(es_runtime_cli_common::console::StdoutConsole),
+        link: child.clone(),
+    }));
+    config.on_start = Some(Box::new(move |started| {
+        tokio::spawn(link::run_child(endpoint, token, queued, flushed, started));
+    }));
+    let result = es_runtime_cli_common::run("esdev", config).await;
+    if let Err(e) = &result {
+        child.crash(e);
+    }
+    result
 }
+
+/// `--dev-link=<endpoint>`: the leader this run reports to (D207).
+static DEV_LINK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Refuses what cannot mean anything once the files run in a browser.
 ///

@@ -380,6 +380,8 @@ impl Source {
             extensions: run.extensions,
             observer: run.observer,
             inspector: None,
+            console: None,
+            on_start: None,
         })
     }
 }

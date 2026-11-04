@@ -229,7 +229,7 @@ fn cycle_summary(update: &Update, replaced_the_server: bool) -> String {
         Update::Reload => "reloaded".to_string(),
         // Never routed here: failures send before the cycle line. Named
         // anyway, so the vocabulary stays total if that ever changes.
-        Update::Error { .. } => "errored".to_string(),
+        Update::Error { .. } | Update::ServerError { .. } => "errored".to_string(),
     };
     match (update, replaced_the_server) {
         (Update::Reload, _) => summary,
@@ -335,6 +335,14 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             miss: crate::devserver::Miss::Spa,
         }),
     ));
+
+    // The link to the server child (D207): its errors reach the overlay, it
+    // says when it is listening, and it stops when asked or when esdev is gone.
+    let mut leader = if opens_its_own {
+        Some(crate::link::Leader::bind()?)
+    } else {
+        None
+    };
 
     let root = project.source.root.clone();
     let ignored = output_dirs(&project);
@@ -447,7 +455,14 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         ),
     }
     let mut child = match (&output, built) {
-        (Some(output), true) => spawn(&exe, output, &root, app.as_ref().map(|a| a.port), &tls_ca)?,
+        (Some(output), true) => spawn(
+            &exe,
+            output,
+            &root,
+            app.as_ref().map(|a| a.port),
+            &tls_ca,
+            leader.as_ref(),
+        )?,
         _ => None,
     };
     // What the page loads: the dev build's whole output.
@@ -467,12 +482,20 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                     }
                     change = wait_for_change(&mut rx) => Woken::from(change),
                     () = interrupt() => Woken::Interrupted,
+                    event = next_event(&mut leader) => {
+                        show_event(&reload, event);
+                        continue;
+                    }
                 }
             }
             None => {
                 tokio::select! {
                     change = wait_for_change(&mut rx) => Woken::from(change),
                     () = interrupt() => Woken::Interrupted,
+                    event = next_event(&mut leader) => {
+                        show_event(&reload, event);
+                        continue;
+                    }
                 }
             }
         };
@@ -482,7 +505,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         let changed = match woken {
             Woken::Interrupted => {
                 if let Some(process) = &mut child {
-                    crate::watch::stop(process, config.grace).await;
+                    stop_child(process, leader.as_ref(), config.grace).await;
                 }
                 return Ok(());
             }
@@ -545,10 +568,17 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         let restarting = child.is_none() || before != output.as_deref().map(fingerprint);
         if restarting {
             if let Some(process) = &mut child {
-                crate::watch::stop(process, config.grace).await;
+                stop_child(process, leader.as_ref(), config.grace).await;
             }
             if let Some(output) = &output {
-                child = spawn(&exe, output, &root, app.as_ref().map(|a| a.port), &tls_ca)?;
+                child = spawn(
+                    &exe,
+                    output,
+                    &root,
+                    app.as_ref().map(|a| a.port),
+                    &tls_ca,
+                    leader.as_ref(),
+                )?;
             }
         }
         // **Waited for, not assumed.** `spawn` returns when the process starts,
@@ -558,7 +588,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // fetched is a page that reloads: the one edit Fast Refresh exists for,
         // answered by exactly what it exists to avoid.
         if restarting && let Some(app) = &app {
-            wait_until_listening(app.port).await;
+            let pid = child.as_ref().and_then(Child::id);
+            wait_until_listening(app.port, pid, &mut leader, &reload).await;
         }
 
         // After the restart, not before: a page told to reload while the server
@@ -705,8 +736,13 @@ fn spawn(
     root: &Path,
     port: Option<u16>,
     tls_ca: &[String],
+    leader: Option<&crate::link::Leader>,
 ) -> Result<Option<Child>, String> {
     let mut command = Command::new(exe);
+    if let Some(leader) = leader {
+        let (flag, (name, token)) = leader.child_args();
+        command.arg(flag).env(name, token);
+    }
     // Set rather than merely allowed: the child reads `PORT` and falls back to
     // whatever number it was written with, and that fallback is the one two
     // projects collide on. Nothing is overridden that the developer chose — a
@@ -765,16 +801,21 @@ fn update_for(changed: &[PathBuf]) -> Update {
     }
 }
 
-/// Blocks until something accepts on `port`, or long enough that waiting is
+/// Blocks until the server is listening, or long enough that waiting is
 /// clearly not the answer.
 ///
-/// A connect, not a health check: what the page needs is a socket that answers,
-/// and a server that binds and then fails to route is a different problem with a
-/// different message. The bound is generous because a slow first request is
-/// better than a reload, and finite because a child that never binds must not
-/// wedge the dev loop — the page is told either way, and a page that reloads
-/// into a dead server shows the browser's own error, which is the truth.
-async fn wait_until_listening(port: u16) {
+/// The link's `ready` (D207) answers first when the server binds through
+/// `serve()`; a connect is the fallback, for a server that listens some other
+/// way. A connect, not a health check: what the page needs is a socket that
+/// answers. The bound is generous because a slow first request is better than
+/// a reload, and finite because a child that never binds must not wedge the
+/// dev loop. Anything else the link says meanwhile reaches the page.
+async fn wait_until_listening(
+    port: u16,
+    pid: Option<u32>,
+    leader: &mut Option<crate::link::Leader>,
+    reload: &broadcast::Sender<Update>,
+) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
@@ -783,7 +824,64 @@ async fn wait_until_listening(port: u16) {
         {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
+            event = next_event(leader) => {
+                if matches!(event, crate::link::Event::Ready { pid: from, .. } if Some(from) == pid) {
+                    return;
+                }
+                show_event(reload, event);
+            }
+        }
+    }
+}
+
+/// The next thing a linked child said; never, when there is no link.
+async fn next_event(leader: &mut Option<crate::link::Leader>) -> crate::link::Event {
+    match leader {
+        Some(leader) => match leader.next().await {
+            Some(event) => event,
+            None => std::future::pending().await,
+        },
+        None => std::future::pending().await,
+    }
+}
+
+/// Puts what a child reported on the page: an unhandled error or a crash
+/// becomes the overlay (D207). The terminal already has it — the child
+/// printed it.
+fn show_event(reload: &broadcast::Sender<Update>, event: crate::link::Event) {
+    use crate::link::Event;
+    let message = match event {
+        Event::Error { text, .. } => text,
+        Event::Crash { message, .. } => message,
+        Event::Ready { .. } | Event::Gone { .. } => return,
+    };
+    let _ = reload.send(Update::ServerError {
+        message: crate::devserver::strip_ansi(&message),
+    });
+}
+
+/// Stops the server child: through the link when it has one — a graceful
+/// drain on every platform, Windows included — and by signal otherwise.
+async fn stop_child(process: &mut Child, leader: Option<&crate::link::Leader>, grace: Duration) {
+    let linked = process
+        .id()
+        .zip(leader)
+        .is_some_and(|(pid, leader)| leader.stop(pid));
+    if !linked {
+        crate::watch::stop(process, grace).await;
+        return;
+    }
+    // The drain is bounded by the same grace inside the child; a little more
+    // here, so its own deadline is the one that fires.
+    if tokio::time::timeout(grace + Duration::from_millis(500), process.wait())
+        .await
+        .is_err()
+    {
+        eprintln!("esdev: the program did not stop within the grace period, killing it");
+        let _ = process.kill().await;
+        let _ = process.wait().await;
     }
 }
 

@@ -153,6 +153,26 @@ pub struct Config {
     /// and a flag — the same shape, and for the same reason, as `transform`
     /// above.
     pub inspector: Option<Inspector>,
+    /// Where `console.*` goes, instead of stdout/stderr — how esdev's link
+    /// also hears an unhandled error as data (D207). `esrun` passes `None`.
+    pub console: Option<Arc<dyn es_runtime_providers::Console>>,
+    /// Called once the run's servers and shutdown are in place, before the
+    /// entry module runs — how esdev's link watches for a bound port and asks
+    /// for a drain (D207). `esrun` passes `None`.
+    pub on_start: Option<Box<dyn FnOnce(Started) + Send>>,
+}
+
+/// What [`Config::on_start`] is handed: enough to watch the run and to stop it
+/// the way `SIGTERM` would.
+pub struct Started {
+    /// The binary's name, for the drain notice.
+    pub bin: &'static str,
+    /// Every `runtime:http` server this run binds.
+    pub http: Arc<SystemHttpServer>,
+    /// Stops the engine, as the drain's backstop does.
+    pub interrupt: es_runtime::InterruptHandle,
+    /// `--shutdown-grace`.
+    pub grace: std::time::Duration,
 }
 
 /// A debugger session waiting for the runtime it will be attached to.
@@ -995,7 +1015,10 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     };
     let providers = HostProviders::new(
         clock.clone(),
-        Arc::new(StdoutConsole),
+        config
+            .console
+            .clone()
+            .unwrap_or_else(|| Arc::new(StdoutConsole)),
         net,
         Arc::new(OsEntropy),
     )
@@ -1218,6 +1241,14 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         runtime.interrupt_handle(),
         options.shutdown_grace,
     );
+    if let Some(on_start) = config.on_start {
+        on_start(Started {
+            bin,
+            http: http_server.clone(),
+            interrupt: runtime.interrupt_handle(),
+            grace: options.shutdown_grace,
+        });
+    }
 
     // Execution-time watchdog (SPEC §4): a separate thread terminates the engine
     // after the deadline. Cross-thread V8 termination means even a synchronous

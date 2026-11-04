@@ -40,7 +40,6 @@ pub fn spawn_shutdown_watcher(
     interrupt: InterruptHandle,
     grace: Duration,
 ) {
-    let draining = Arc::new(AtomicBool::new(false));
     for signal in [Signal::Int, Signal::Term] {
         // Watching here also suppresses the default action, which is the point:
         // the process must survive long enough to drain. A platform that cannot
@@ -48,47 +47,68 @@ pub fn spawn_shutdown_watcher(
         let Some(mut stream) = watch_process_signal(signal) else {
             continue;
         };
-        let (signals, http, interrupt, draining) = (
-            signals.clone(),
-            http.clone(),
-            interrupt.clone(),
-            draining.clone(),
-        );
+        let (signals, http, interrupt) = (signals.clone(), http.clone(), interrupt.clone());
         tokio::spawn(async move {
             while stream.recv().await.is_some() {
                 // The guest asked for this signal: its handler is the shutdown.
                 if signals.is_watched(signal) {
                     continue;
                 }
-                if draining.swap(true, Ordering::SeqCst) {
-                    // Second interrupt while draining — stop waiting.
-                    crate::run::leave(signal.exit_code());
-                }
-                if http.shutdown_all() == 0 {
-                    // Nothing in flight to protect; behave as the default action
-                    // would have.
-                    crate::run::leave(signal.exit_code());
-                }
-                eprintln!(
-                    "{bin}: {} received, draining in-flight requests (up to {}ms)",
-                    signal.name(),
-                    grace.as_millis()
+                drain(
+                    bin,
+                    &format!("{} received", signal.name()),
+                    &http,
+                    &interrupt,
+                    grace,
+                    signal.exit_code(),
                 );
-                // Backstop: a handler that never finishes must not outlive the
-                // grace. Terminating the engine unblocks the drive loop, and the
-                // exit code is the same either way.
-                let handle = interrupt.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(grace).await;
-                    handle.terminate();
-                    crate::run::leave(signal.exit_code());
-                });
-                // The drive loop reaches quiescence once the servers have
-                // drained; record the code it should exit with.
-                SHUTDOWN_CODE.store(signal.exit_code(), Ordering::SeqCst);
             }
         });
     }
+}
+
+/// Whether a drain has begun, so a second request to stop exits at once.
+static DRAINING: AtomicBool = AtomicBool::new(false);
+
+/// Begins a graceful shutdown: stop accepting, let in-flight requests answer
+/// within `grace`, then exit with `code`. A second call while draining, or a
+/// process with no server, exits at once.
+///
+/// What `SIGTERM` does, callable — how esdev's link asks a child to stop on
+/// every platform, Windows included, which has no `SIGTERM` (D207). `reason`
+/// completes the notice: "{bin}: {reason}, draining in-flight requests".
+pub fn drain(
+    bin: &str,
+    reason: &str,
+    http: &SystemHttpServer,
+    interrupt: &InterruptHandle,
+    grace: Duration,
+    code: i32,
+) {
+    if DRAINING.swap(true, Ordering::SeqCst) {
+        // Second request while draining — stop waiting.
+        crate::run::leave(code);
+    }
+    if http.shutdown_all() == 0 {
+        // Nothing in flight to protect; behave as the default action would have.
+        crate::run::leave(code);
+    }
+    eprintln!(
+        "{bin}: {reason}, draining in-flight requests (up to {}ms)",
+        grace.as_millis()
+    );
+    // Backstop: a handler that never finishes must not outlive the grace.
+    // Terminating the engine unblocks the drive loop, and the exit code is the
+    // same either way.
+    let handle = interrupt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(grace).await;
+        handle.terminate();
+        crate::run::leave(code);
+    });
+    // The drive loop reaches quiescence once the servers have drained; record
+    // the code it should exit with.
+    SHUTDOWN_CODE.store(code, Ordering::SeqCst);
 }
 
 /// A process-level stream for `signal`, or `None` where the platform has no such

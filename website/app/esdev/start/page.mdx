@@ -103,6 +103,27 @@ updated some files. The loop's output directory is separate from the release
 output. [`esdev build`](/esdev/build/project#safe-output-replacement) stages
 release outputs before replacing them.
 
+## Server errors
+
+When the server a project runs fails a request, or crashes, the error reaches
+open pages in the same overlay, under **Server error**:
+
+```text
+runtime:http: GET /orders/42 failed (trace 4bf92f3577b34da6a3ce929d0e0e4736)
+RangeError: the ledger exploded
+    at …
+```
+
+The terminal shows it once, from the server. An error the server's own
+[`onError`](/api/http#handler-errors) answers is handled and is not shown. The
+next update clears the overlay; a page that opens later does not receive it,
+since the request it belonged to is over.
+
+esdev and the server are linked for the life of the server. A restart asks the
+server to drain in-flight requests within `--shutdown-grace` on every platform,
+Windows included, and a server whose `esdev start` is killed stops too rather
+than holding its port.
+
 ## The update channel
 
 Every built document gets a WebSocket to

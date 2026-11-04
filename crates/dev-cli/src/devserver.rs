@@ -104,6 +104,14 @@ pub enum Update {
         /// The failure as the terminal prints it, without colour.
         message: String,
     },
+    /// A server the loop runs reported an unhandled error or crashed (D207).
+    /// Shown like a build failure, under its own heading, and cleared by the
+    /// next update; not replayed to pages that connect later, since the
+    /// request it belonged to is over.
+    ServerError {
+        /// The report as the server printed it, without colour.
+        message: String,
+    },
 }
 
 impl Update {
@@ -134,6 +142,12 @@ impl Update {
             Self::Error { message } => {
                 format!(
                     "{{\"type\":\"error\",\"message\":\"{}\"}}",
+                    escape_json(message)
+                )
+            }
+            Self::ServerError { message } => {
+                format!(
+                    "{{\"type\":\"error\",\"title\":\"Server error\",\"message\":\"{}\"}}",
                     escape_json(message)
                 )
             }
