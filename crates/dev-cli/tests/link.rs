@@ -197,22 +197,38 @@ async fn a_server_error_reaches_live_pages() {
     );
 }
 
+/// A restart stops the server the way production does, so a server that
+/// handles `SIGTERM` itself runs its own shutdown — and it is prompt. Found in
+/// `examples/shop`, whose handler closes its shards and exits: stopped by a
+/// drain that bypassed the handler, it waited out the whole grace (10s).
 #[test]
-fn a_restart_stops_the_server_through_the_link() {
-    let dev = Loop::start(project("restart"));
+fn a_restart_runs_the_servers_own_shutdown_and_is_prompt() {
+    let dir = project("restart");
+    let server = dir.join("src/server.mjs");
+    let handled = format!(
+        "{}import {{ onSignal, exit }} from \"runtime:process\";\n\
+         // A timer keeps the loop alive, as a real server's pools and shards do.\n\
+         setInterval(() => {{}}, 1000);\n\
+         onSignal(\"SIGTERM\", () => {{ console.error(\"OWN SHUTDOWN RAN\"); exit(0); }});\n",
+        SERVER
+    );
+    std::fs::write(&server, &handled).expect("add a shutdown handler");
+    let dev = Loop::start(dir);
     let app = dev.app();
-    let server = dev.dir.join("src/server.mjs");
-    std::fs::write(&server, SERVER.replace("\"ok\"", "\"ok again\"")).expect("edit the server");
     let deadline = Instant::now() + Duration::from_secs(60);
+    std::fs::write(&server, handled.replace("\"ok\"", "\"ok again\"")).expect("edit the server");
+    let edited = Instant::now();
     while Instant::now() < deadline && !get(app, "/").contains("ok again") {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
     }
     assert!(get(app, "/").contains("ok again"), "{}", dev.log());
     assert!(
-        dev.log().contains("esdev start asked it to stop"),
-        "not stopped through the link:\n{}",
+        edited.elapsed() < Duration::from_secs(5),
+        "the restart waited out the grace: {:?}\n{}",
+        edited.elapsed(),
         dev.log()
     );
+    assert!(dev.log().contains("OWN SHUTDOWN RAN"), "{}", dev.log());
 }
 
 /// The orphan D62 left open: a leader killed outright leaves no server.

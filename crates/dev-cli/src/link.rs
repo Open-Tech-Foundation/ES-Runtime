@@ -161,8 +161,15 @@ impl Leader {
     }
 
     /// The next thing a child said.
+    #[cfg(test)]
     pub async fn next(&mut self) -> Option<Event> {
         self.events.recv().await
+    }
+
+    /// Everything children say, for a task of its own to hear. Taken once;
+    /// a second call gets a receiver that never yields.
+    pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<Event> {
+        std::mem::replace(&mut self.events, mpsc::unbounded_channel().1)
     }
 
     /// Asks the child `pid` to drain and exit. `false` when it has no link,
@@ -400,7 +407,22 @@ pub async fn run_child(
     {
         return;
     }
+    // Stopping takes the path `SIGTERM` takes in production, so a program
+    // that handles the signal itself (`onSignal("SIGTERM")`) still owns its
+    // shutdown — closing pools, flushing state — and one that does not is
+    // drained. On Unix that is the signal itself, raised on this process;
+    // Windows has no `SIGTERM`, so nothing there can handle one, and the drain
+    // is the whole of it.
     let drain = |reason: &str| {
+        #[cfg(unix)]
+        {
+            let _ = reason;
+            let _ = rustix::process::kill_process(
+                rustix::process::getpid(),
+                rustix::process::Signal::TERM,
+            );
+        }
+        #[cfg(not(unix))]
         es_runtime_cli_common::shutdown::drain(
             started.bin,
             reason,

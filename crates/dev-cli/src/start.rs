@@ -343,6 +343,14 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     } else {
         None
     };
+    // What the server says is heard on a task of its own, never in the loop's
+    // `select!`: a link event winning that race would drop the watcher's wait
+    // mid-debounce, and the change it had already taken with it — a save that
+    // never rebuilds. Errors go to the page; `ready` to whoever is waiting.
+    let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(None::<(u32, u16)>);
+    if let Some(events) = leader.as_mut().map(crate::link::Leader::take_events) {
+        tokio::spawn(hear_servers(events, reload.clone(), ready_tx));
+    }
 
     let root = project.source.root.clone();
     let ignored = output_dirs(&project);
@@ -482,20 +490,12 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                     }
                     change = wait_for_change(&mut rx) => Woken::from(change),
                     () = interrupt() => Woken::Interrupted,
-                    event = next_event(&mut leader) => {
-                        show_event(&reload, event);
-                        continue;
-                    }
                 }
             }
             None => {
                 tokio::select! {
                     change = wait_for_change(&mut rx) => Woken::from(change),
                     () = interrupt() => Woken::Interrupted,
-                    event = next_event(&mut leader) => {
-                        show_event(&reload, event);
-                        continue;
-                    }
                 }
             }
         };
@@ -589,7 +589,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // answered by exactly what it exists to avoid.
         if restarting && let Some(app) = &app {
             let pid = child.as_ref().and_then(Child::id);
-            wait_until_listening(app.port, pid, &mut leader, &reload).await;
+            wait_until_listening(app.port, pid, &mut ready_rx).await;
         }
 
         // After the restart, not before: a page told to reload while the server
@@ -809,57 +809,59 @@ fn update_for(changed: &[PathBuf]) -> Update {
 /// way. A connect, not a health check: what the page needs is a socket that
 /// answers. The bound is generous because a slow first request is better than
 /// a reload, and finite because a child that never binds must not wedge the
-/// dev loop. Anything else the link says meanwhile reaches the page.
+/// dev loop.
 async fn wait_until_listening(
     port: u16,
     pid: Option<u32>,
-    leader: &mut Option<crate::link::Leader>,
-    reload: &broadcast::Sender<Update>,
+    ready: &mut tokio::sync::watch::Receiver<Option<(u32, u16)>>,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
+        if ready
+            .borrow_and_update()
+            .is_some_and(|(from, _)| Some(from) == pid)
+        {
+            return;
+        }
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_ok()
         {
             return;
         }
+        // Both cancel-safe: a `changed` that loses the race is seen by the
+        // `borrow_and_update` above on the next pass.
         tokio::select! {
             () = tokio::time::sleep(Duration::from_millis(10)) => {}
-            event = next_event(leader) => {
-                if matches!(event, crate::link::Event::Ready { pid: from, .. } if Some(from) == pid) {
-                    return;
-                }
-                show_event(reload, event);
-            }
+            _ = ready.changed() => {}
         }
     }
 }
 
-/// The next thing a linked child said; never, when there is no link.
-async fn next_event(leader: &mut Option<crate::link::Leader>) -> crate::link::Event {
-    match leader {
-        Some(leader) => match leader.next().await {
-            Some(event) => event,
-            None => std::future::pending().await,
-        },
-        None => std::future::pending().await,
-    }
-}
-
-/// Puts what a child reported on the page: an unhandled error or a crash
-/// becomes the overlay (D207). The terminal already has it — the child
-/// printed it.
-fn show_event(reload: &broadcast::Sender<Update>, event: crate::link::Event) {
+/// Hears every linked server for the life of the loop (D207): an unhandled
+/// error or a crash becomes the overlay — the terminal already has it, the
+/// child printed it — and `ready` is published for the restart that waits on
+/// it.
+async fn hear_servers(
+    mut events: tokio::sync::mpsc::UnboundedReceiver<crate::link::Event>,
+    reload: broadcast::Sender<Update>,
+    ready: tokio::sync::watch::Sender<Option<(u32, u16)>>,
+) {
     use crate::link::Event;
-    let message = match event {
-        Event::Error { text, .. } => text,
-        Event::Crash { message, .. } => message,
-        Event::Ready { .. } | Event::Gone { .. } => return,
-    };
-    let _ = reload.send(Update::ServerError {
-        message: crate::devserver::strip_ansi(&message),
-    });
+    while let Some(event) = events.recv().await {
+        let message = match event {
+            Event::Error { text, .. } => text,
+            Event::Crash { message, .. } => message,
+            Event::Ready { pid, port } => {
+                ready.send_replace(Some((pid, port)));
+                continue;
+            }
+            Event::Gone { .. } => continue,
+        };
+        let _ = reload.send(Update::ServerError {
+            message: crate::devserver::strip_ansi(&message),
+        });
+    }
 }
 
 /// Stops the server child: through the link when it has one — a graceful
