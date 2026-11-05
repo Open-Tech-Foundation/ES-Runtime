@@ -303,7 +303,12 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // The alternative — `--port` for the endpoint and a second flag for the
     // application — gives the name everybody's dev server uses to the one thing
     // here that is not a dev server.
-    let opens_its_own = project.start.run.is_some();
+    let runs_servers = !project.start.servers.is_empty();
+    // **The front door** (D208): with a proxy beside the servers it runs, esdev's
+    // listener is the one address — files, the update channel, and every path
+    // the proxy names, on one origin. Without one, the app's own port is.
+    let front_door = runs_servers && !project.start.proxy.is_empty();
+    let opens_its_own = runs_servers && !front_door;
 
     // Bound before the first build, so a port already in use is an error at the
     // top rather than after a build the developer then has to watch happen
@@ -323,6 +328,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // A handful of slots: every open page holds one reload stream, and a burst
     // of them is a burst of the same word.
     let (reload, _) = broadcast::channel(16);
+    // Each server's port, by name, for the proxy rules that name one (D208).
+    let ports: crate::proxy::ServerPorts = Arc::default();
     let (error, _) = tokio::sync::watch::channel(None::<String>);
     tokio::spawn(crate::devserver::serve(
         listener,
@@ -330,7 +337,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             serve: serve.clone(),
             reload: reload.clone(),
             error: error.clone(),
-            proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+            proxy: crate::proxy::Rule::from_config(&project.start.proxy, Some(&ports)),
             trust,
             miss: crate::devserver::Miss::Spa,
         }),
@@ -338,7 +345,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     // The link to the server child (D207): its errors reach the overlay, it
     // says when it is listening, and it stops when asked or when esdev is gone.
-    let mut leader = if opens_its_own {
+    let mut leader = if runs_servers {
         Some(crate::link::Leader::bind()?)
     } else {
         None
@@ -348,8 +355,17 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // mid-debounce, and the change it had already taken with it — a save that
     // never rebuilds. Errors go to the page; `ready` to whoever is waiting.
     let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(None::<(u32, u16)>);
+    // Which server a pid is, for the overlay and for the proxy's ports.
+    let names: Names = Arc::default();
     if let Some(events) = leader.as_mut().map(crate::link::Leader::take_events) {
-        tokio::spawn(hear_servers(events, reload.clone(), ready_tx));
+        tokio::spawn(hear_servers(
+            events,
+            reload.clone(),
+            ready_tx,
+            names.clone(),
+            ports.clone(),
+            project.start.servers.len() > 1,
+        ));
     }
 
     let root = project.source.root.clone();
@@ -403,26 +419,62 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
     }
 
-    let run = project.start.run.clone();
     let watched = dev_targets(&project);
-    let output = match &run {
-        Some(name) => Some(running_output(&project, name)?),
-        None => None,
-    };
-    // Only for a project that runs a server of its own. A frontend project has
-    // no child to give a port to, and esdev is already serving its output.
-    let app = match &output {
-        Some(_) => app_port(project.start.listen, project.start.port)?,
-        None => None,
-    };
-    if let Some(app) = &app {
-        // The reason before the result, so the line a developer's eye lands on
-        // is the URL rather than an aside about a port they are leaving behind.
-        // The URL itself prints with the banner below, once the first build
-        // has run — one line for it, not two.
-        if let Some(asked) = app.moved_from {
-            eprintln!("{tag} {asked} was taken; use --port to pin one");
+    // The port `--port` pins: the app's, when the app is the address opened —
+    // which is one server's, or no one's to choose.
+    let pinned = if opens_its_own {
+        if project.start.servers.len() > 1 && project.start.port.is_some() {
+            return Err(format!(
+                "--port names the port you open, and this project runs {} servers.\n\n\
+                 Give each its port under `dev.servers`, or make esdev the one address with \
+                 `dev.server.proxy`, whose port --port then names.",
+                project.start.servers.len()
+            ));
         }
+        project.start.port
+    } else {
+        None
+    };
+    let mut running = Vec::with_capacity(project.start.servers.len());
+    for spec in &project.start.servers {
+        let output = running_output(&project, &spec.target)?;
+        let port = if spec.auto_port {
+            Some(server_port(spec.port, pinned)?)
+        } else {
+            app_port(spec.port, pinned)?
+        };
+        if let Some(port) = &port {
+            // The reason before the result, so the line a developer's eye lands
+            // on is the URL rather than an aside about a port they are leaving.
+            if let Some(asked) = port.moved_from {
+                eprintln!("{tag} {asked} was taken; use --port to pin one");
+            }
+            ports
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(spec.name.clone(), port.port);
+        }
+        // Waited for only when something needs it listening: a server whose
+        // `after` names it, a proxy rule, or the page — a worker that never
+        // binds would otherwise cost every restart the whole wait.
+        let needed = opens_its_own
+            || project
+                .start
+                .servers
+                .iter()
+                .any(|s| s.after.contains(&spec.name))
+            || project
+                .start
+                .proxy
+                .iter()
+                .any(|(_, target)| target == &spec.name);
+        running.push(Running {
+            spec: spec.clone(),
+            output,
+            port,
+            needed,
+            child: None,
+        });
     }
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
@@ -450,62 +502,77 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         format_duration(started.elapsed())
     );
     eprintln!();
-    match &app {
+    let app_port = match (front_door, running.as_slice()) {
+        // One address for everything: esdev's.
+        (true, _) => Some(port),
+        (false, [only]) => only.port.as_ref().map(|p| p.port),
+        _ => None,
+    };
+    match app_port {
         Some(app) => eprintln!(
             "  {}  the app is on {}",
             paint.dim("→"),
-            paint.cyan(format_args!("http://localhost:{}/", app.port))
+            paint.cyan(format_args!("http://localhost:{app}/"))
         ),
-        None => eprintln!(
+        None if running.is_empty() => eprintln!(
             "  {}  Local:   {}",
             paint.dim("→"),
             paint.cyan(format_args!("http://localhost:{port}/"))
         ),
+        None => {
+            for server in &running {
+                if let Some(at) = &server.port {
+                    eprintln!(
+                        "  {}  {} is on {}",
+                        paint.dim("→"),
+                        server.spec.name,
+                        paint.cyan(format_args!("http://localhost:{}/", at.port))
+                    );
+                }
+            }
+        }
     }
-    let mut child = match (&output, built) {
-        (Some(output), true) => spawn(
+    if built {
+        let all: Vec<usize> = (0..running.len()).collect();
+        start_servers(
+            &mut running,
+            &all,
             &exe,
-            output,
             &root,
-            app.as_ref().map(|a| a.port),
             &tls_ca,
             leader.as_ref(),
-        )?,
-        _ => None,
-    };
+            &names,
+            &mut ready_rx,
+        )
+        .await?;
+    }
     // What the page loads: the dev build's whole output.
     let devdir = project.source.root.join(project.start.devdir());
 
     loop {
-        let woken = match &mut child {
-            Some(process) => {
-                tokio::select! {
-                    status = process.wait() => {
-                        report_exit(status);
-                        child = None;
-                        // Not a reason to rebuild: nothing changed. The
-                        // watcher outlives the program, because a program that
-                        // exited is one the developer is about to fix.
-                        Woken::Exited
-                    }
-                    change = wait_for_change(&mut rx) => Woken::from(change),
-                    () = interrupt() => Woken::Interrupted,
-                }
+        let several = running.len() > 1;
+        let woken = tokio::select! {
+            (index, status) = any_exit(&mut running) => {
+                report_exit(several.then_some(running[index].spec.name.as_str()), status);
+                running[index].child = None;
+                // Not a reason to rebuild: nothing changed. The watcher
+                // outlives the program, because a program that exited is one
+                // the developer is about to fix.
+                Woken::Exited
             }
-            None => {
-                tokio::select! {
-                    change = wait_for_change(&mut rx) => Woken::from(change),
-                    () = interrupt() => Woken::Interrupted,
-                }
-            }
+            change = wait_for_change(&mut rx) => Woken::from(change),
+            () = interrupt() => Woken::Interrupted,
         };
         // The paths come out of the match rather than being counted and thrown
         // away: the loop's tail decides what to tell the page, and only what
         // changed says whether a stylesheet swap will do.
         let changed = match woken {
             Woken::Interrupted => {
-                if let Some(process) = &mut child {
-                    stop_child(process, leader.as_ref(), config.grace).await;
+                // Dependents first: the reverse of the order they started in.
+                for server in running.iter_mut().rev() {
+                    if let Some(process) = &mut server.child {
+                        stop_child(process, leader.as_ref(), config.grace).await;
+                    }
                 }
                 return Ok(());
             }
@@ -514,7 +581,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         };
 
         // What the server was reading, before the build replaces any of it.
-        let before = output.as_deref().map(fingerprint);
+        let before: Vec<u64> = running.iter().map(|r| fingerprint(&r.output)).collect();
         // And what the page was, with whether it is showing a failed build:
         // a fix that rebuilds to the last good output still has to clear the
         // overlay.
@@ -565,32 +632,32 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // warm cache the process had, and a window where requests are refused —
         // to deliver nothing. A child that is not running is started whatever
         // the answer, because the developer is fixing the reason it stopped.
-        let restarting = child.is_none() || before != output.as_deref().map(fingerprint);
-        if restarting {
-            if let Some(process) = &mut child {
+        let restarted: Vec<usize> = (0..running.len())
+            .filter(|&i| running[i].child.is_none() || before[i] != fingerprint(&running[i].output))
+            .collect();
+        // Stopped dependents first, then started in order, each waited for —
+        // `spawn` returns when the process starts, not when it is listening,
+        // and the page's very next act is to fetch something from it. A page
+        // that arrives in that window gets a connection refused, and a hot
+        // update that cannot be fetched is a page that reloads.
+        for &i in restarted.iter().rev() {
+            if let Some(process) = &mut running[i].child {
                 stop_child(process, leader.as_ref(), config.grace).await;
             }
-            if let Some(output) = &output {
-                child = spawn(
-                    &exe,
-                    output,
-                    &root,
-                    app.as_ref().map(|a| a.port),
-                    &tls_ca,
-                    leader.as_ref(),
-                )?;
-            }
+            running[i].child = None;
         }
-        // **Waited for, not assumed.** `spawn` returns when the process starts,
-        // not when it is listening, and the page's very next act is to fetch
-        // something from it — the patch, or the document. A page that arrives in
-        // that window gets a connection refused, and a hot update that cannot be
-        // fetched is a page that reloads: the one edit Fast Refresh exists for,
-        // answered by exactly what it exists to avoid.
-        if restarting && let Some(app) = &app {
-            let pid = child.as_ref().and_then(Child::id);
-            wait_until_listening(app.port, pid, &mut ready_rx).await;
-        }
+        start_servers(
+            &mut running,
+            &restarted,
+            &exe,
+            &root,
+            &tls_ca,
+            leader.as_ref(),
+            &names,
+            &mut ready_rx,
+        )
+        .await?;
+        let restarting = !restarted.is_empty() || running.is_empty();
 
         // After the restart, not before: a page told to reload while the server
         // is still coming back gets a connection refused and stays blank. Sent
@@ -602,7 +669,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // `restarting` alone will not do — a project with no server of its own
         // has no child, so it reads as "restarting" on every pass, and a
         // stylesheet edit would reload the page it could have swapped.
-        let replaced_the_server = restarting && output.is_some();
+        let replaced_the_server = restarting && !running.is_empty();
         // A hot patch is tried first, and a restarted server is not a reason to
         // skip it. The page's state lives in the page: a stateless server coming
         // back as a new process invalidates nothing the browser is holding, and
@@ -686,11 +753,11 @@ fn dev_targets(project: &Settings) -> Vec<String> {
     if !project.targets.iter().any(|target| target.run_after_build) {
         return Vec::new();
     }
-    let run = project.start.run.as_deref();
+    let runs = |name: &str| project.start.servers.iter().any(|s| s.target == name);
     project
         .targets
         .iter()
-        .filter(|target| !target.run_after_build || run == Some(target.name.as_str()))
+        .filter(|target| !target.run_after_build || runs(&target.name))
         .map(|target| target.name.clone())
         .collect()
 }
@@ -737,8 +804,10 @@ fn spawn(
     port: Option<u16>,
     tls_ca: &[String],
     leader: Option<&crate::link::Leader>,
+    spec: &crate::config::ServerSpec,
 ) -> Result<Option<Child>, String> {
     let mut command = Command::new(exe);
+    command.envs(spec.env.iter().map(|(k, v)| (k, v)));
     if let Some(leader) = leader {
         let (flag, (name, token)) = leader.child_args();
         command.arg(flag).env(name, token);
@@ -754,18 +823,109 @@ fn spawn(
     let child = command
         .args(tls_ca)
         .arg(output)
+        .args(&spec.args)
         .current_dir(root)
         .spawn()
         .map_err(|e| format!("cannot start {}: {e}", output.display()))?;
     Ok(Some(child))
 }
 
-fn report_exit(status: std::io::Result<std::process::ExitStatus>) {
+fn report_exit(name: Option<&str>, status: std::io::Result<std::process::ExitStatus>) {
+    let server = name.map_or_else(
+        || "the server".to_string(),
+        |name| format!("the {name} server"),
+    );
     match status {
-        Ok(status) if status.success() => eprintln!("esdev: the server exited"),
-        Ok(status) => eprintln!("esdev: the server exited ({status})"),
-        Err(e) => eprintln!("esdev: cannot wait for the server: {e}"),
+        Ok(status) if status.success() => eprintln!("esdev: {server} exited"),
+        Ok(status) => eprintln!("esdev: {server} exited ({status})"),
+        Err(e) => eprintln!("esdev: cannot wait for {server}: {e}"),
     }
+}
+
+/// Which server each linked pid is (D208).
+type Names = Arc<std::sync::Mutex<std::collections::HashMap<u32, String>>>;
+
+/// One server the loop runs, and its process when it is up.
+struct Running {
+    spec: crate::config::ServerSpec,
+    output: PathBuf,
+    port: Option<AppPort>,
+    /// Whether a start waits for it to listen.
+    needed: bool,
+    child: Option<Child>,
+}
+
+/// The port a `dev.servers` entry is handed (D208): `--port`'s when it pins
+/// one, its own when free, and any free one otherwise.
+fn server_port(declared: Option<u16>, pinned: Option<u16>) -> Result<AppPort, String> {
+    if let Some(port) = pinned {
+        return app_port(Some(port), Some(port)).map(|p| p.expect("a declared port"));
+    }
+    match declared {
+        Some(port) => app_port(Some(port), None).map(|p| p.expect("a declared port")),
+        None => Ok(AppPort {
+            port: any_free().map_err(|e| format!("cannot find a free port: {e}"))?,
+            moved_from: None,
+        }),
+    }
+}
+
+/// Starts the servers at `which` (indices in start order), each waited for
+/// when another server's `after` names it, or when it is the one the page
+/// will talk to — so nothing reaches a server that is not listening yet.
+#[allow(clippy::too_many_arguments)]
+async fn start_servers(
+    running: &mut [Running],
+    which: &[usize],
+    exe: &Path,
+    root: &Path,
+    tls_ca: &[String],
+    leader: Option<&crate::link::Leader>,
+    names: &Names,
+    ready: &mut tokio::sync::watch::Receiver<Option<(u32, u16)>>,
+) -> Result<(), String> {
+    for &i in which {
+        let port = running[i].port.as_ref().map(|p| p.port);
+        let child = spawn(
+            exe,
+            &running[i].output,
+            root,
+            port,
+            tls_ca,
+            leader,
+            &running[i].spec,
+        )?;
+        let pid = child.as_ref().and_then(Child::id);
+        if let Some(pid) = pid {
+            names
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(pid, running[i].spec.name.clone());
+        }
+        running[i].child = child;
+        if let Some(port) = port.filter(|_| running[i].needed) {
+            wait_until_listening(port, pid, ready).await;
+        }
+    }
+    Ok(())
+}
+
+/// The first server to exit, and how; never, when none is running.
+async fn any_exit(running: &mut [Running]) -> (usize, std::io::Result<std::process::ExitStatus>) {
+    let waits: Vec<_> = running
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, server)| {
+            server
+                .child
+                .as_mut()
+                .map(|child| Box::pin(async move { (i, child.wait().await) }))
+        })
+        .collect();
+    if waits.is_empty() {
+        return std::future::pending().await;
+    }
+    futures_util::future::select_all(waits).await.0
 }
 
 /// Resolves after ^C or `SIGTERM`: either way the server is stopped first,
@@ -846,19 +1006,38 @@ async fn hear_servers(
     mut events: tokio::sync::mpsc::UnboundedReceiver<crate::link::Event>,
     reload: broadcast::Sender<Update>,
     ready: tokio::sync::watch::Sender<Option<(u32, u16)>>,
+    names: Names,
+    ports: crate::proxy::ServerPorts,
+    several: bool,
 ) {
     use crate::link::Event;
+    let name_of = |pid: u32| {
+        names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&pid)
+            .cloned()
+    };
     while let Some(event) = events.recv().await {
-        let message = match event {
-            Event::Error { text, .. } => text,
-            Event::Crash { message, .. } => message,
+        let (pid, message) = match event {
+            Event::Error { pid, text } => (pid, text),
+            Event::Crash { pid, message } => (pid, message),
             Event::Ready { pid, port } => {
+                // The port a server says it bound is the one the proxy uses,
+                // over the one it was handed.
+                if let Some(name) = name_of(pid) {
+                    ports
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(name, port);
+                }
                 ready.send_replace(Some((pid, port)));
                 continue;
             }
             Event::Gone { .. } => continue,
         };
         let _ = reload.send(Update::ServerError {
+            server: if several { name_of(pid) } else { None },
             message: crate::devserver::strip_ansi(&message),
         });
     }
@@ -1008,8 +1187,21 @@ fn running_output(project: &Settings, name: &str) -> Result<PathBuf, String> {
 /// multi-page app, where the directory is shared and either answer is the same
 /// one — but nothing is guessed if the config already said.
 fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
-    if project.start.run.is_some() {
-        return Ok(None);
+    if !project.start.servers.is_empty() {
+        // Beside servers, esdev serves files only as the front door, and only
+        // when no proxy rule takes every path — an SPA beside its API (D208).
+        let takes_all = project.start.proxy.iter().any(|(prefix, _)| prefix == "/");
+        if project.start.proxy.is_empty() || takes_all {
+            return Ok(None);
+        }
+        let html = project.targets.iter().find(|target| target.is_html());
+        return Ok(match (&project.start.serve, html.map(|t| &t.output)) {
+            (Some(serve), _) => Some(project.source.root.join(serve)),
+            (None, Some(Output::Dir(dir))) => {
+                Some(project.source.root.join(project.start.devdir()).join(dir))
+            }
+            _ => None,
+        });
     }
     if let Some(serve) = &project.start.serve {
         return Ok(Some(project.source.root.join(serve)));

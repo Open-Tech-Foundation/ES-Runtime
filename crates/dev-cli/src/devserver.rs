@@ -109,6 +109,8 @@ pub enum Update {
     /// next update; not replayed to pages that connect later, since the
     /// request it belonged to is over.
     ServerError {
+        /// Which server, when the loop runs more than one (D208).
+        server: Option<String>,
         /// The report as the server printed it, without colour.
         message: String,
     },
@@ -145,9 +147,14 @@ impl Update {
                     escape_json(message)
                 )
             }
-            Self::ServerError { message } => {
+            Self::ServerError { server, message } => {
+                let title = match server {
+                    Some(name) => format!("Server error: {name}"),
+                    None => "Server error".to_string(),
+                };
                 format!(
-                    "{{\"type\":\"error\",\"title\":\"Server error\",\"message\":\"{}\"}}",
+                    "{{\"type\":\"error\",\"title\":\"{}\",\"message\":\"{}\"}}",
+                    escape_json(&title),
                     escape_json(message)
                 )
             }

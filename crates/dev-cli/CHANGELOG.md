@@ -28,6 +28,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **`dev.servers`** (DECISIONS D208): `esdev start` runs several servers —
+  each with its own `target`, `port`, `env`, `args`, started `after` the ones
+  it names — restarts only those whose output changed, and shows each one's
+  errors on the page under its name. `dev.server.proxy` may name a server,
+  making esdev the front door: one address for the page, the update channel
+  and every server, with the page's `Host` kept. `dev.run` is unchanged.
+
 - **Server errors in the overlay** (DECISIONS D207). When the server
   `esdev start` runs fails a request or crashes, open pages show it under
   **Server error**, with the request's method, path and trace id.

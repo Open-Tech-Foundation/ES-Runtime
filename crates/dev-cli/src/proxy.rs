@@ -28,60 +28,102 @@ use es_runtime_default_providers::TrustStore;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// The port each server `esdev start` runs listens on, by name (D208): the
+/// one it was handed as `PORT`, then the one it said it bound.
+pub type ServerPorts = Arc<std::sync::RwLock<std::collections::HashMap<String, u16>>>;
+
+/// Where a rule sends requests.
+#[derive(Debug, Clone)]
+enum Target {
+    /// Another server, at a URL.
+    Url(url::Url),
+    /// A server `esdev start` runs, by name, at whatever port it has now.
+    Server(String, ServerPorts),
+}
+
 /// One `dev.server.proxy` entry, ready to forward to.
 #[derive(Debug, Clone)]
 pub struct Rule {
     /// The start of the request paths it takes.
     pub prefix: String,
     /// Where they go.
-    target: url::Url,
+    target: Target,
 }
 
 impl Rule {
-    /// Rules from the config's `(prefix, URL)` pairs, which it validated and
-    /// ordered longest prefix first.
-    pub fn from_config(pairs: &[(String, String)]) -> Vec<Rule> {
+    /// Rules from the config's `(prefix, target)` pairs, which it validated
+    /// and ordered longest prefix first. A target naming a server is resolved
+    /// through `servers`; with none (`esdev preview`, which runs no server)
+    /// such a rule is left out.
+    pub fn from_config(pairs: &[(String, String)], servers: Option<&ServerPorts>) -> Vec<Rule> {
         pairs
             .iter()
             .filter_map(|(prefix, target)| {
+                let target = if target.contains("://") {
+                    Target::Url(url::Url::parse(target).ok()?)
+                } else {
+                    Target::Server(target.clone(), servers?.clone())
+                };
                 Some(Rule {
                     prefix: prefix.clone(),
-                    target: url::Url::parse(target).ok()?,
+                    target,
                 })
             })
             .collect()
     }
 
     /// The target as it was written, for a message.
-    pub fn target(&self) -> &str {
-        self.target.as_str().trim_end_matches('/')
+    pub fn target(&self) -> String {
+        match &self.target {
+            Target::Url(url) => url.as_str().trim_end_matches('/').to_string(),
+            Target::Server(name, _) => format!("the {name} server"),
+        }
     }
 
     fn secure(&self) -> bool {
-        self.target.scheme() == "https"
+        matches!(&self.target, Target::Url(url) if url.scheme() == "https")
     }
 
     fn host(&self) -> &str {
-        self.target.host_str().unwrap_or("localhost")
+        match &self.target {
+            Target::Url(url) => url.host_str().unwrap_or("localhost"),
+            Target::Server(..) => "127.0.0.1",
+        }
     }
 
-    fn port(&self) -> u16 {
-        self.target.port_or_known_default().unwrap_or(80)
+    /// The port now; `None` for a server that has none yet.
+    fn port(&self) -> Option<u16> {
+        match &self.target {
+            Target::Url(url) => Some(url.port_or_known_default().unwrap_or(80)),
+            Target::Server(name, ports) => ports
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(name)
+                .copied(),
+        }
     }
 
     /// `Host` for the target: its name, with the port when it is not the
-    /// scheme's own.
-    fn authority(&self) -> String {
-        match self.target.port() {
-            Some(port) => format!("{}:{port}", self.host()),
-            None => self.host().to_string(),
+    /// scheme's own. `None` for a server esdev runs, which keeps the page's
+    /// own `Host`: esdev is its front door, and a server that builds a link
+    /// from `Host` should build one to the address the developer opened.
+    fn authority(&self) -> Option<String> {
+        match &self.target {
+            Target::Url(url) => Some(match url.port() {
+                Some(port) => format!("{}:{port}", self.host()),
+                None => self.host().to_string(),
+            }),
+            Target::Server(..) => None,
         }
     }
 
     /// The request target sent on: the target's own path, then what the page
     /// asked for.
     fn forwarded_path(&self, requested: &str) -> String {
-        let base = self.target.path().trim_end_matches('/');
+        let base = match &self.target {
+            Target::Url(url) => url.path().trim_end_matches('/'),
+            Target::Server(..) => "",
+        };
         format!("{base}{requested}")
     }
 }
@@ -141,7 +183,8 @@ enum Upstream {
 }
 
 async fn connect(rule: &Rule, trust: &TrustStore) -> Result<Upstream, String> {
-    let address = format!("{}:{}", rule.host(), rule.port());
+    let port = rule.port().ok_or_else(|| "it is not running".to_string())?;
+    let address = format!("{}:{port}", rule.host());
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&address))
         .await
         .map_err(|_| format!("no answer within {}s", CONNECT_TIMEOUT.as_secs()))?
@@ -203,11 +246,11 @@ fn rewrite(head: &str, rule: &Rule, peer: &str) -> String {
         }
     }
 
-    let mut out = format!(
-        "{method} {} {version}\r\nHost: {}\r\n",
-        rule.forwarded_path(requested),
-        rule.authority()
-    );
+    let mut out = format!("{method} {} {version}\r\n", rule.forwarded_path(requested));
+    // A server esdev runs keeps the page's `Host`; a URL target gets its own.
+    if let Some(authority) = rule.authority().or_else(|| host.clone()) {
+        out.push_str(&format!("Host: {authority}\r\n"));
+    }
     for header in headers {
         out.push_str(&header);
         out.push_str("\r\n");
@@ -231,16 +274,19 @@ mod tests {
     use super::*;
 
     fn rule(prefix: &str, target: &str) -> Rule {
-        Rule::from_config(&[(prefix.to_string(), target.to_string())]).remove(0)
+        Rule::from_config(&[(prefix.to_string(), target.to_string())], None).remove(0)
     }
 
     /// The longest prefix wins, which the config's order already says.
     #[test]
     fn the_first_matching_rule_takes_the_path() {
-        let rules = Rule::from_config(&[
-            ("/api/admin".to_string(), "http://admin:9000".to_string()),
-            ("/api".to_string(), "http://localhost:8080".to_string()),
-        ]);
+        let rules = Rule::from_config(
+            &[
+                ("/api/admin".to_string(), "http://admin:9000".to_string()),
+                ("/api".to_string(), "http://localhost:8080".to_string()),
+            ],
+            None,
+        );
         assert_eq!(
             matching(&rules, "/api/admin/users").unwrap().prefix,
             "/api/admin"
@@ -296,5 +342,29 @@ mod tests {
         assert!(out.contains("Upgrade: websocket\r\n"), "{out}");
         assert!(out.contains("Connection: Upgrade\r\n"), "{out}");
         assert!(!out.contains("Connection: close"), "{out}");
+    }
+
+    /// A rule naming a server esdev runs (D208): its port from the table, the
+    /// page's `Host` kept, and no port at all while it is not running.
+    #[test]
+    fn a_server_rule_follows_its_port_and_keeps_the_host() {
+        let ports: ServerPorts = Arc::default();
+        let rules = Rule::from_config(&[("/api".to_string(), "api".to_string())], Some(&ports));
+        let rule = &rules[0];
+        assert_eq!(rule.port(), None);
+        ports.write().unwrap().insert("api".to_string(), 4123);
+        assert_eq!(rule.port(), Some(4123));
+        assert_eq!(rule.target(), "the api server");
+        let out = rewrite(
+            "GET /api/users HTTP/1.1\r\nHost: localhost:5173\r\n\r\n",
+            rule,
+            "127.0.0.1",
+        );
+        assert!(
+            out.starts_with("GET /api/users HTTP/1.1\r\nHost: localhost:5173\r\n"),
+            "{out}"
+        );
+        // Without a table (esdev preview runs no servers) the rule is left out.
+        assert!(Rule::from_config(&[("/api".to_string(), "api".to_string())], None).is_empty());
     }
 }

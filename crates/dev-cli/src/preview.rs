@@ -112,7 +112,7 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         serve: Some(dir.clone()),
         reload,
         error,
-        proxy: crate::proxy::Rule::from_config(&project.start.proxy),
+        proxy: crate::proxy::Rule::from_config(&project.start.proxy, None),
         trust: es_runtime_default_providers::TrustStore::load(&config.tls_ca)?
             .with_crl_files(&config.tls_crl)?,
         miss: if config.spa {

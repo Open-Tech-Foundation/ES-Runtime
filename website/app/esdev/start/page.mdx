@@ -187,9 +187,46 @@ The target sees its own `Host`, with the page's in `X-Forwarded-Host`. An
 `https` target is verified like `fetch` verifies one, and a target that is not
 running answers `502` with its address.
 
-It applies where esdev serves the page: `esdev start` without `dev.run`, and
-[`esdev preview`](/esdev/start/preview). With `dev.run`, the application owns
-the endpoint and routes its own requests, so the key is refused there.
+A target can also name a server esdev runs (see [Several servers](#several-servers)):
+
+```json
+"dev": { "run": "server", "server": { "proxy": { "/": "server" } } }
+```
+
+Then esdev is the **front door**: the address you open is esdev's, and it routes
+each path to its server, which sees the page's own `Host`. A server named here is
+reached at whatever port it has now. [`esdev preview`](/esdev/start/preview)
+runs no servers, so there only URL targets apply.
+
+## Several servers
+
+`dev.servers` runs more than one server: an API and a background worker, a
+public and an admin API, two versions side by side.
+
+```json
+"dev": {
+  "servers": {
+    "api":    { "port": 4000, "env": { "DATABASE_URL": "file:dev.db" } },
+    "admin":  { "target": "api", "env": { "ROLE": "admin" } },
+    "worker": { "target": "jobs", "after": ["api"] }
+  },
+  "server": { "proxy": { "/api": "api", "/admin": "admin" } }
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `target` | The build target it runs. Default: the server's name |
+| `port` | The port it is given in `PORT`. Busy or absent, a free one is |
+| `env` | Environment for this server only |
+| `args` | Arguments for the program |
+| `after` | Servers that must be listening before this one starts |
+
+Each save restarts only the servers whose build output changed, stopping the
+ones that depend on them first. A server's errors reach the page under its name
+(**Server error: worker**). A server that binds no port, such as a worker, is
+not waited for unless something names it. `dev.run` is the one-server form, and
+`dev.servers` and `dev.run` are not used together.
 
 ## What is watched
 
