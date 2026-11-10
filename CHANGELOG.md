@@ -46,6 +46,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `runtime:websocket` moves to `tungstenite` 0.30: a server refuses a
+  handshake whose `Sec-WebSocket-Key` is not a valid 16-byte key, as RFC 6455
+  requires, and large messages read faster. The last copy of the older
+  `digest` crates leaves the binary with it.
+
 - Password hashing moves to `argon2` 0.6 and `scrypt` 0.12, on the same
   `digest` generation as the rest of the crypto stack, so the older `sha2`,
   `hmac`, `pbkdf2` and `blake2` copies leave the binary. Hashes are written in

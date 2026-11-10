@@ -159,7 +159,7 @@ webpki-roots = "1.0.11"
 # RFC 6455 WebSocket framing for the `WebSocket` global (DECISIONS D29). TLS is
 # done by us (tokio-rustls, above) and the established stream handed to
 # `client_async`, so no TLS feature is pulled here. Confined to default-providers.
-tokio-tungstenite = { version = "0.26.2", default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 # Dev-only: self-signed certs for the hermetic net-TLS test.
 rcgen = "0.14"
 bytes = "1.11.1"
