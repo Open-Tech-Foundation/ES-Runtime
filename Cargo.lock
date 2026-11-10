@@ -2938,9 +2938,9 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "otf-pdf"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "103ec66926c75b50b10331a9186d00556e4f175cff5dab8fd56d84192673f225"
+checksum = "860cea088703cfe7a08971c1c7ef878b141fee27d5cd30a61fe1d336279c28f2"
 dependencies = [
  "otf-pdf-content",
  "otf-pdf-doc",
@@ -2951,9 +2951,9 @@ dependencies = [
 
 [[package]]
 name = "otf-pdf-content"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5715e5c9d6f66e8cf0010e7fc9b7c0e6f2d4be652212cc4767297b6e2d1e7f76"
+checksum = "74d3c6d07d7bda59475c201be3f41b7a5329535bfe537e71b36a70744332b2c5"
 dependencies = [
  "otf-pdf-doc",
  "otf-pdf-syntax",
@@ -2961,9 +2961,9 @@ dependencies = [
 
 [[package]]
 name = "otf-pdf-doc"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5f2137b6a97c6465ed7bdd262425a165d960935a439313975e90229208c803"
+checksum = "e3eb2a8ab29acff59c9bb49cdfc5066641367855376668fef8e52ebe07bbd560"
 dependencies = [
  "flate2",
  "md-5",
@@ -2972,9 +2972,9 @@ dependencies = [
 
 [[package]]
 name = "otf-pdf-font"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be6037a2264375881f0d83d5344e39a9a6ecccc5e104097410227d5f103ba643"
+checksum = "d46e9298c7edfcb8a500a572f0977355e825795c7947d257ee7cf8c557b8512f"
 dependencies = [
  "otf-pdf-content",
  "otf-pdf-doc",
@@ -2984,9 +2984,9 @@ dependencies = [
 
 [[package]]
 name = "otf-pdf-syntax"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f33e7f5a6b44be0f360cc6517cadc96837465bc0dcec26591ddda656c04214e9"
+checksum = "004e2604702267684bc4d74d9437619403ee5934cddc29aa25da5c7f2c4d5660"
 dependencies = [
  "aes",
  "cbc",
@@ -2998,9 +2998,9 @@ dependencies = [
 
 [[package]]
 name = "otf-pdf-text"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d06b51708406f2e46a3acd31076ee490d0c25b255538ea0bcbb19c2234769f35"
+checksum = "00b1d17629a1f639e925760fa9ca858872560df41d11c252ff2518a938cd258d"
 dependencies = [
  "otf-pdf-content",
  "otf-pdf-doc",
@@ -5970,7 +5970,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

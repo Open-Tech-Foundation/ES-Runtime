@@ -63,7 +63,7 @@ The returned `PDF` has these properties, read when it was opened:
 | `outlines()` | The bookmarks: `{ title, page?, open, children }`. `page` is the index of the page the bookmark opens, when it names a page in this document. |
 | `destinations()` | The named destinations: `{ name, page? }`. |
 | `xmp()` | The XMP metadata packet as text, or `undefined`. |
-| `sanitizeReport(options?)` | What `edit().sanitize(options)` would remove, counted: `{ javascript, externalActions, links, attachments, xfa, multimedia, metadata }`. The document is not changed. |
+| `sanitizeReport(options?)` | What `edit().sanitize(options)` would remove, counted per category (see [Sanitizing](#sanitizing)). The document is not changed. |
 | `attachments()` | Embedded files: `{ name, filename?, description?, type?, size? }`. |
 | `attachment(name)` | That file's bytes, or `undefined`. |
 
@@ -95,10 +95,48 @@ indices are checked at the call against the pages the edit has at that point
 | `setInfo(info)` | Set document information: strings for the text fields, `Date`s for `creationDate` and `modDate`, `null` to remove one. Fields not named are kept. The XMP metadata is rewritten to match. |
 | `addAttachment(name, data, { type?, description? })` | Embed a file, replacing one of the same name. `data` is copied at the call. |
 | `removeAttachment(name)` | Remove an embedded file. |
-| `sanitize(options?)` | Remove active and hidden content: `javascript`, `externalActions` (launch, submit-form, import), `attachments`, `xfa` and `multimedia` by default, and `links` and `metadata` when set to `true`. Each option is a boolean. |
+| `sanitize(options?)` | Remove active and hidden content, by category or `profile` (see [Sanitizing](#sanitizing)). |
 
 `pages` is an index or an array of indices. An unknown `setInfo` field or
-`sanitize` option is a `TypeError`.
+`sanitize` option, or an unknown `profile`, is a `TypeError`.
+
+## Sanitizing
+
+`sanitize(options)` removes content by category. Each option is a boolean; a
+`profile` sets where they start, and the booleans named beside it change it.
+
+| Option | Removes | Default |
+| --- | --- | --- |
+| `javascript` | Document and annotation JavaScript | ✓ |
+| `externalActions` | Launch, submit-form, import and similar actions | ✓ |
+| `attachments` | Embedded files | ✓ |
+| `xfa` | XFA forms | ✓ |
+| `multimedia` | Sound, movie and rich-media content | ✓ |
+| `links` | Link annotations | |
+| `metadata` | Document information, XMP and `/LastModified` | |
+| `comments` | Comment annotations | |
+| `hiddenAnnotations` | Annotations marked hidden | |
+| `thumbnails` | Page thumbnails | |
+| `navigation` | Bookmarks and named destinations | |
+| `webCapture` | Web Capture data | |
+| `structure` | The structure tree (tagging) | |
+| `hiddenLayers` | Content in layers that are off by default; the visible layers become ordinary content | |
+| `invisibleText` | Invisible text, such as a scan's OCR layer; the document stops being searchable there | |
+
+| `profile` | For | Adds to the categories above it |
+| --- | --- | --- |
+| `"basic"` | Ordinary sharing | the defaults, `metadata`, `comments`, `hiddenAnnotations` |
+| `"privacy"` | Confidential documents | `thumbnails`, `webCapture`, `hiddenLayers` |
+| `"strict"` | Untrusted documents | `links`, `navigation`, `structure` |
+| `"all"` | Everything | `invisibleText` |
+
+```js
+const shared = await doc.edit().sanitize({ profile: "privacy" }).bytes();
+const kept = await doc.edit().sanitize({ profile: "strict", links: false }).bytes();
+```
+
+Form fields are kept by every category. Earlier revisions go with the full save
+that follows; an incremental save keeps them.
 
 ## Saving
 

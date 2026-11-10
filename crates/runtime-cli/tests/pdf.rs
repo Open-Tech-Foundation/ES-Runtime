@@ -212,6 +212,10 @@ throws(() => edit.select([3]), (e) => eq(e instanceof RangeError, true, "RangeEr
 throws(() => edit.rotate(0, 45), (e) => eq(e instanceof RangeError, true, "RangeError"), "rotation");
 throws(() => edit.setInfo({{ colour: "red" }}), (e) => eq(e instanceof TypeError, true, "TypeError"), "unknown info");
 throws(() => edit.sanitize({{ macros: true }}), (e) => eq(e instanceof TypeError, true, "TypeError"), "unknown sanitize option");
+throws(() => edit.sanitize({{ profile: "paranoid" }}), (e) => eq(e.message.includes('"privacy"'), true, "names the profiles"), "unknown profile");
+const strict = await edit.sanitize({{ profile: "strict" }}).bytes({{ compress: false, objectStreams: false }});
+eq(new TextDecoder("latin1").decode(strict).includes("/JavaScript"), false, "a strict profile removes it");
+eq(await texts(strict), ["Page 1", "Page 2", "Page 3"], "and keeps the pages");
 throws(() => edit.append({{}}), (e) => eq(e instanceof TypeError, true, "TypeError"), "append a non-PDF");
 throws(() => new PDF(), (e) => eq(e instanceof TypeError, true, "TypeError"), "no constructor");
 console.log("ok");
@@ -302,10 +306,10 @@ import {{ PDF }} from "runtime:pdf";
 await rejects(PDF.open({}), code("ERR_PDF_MALFORMED"), "not a PDF");
 await rejects(PDF.open(new Uint8Array(0)), code("ERR_PDF_MALFORMED"), "empty");
 await rejects(PDF.open({}, {{ strict: true }}), code("ERR_PDF_MALFORMED"), "strict refuses a repair");
-// otf-pdf drops a page content stream it cannot decode, so the bomb costs
-// nothing and reads as an empty page.
+// A bomb in page content stops at the limit and says so — it used to read as
+// an empty page, which hid the limit from the caller (otf-pdf 0.2).
 const bomb = await PDF.open({}, {{ maxDecodedSize: 1_000_000 }});
-eq(await bomb.text(), "\f", "a bomb in page content is not decoded");
+await rejects(bomb.text(), (e) => eq([e.code, e.limit], ["ERR_PDF_LIMIT", "decodedSize"], "limit"), "a bomb in page content");
 const big = await (await PDF.open({})).edit().addAttachment("zeros", new Uint8Array(2_000_000)).bytes();
 const capped = await PDF.open(big, {{ maxDecodedSize: 1_000_000 }});
 await rejects(capped.attachment("zeros"), (e) => eq([e.code, e.limit], ["ERR_PDF_LIMIT", "decodedSize"], "limit"), "over maxDecodedSize");
@@ -486,8 +490,18 @@ eq(await marked.outlines(), [
 ], "set outlines");
 eq(await (await PDF.open(await doc.edit().setOutlines([]).bytes())).outlines(), [], "removed");
 
-eq(await doc.sanitizeReport(), {{ javascript: 1, externalActions: 0, links: 0, attachments: 0, xfa: 0, multimedia: 0, metadata: 0 }}, "report");
+eq(await doc.sanitizeReport(), {{
+  javascript: 1, externalActions: 0, links: 0, attachments: 0, xfa: 0, multimedia: 0, metadata: 0,
+  comments: 0, hiddenAnnotations: 0, thumbnails: 0, navigation: 0, webCapture: 0, structure: 0,
+  hiddenLayers: 0, invisibleText: 0,
+}}, "report");
 eq((await doc.sanitizeReport({{ javascript: false }})).javascript, 0, "report honours options");
+// A profile is where the booleans start: otf-pdf's sets, then each override.
+eq((await doc.sanitizeReport({{ profile: "basic" }})).javascript, 1, "a profile");
+eq((await doc.sanitizeReport({{ profile: "strict", javascript: false }})).javascript, 0, "a boolean over a profile");
+eq((await doc.sanitizeReport({{ profile: "all" }})).invisibleText, 0, "the content categories run");
+// The fonts a first pageText loads are the second's too: the same answer.
+eq(await doc.pageText(0), await doc.pageText(0), "a repeated pageText");
 eq((await doc.text()).includes("Page 1"), true, "the report changes nothing");
 
 throws(() => doc.edit().setOutlines([{{ title: "x", page: 3 }}]), (e) => eq(e instanceof RangeError, true, "RangeError"), "bookmark page");

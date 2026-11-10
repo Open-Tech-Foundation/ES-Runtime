@@ -122,6 +122,14 @@ declare module "runtime:pdf" {
     xfa: number;
     multimedia: number;
     metadata: number;
+    comments: number;
+    hiddenAnnotations: number;
+    thumbnails: number;
+    navigation: number;
+    webCapture: number;
+    structure: number;
+    hiddenLayers: number;
+    invisibleText: number;
   }
 
   export interface PDFAttachment {
@@ -173,8 +181,30 @@ declare module "runtime:pdf" {
     xfa?: boolean;
     /** Default true. */
     multimedia?: boolean;
-    /** Default false. */
+    /** Default false. Also `/LastModified`. */
     metadata?: boolean;
+    /** Comment annotations. Default false. */
+    comments?: boolean;
+    /** Annotations marked hidden. Default false. */
+    hiddenAnnotations?: boolean;
+    /** Page thumbnails. Default false. */
+    thumbnails?: boolean;
+    /** Bookmarks and named destinations. Default false. */
+    navigation?: boolean;
+    /** Web Capture data. Default false. */
+    webCapture?: boolean;
+    /** The structure tree (tagging). Default false. */
+    structure?: boolean;
+    /** Content in layers that are off in the default view. Default false. */
+    hiddenLayers?: boolean;
+    /** Invisible text, such as a scan's OCR layer. Default false. */
+    invisibleText?: boolean;
+    /**
+     * Where the booleans start: `basic` for ordinary sharing, `privacy` for
+     * confidential documents, `strict` for untrusted ones, `all` for every
+     * category including invisible text. Without one, the defaults above.
+     */
+    profile?: "basic" | "privacy" | "strict" | "all";
   }
 
   /** A text field, a date, or `null` to remove it. */

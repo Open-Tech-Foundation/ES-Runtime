@@ -31,8 +31,8 @@ use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{Entropy, FileSystem, ProviderError, TaskSpawner};
 use otf_pdf::{
-    AttachmentOptions, Budget, Document, Encryption, Error as PdfError, Info, LimitKind, Limits,
-    Object, OpenOptions, OutlineItem, Page, Permissions, Rect, SanitizeOptions, SaveMode,
+    AttachmentOptions, Budget, Document, Encryption, Error as PdfError, FontCache, Info, LimitKind,
+    Limits, Object, OpenOptions, OutlineItem, Page, Permissions, Rect, SanitizeOptions, SaveMode,
     SaveOptions, Source, SourceError, Strictness, TextExtractor, Version,
 };
 
@@ -92,6 +92,9 @@ struct PdfHandle {
     strictness: Strictness,
     max_decoded_size: u64,
     doc: Arc<Document>,
+    /// The fonts text extraction has loaded, kept for the handle's life so a
+    /// second `pageText` does not load them again.
+    fonts: FontCache,
 }
 
 type Handles = Rc<RefCell<HashMap<u64, Rc<PdfHandle>>>>;
@@ -254,6 +257,7 @@ pub(crate) fn install(
                         strictness: open.strictness,
                         max_decoded_size: open.max_decoded_size,
                         doc: Arc::new(doc),
+                        fonts: FontCache::default(),
                     }),
                 );
                 summary.insert(0, field("handle", Value::Number(id as f64)));
@@ -268,7 +272,7 @@ pub(crate) fn install(
 
     // The reads: each takes a handle, and some an argument, and runs on the
     // spawner against the shared document.
-    type Read = fn(&Document, &[Value]) -> std::result::Result<Value, PdfError>;
+    type Read = fn(&Document, &FontCache, &[Value]) -> std::result::Result<Value, PdfError>;
     for (name, read) in [
         ("pdf_pages", pages as Read),
         ("pdf_text", text),
@@ -284,11 +288,11 @@ pub(crate) fn install(
             let spawner = spawner.clone();
             let parsed = lookup(&reg, &args).map(|handle| {
                 let rest: Vec<Value> = args.drain(1..).collect();
-                (handle.doc.clone(), rest)
+                (handle.doc.clone(), handle.fonts.clone(), rest)
             });
             Box::pin(async move {
-                let (doc, rest) = parsed?;
-                let result = offload(spawner, move || read(&doc, &rest)).await?;
+                let (doc, fonts, rest) = parsed?;
+                let result = offload(spawner, move || read(&doc, &fonts, &rest)).await?;
                 Ok(match result {
                     Ok(value) => ok(value),
                     Err(error) => failure(&error, None),
@@ -310,7 +314,7 @@ pub(crate) fn install(
             let (bytes, open, options) = parsed?;
             let result = offload(spawner, move || {
                 let mut doc = Document::open(bytes, open.options(None))?;
-                doc.sanitize(&options)
+                otf_pdf::sanitize(&mut doc, &options)
             })
             .await?;
             Ok(match result {
@@ -322,6 +326,14 @@ pub(crate) fn install(
                     field("xfa", num(report.xfa as f64)),
                     field("multimedia", num(report.multimedia as f64)),
                     field("metadata", num(report.metadata as f64)),
+                    field("comments", num(report.comments as f64)),
+                    field("hiddenAnnotations", num(report.hidden_annotations as f64)),
+                    field("thumbnails", num(report.thumbnails as f64)),
+                    field("navigation", num(report.navigation as f64)),
+                    field("webCapture", num(report.web_capture as f64)),
+                    field("structure", num(report.structure as f64)),
+                    field("hiddenLayers", num(report.hidden_layers as f64)),
+                    field("invisibleText", num(report.invisible_text as f64)),
                 ])),
                 Err(error) => failure(&error, None),
             })
@@ -531,7 +543,9 @@ fn apply(doc: &mut Document, step: Step) -> std::result::Result<(), PdfError> {
             options,
         } => doc.add_attachment(&name, &data, &options),
         Step::RemoveAttachment(name) => doc.remove_attachment(&name).map(drop),
-        Step::Sanitize(options) => doc.sanitize(&options).map(drop),
+        // The full sanitizer: the categories that rewrite page content
+        // (hidden layers, invisible text) are otf-pdf's facade's to apply.
+        Step::Sanitize(options) => otf_pdf::sanitize(doc, &options).map(drop),
         Step::Append(..) => unreachable!("an append is resolved before the work runs"),
     }
 }
@@ -584,32 +598,7 @@ fn run_save(
         ..SaveOptions::default()
     };
     doc.save(&options)
-        .map_err(|error| refused(error, save.incremental))
 }
-
-/// otf-pdf refuses an unsafe incremental save with an ordinary error whose
-/// message ends "save in full"; it becomes its own failure here so the guest
-/// can fall back without parsing the message.
-fn refused(error: PdfError, incremental: bool) -> PdfError {
-    error_refusal(&error, incremental).unwrap_or(error)
-}
-
-fn error_refusal(error: &PdfError, incremental: bool) -> Option<PdfError> {
-    if !incremental {
-        return None;
-    }
-    let message = match error {
-        PdfError::Syntax { message, .. } => (*message).to_string(),
-        PdfError::UnsupportedEncryption(message) => message.clone(),
-        _ => return None,
-    };
-    message
-        .ends_with("save in full")
-        .then(|| PdfError::UnsupportedEncryption(format!("{REFUSED}{message}")))
-}
-
-/// Marks an incremental refusal so [`failure`] can name it.
-const REFUSED: &str = "\u{0}refused:";
 
 // ---- reads ------------------------------------------------------------------
 
@@ -725,7 +714,11 @@ fn page_value(page: &Page) -> Value {
     ])
 }
 
-fn pages(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn pages(
+    doc: &Document,
+    _fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     Ok(Value::Array(doc.pages()?.iter().map(page_value).collect()))
 }
 
@@ -762,14 +755,22 @@ fn outline_item(
     })
 }
 
-fn xmp(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn xmp(
+    doc: &Document,
+    _fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     Ok(match doc.xmp_metadata()? {
         Some(bytes) => Value::String(String::from_utf8_lossy(&bytes).into_owned()),
         None => Value::Undefined,
     })
 }
 
-fn destinations(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn destinations(
+    doc: &Document,
+    _fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     let pages: Vec<_> = doc.pages()?.iter().map(|p| p.id).collect();
     let named = doc.named_destinations()?;
     Ok(Value::Array(
@@ -789,14 +790,24 @@ fn destinations(doc: &Document, _args: &[Value]) -> std::result::Result<Value, P
     ))
 }
 
-fn text(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
-    Ok(Value::String(TextExtractor::new(doc).text()?))
+fn text(
+    doc: &Document,
+    fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
+    Ok(Value::String(
+        TextExtractor::with_fonts(doc, fonts.clone()).text()?,
+    ))
 }
 
-fn page_text(doc: &Document, args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn page_text(
+    doc: &Document,
+    fonts: &FontCache,
+    args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     let index = args.first().and_then(Value::as_number).unwrap_or(0.0) as usize;
     let with_chars = matches!(args.get(1), Some(Value::Bool(true)));
-    let page = TextExtractor::new(doc).page(index)?;
+    let page = TextExtractor::with_fonts(doc, fonts.clone()).page(index)?;
     let lines = page
         .lines
         .iter()
@@ -845,7 +856,11 @@ fn page_text(doc: &Document, args: &[Value]) -> std::result::Result<Value, PdfEr
     ]))
 }
 
-fn outlines(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn outlines(
+    doc: &Document,
+    _fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     let pages: Vec<_> = doc.pages()?.iter().map(|p| p.id).collect();
     let named = doc.named_destinations()?;
     let items = doc.outlines()?;
@@ -917,7 +932,11 @@ fn lookup_named(
     dest_page(dest, pages, named, depth + 1)
 }
 
-fn attachments(doc: &Document, _args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn attachments(
+    doc: &Document,
+    _fonts: &FontCache,
+    _args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     Ok(Value::Array(
         doc.attachments()?
             .iter()
@@ -941,7 +960,11 @@ fn attachments(doc: &Document, _args: &[Value]) -> std::result::Result<Value, Pd
     ))
 }
 
-fn attachment(doc: &Document, args: &[Value]) -> std::result::Result<Value, PdfError> {
+fn attachment(
+    doc: &Document,
+    _fonts: &FontCache,
+    args: &[Value],
+) -> std::result::Result<Value, PdfError> {
     let name = args.first().and_then(Value::as_str).unwrap_or_default();
     let Some(found) = doc.attachments()?.into_iter().find(|a| a.name == name) else {
         return Ok(Value::Undefined);
@@ -981,9 +1004,9 @@ fn failure(error: &PdfError, cancel: Option<&AtomicBool>) -> Value {
             ]);
         }
         PdfError::InvalidPassword => ("invalid_password", message),
-        PdfError::UnsupportedEncryption(m) if m.starts_with(REFUSED) => {
-            ("incremental_refused", m[REFUSED.len()..].to_string())
-        }
+        // Its own variant since otf-pdf 0.2, so a guest can fall back to a
+        // full save without reading the message.
+        PdfError::IncrementalSaveRefused(_) => ("incremental_refused", message),
         PdfError::UnsupportedEncryption(_) => ("unsupported_encryption", message),
         PdfError::Source(_) => ("source", message),
         _ => ("malformed", message),
@@ -1224,9 +1247,25 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
     })
 }
 
+/// `sanitize(options)`: a `profile` to start from (otf-pdf's `BASIC`,
+/// `PRIVACY`, `STRICT`, `ALL`; without one, otf-pdf's default), then each
+/// category's boolean on top. `pdf.js` has checked the names.
 fn sanitize_options(value: Option<&Value>) -> SanitizeOptions {
-    let mut options = SanitizeOptions::default();
-    if let Some(Value::Object(fields)) = value {
+    let fields = match value {
+        Some(Value::Object(fields)) => Some(fields),
+        _ => None,
+    };
+    let mut options = match fields
+        .and_then(|f| get(f, "profile"))
+        .and_then(Value::as_str)
+    {
+        Some("basic") => SanitizeOptions::BASIC,
+        Some("privacy") => SanitizeOptions::PRIVACY,
+        Some("strict") => SanitizeOptions::STRICT,
+        Some("all") => SanitizeOptions::ALL,
+        _ => SanitizeOptions::default(),
+    };
+    if let Some(fields) = fields {
         for (key, slot) in [
             ("javascript", &mut options.javascript),
             ("externalActions", &mut options.external_actions),
@@ -1235,6 +1274,14 @@ fn sanitize_options(value: Option<&Value>) -> SanitizeOptions {
             ("xfa", &mut options.xfa),
             ("multimedia", &mut options.multimedia),
             ("metadata", &mut options.metadata),
+            ("comments", &mut options.comments),
+            ("hiddenAnnotations", &mut options.hidden_annotations),
+            ("thumbnails", &mut options.thumbnails),
+            ("navigation", &mut options.navigation),
+            ("webCapture", &mut options.web_capture),
+            ("structure", &mut options.structure),
+            ("hiddenLayers", &mut options.hidden_layers),
+            ("invisibleText", &mut options.invisible_text),
         ] {
             if let Some(Value::Bool(b)) = get(fields, key) {
                 *slot = *b;
@@ -1372,10 +1419,11 @@ pub(crate) fn fuzz_open(bytes: &[u8]) {
         return;
     };
     let _ = summary(&doc);
+    let fonts = FontCache::default();
     for read in [pages, text, outlines, destinations, attachments, xmp] {
-        let _ = read(&doc, &[]);
+        let _ = read(&doc, &fonts, &[]);
     }
-    let _ = page_text(&doc, &[Value::Number(0.0), Value::Bool(true)]);
+    let _ = page_text(&doc, &fonts, &[Value::Number(0.0), Value::Bool(true)]);
     let count = doc.page_count().unwrap_or(0);
     let mut steps = vec![ResolvedStep::Plain(Step::Sanitize(SanitizeOptions::ALL))];
     if count > 0 {
@@ -1601,17 +1649,37 @@ mod tests {
             name(failure(&PdfError::Limit(LimitKind::Budget), Some(&flag))).as_deref(),
             Some("aborted")
         );
-        let refusal = refused(
-            PdfError::syntax(0, "no startxref to append to; save in full"),
-            true,
-        );
+        let refusal = PdfError::IncrementalSaveRefused("no startxref to append to");
         assert_eq!(
             name(failure(&refusal, None)).as_deref(),
             Some("incremental_refused")
         );
-        // The same message on a full save is not a refusal.
-        let full = refused(PdfError::syntax(0, "x; save in full"), false);
-        assert_eq!(name(failure(&full, None)).as_deref(), Some("malformed"));
+        // A message that merely reads like one is not a refusal.
+        let lookalike = PdfError::syntax(0, "x; save in full");
+        assert_eq!(
+            name(failure(&lookalike, None)).as_deref(),
+            Some("malformed")
+        );
+    }
+
+    #[test]
+    fn a_sanitize_profile_is_the_base_its_booleans_change() {
+        let options = |fields: Vec<(String, Value)>| sanitize_options(Some(&Value::Object(fields)));
+        assert_eq!(options(vec![]), SanitizeOptions::default());
+        assert_eq!(
+            options(vec![field("profile", Value::String("privacy".into()))]),
+            SanitizeOptions::PRIVACY
+        );
+        let strict = options(vec![
+            field("profile", Value::String("strict".into())),
+            field("links", Value::Bool(false)),
+            field("invisibleText", Value::Bool(true)),
+        ]);
+        assert!(!strict.links && strict.invisible_text && strict.hidden_layers);
+        assert_eq!(
+            options(vec![field("profile", Value::String("all".into()))]),
+            SanitizeOptions::ALL
+        );
     }
 
     #[test]

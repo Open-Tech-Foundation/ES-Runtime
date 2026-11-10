@@ -37,7 +37,18 @@ namespace) is unstable and may change between minor releases until the API freez
   connect errors carry codes (`ERR_DNS`, `ERR_CONNECTION_REFUSED`, `ERR_TLS`,
   `ERR_TIMED_OUT`).
 
+- **`runtime:pdf` sanitize profiles and categories** (otf-pdf 0.2):
+  `sanitize({ profile: "basic" | "privacy" | "strict" | "all" })`, and
+  `comments`, `hiddenAnnotations`, `thumbnails`, `navigation`, `webCapture`,
+  `structure`, `hiddenLayers` and `invisibleText`, each counted by
+  `sanitizeReport`. Hidden layers and invisible text are cut from page
+  content without moving the visible text. The defaults are unchanged.
+
 ### Fixed
+
+- `runtime:pdf`: a page whose content stream exceeds `maxDecodedSize` fails
+  with `ERR_PDF_LIMIT` instead of reading as an empty page, and `pageText`
+  reuses the fonts an earlier call loaded on the same document (otf-pdf 0.2).
 
 - A response the server cut short fails `fetch` with `ERR_CONNECTION_RESET`
   and "the connection closed before the response completed", instead of the

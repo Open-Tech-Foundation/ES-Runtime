@@ -44,7 +44,13 @@ const PERMISSIONS = [
 ];
 const INFO_TEXT = ["title", "author", "subject", "keywords", "creator", "producer"];
 const INFO_DATES = ["creationDate", "modDate"];
-const SANITIZE = ["javascript", "externalActions", "links", "attachments", "xfa", "multimedia", "metadata"];
+const SANITIZE = [
+  "javascript", "externalActions", "links", "attachments", "xfa", "multimedia", "metadata",
+  "comments", "hiddenAnnotations", "thumbnails", "navigation", "webCapture", "structure",
+  "hiddenLayers", "invisibleText",
+];
+// otf-pdf's profiles: where a sanitize starts before its booleans apply.
+const SANITIZE_PROFILES = ["basic", "privacy", "strict", "all"];
 
 // A document's handle and cancel token are released when it is collected
 // without close(). The held value names them, never the document.
@@ -179,6 +185,16 @@ function sanitizeOptions(options) {
   const o = optionsObject(options, "sanitize");
   const chosen = {};
   for (const [key, value] of Object.entries(o)) {
+    if (key === "profile") {
+      if (value === undefined) continue;
+      if (!SANITIZE_PROFILES.includes(value)) {
+        throw new TypeError(
+          `sanitize profile must be one of ${SANITIZE_PROFILES.map((p) => `"${p}"`).join(", ")}`,
+        );
+      }
+      chosen.profile = value;
+      continue;
+    }
     if (!SANITIZE.includes(key)) throw new TypeError(`sanitize does not know ${JSON.stringify(key)}`);
     chosen[key] = Boolean(value);
   }
@@ -318,8 +334,8 @@ export class PDF {
   }
 
   /**
-   * What `edit().sanitize(options)` would remove, counted:
-   * `{ javascript, externalActions, links, attachments, xfa, multimedia, metadata }`.
+   * What `edit().sanitize(options)` would remove, counted, one number per
+   * category: `{ javascript, externalActions, …, hiddenLayers, invisibleText }`.
    * Nothing is changed.
    */
   async sanitizeReport(options) {
