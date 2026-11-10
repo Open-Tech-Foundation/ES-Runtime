@@ -44,6 +44,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `sanitizeReport`. Hidden layers and invisible text are cut from page
   content without moving the visible text. The defaults are unchanged.
 
+### Changed
+
+- Password hashing moves to `argon2` 0.6 and `scrypt` 0.12, on the same
+  `digest` generation as the rest of the crypto stack, so the older `sha2`,
+  `hmac`, `pbkdf2` and `blake2` copies leave the binary. Hashes are written in
+  the same PHC format and verify in both directions across the upgrade.
+
 ### Fixed
 
 - `runtime:pdf`: a page whose content stream exceeds `maxDecodedSize` fails

@@ -394,8 +394,7 @@ fn password_hash(
 ) -> Result<String, OpError> {
     match algorithm {
         "argon2id" | "argon2i" | "argon2d" => {
-            use argon2::password_hash::{PasswordHasher, SaltString};
-            use argon2::{Algorithm, Argon2, Params, Version};
+            use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 
             let variant = match algorithm {
                 "argon2i" => Algorithm::Argon2i,
@@ -404,10 +403,10 @@ fn password_hash(
             };
             let params = Params::new(params.memory, params.time, params.parallelism, None)
                 .map_err(|e| type_error(format!("invalid argon2 parameters: {e}")))?;
-            let salt = SaltString::encode_b64(salt)
-                .map_err(|e| type_error(format!("invalid salt: {e}")))?;
+            // The salt goes in as bytes; password-hash 0.6 encodes it into the
+            // PHC string itself.
             Argon2::new(variant, Version::V0x13, params)
-                .hash_password(password, &salt)
+                .hash_password_with_salt(password, salt)
                 .map(|hash| hash.to_string())
                 .map_err(|e| type_error(format!("argon2 hashing failed: {e}")))
         }
@@ -430,19 +429,19 @@ fn password_hash(
         }
         "scrypt" => {
             use scrypt::Scrypt;
-            use scrypt::password_hash::{PasswordHasher, SaltString};
+            use scrypt::password_hash::PasswordHasher;
 
-            let params = scrypt::Params::new(
+            // The output length named, not left to the default: it is part
+            // of every stored hash, so it must not move with the crate.
+            let params = scrypt::Params::new_with_output_len(
                 params.cost as u8,
                 params.block_size,
                 params.parallelism,
                 scrypt::Params::RECOMMENDED_LEN,
             )
             .map_err(|e| type_error(format!("invalid scrypt parameters: {e}")))?;
-            let salt = SaltString::encode_b64(salt)
-                .map_err(|e| type_error(format!("invalid salt: {e}")))?;
-            Scrypt
-                .hash_password_customized(password, None, None, params, &salt)
+            Scrypt::new_with_params(params)
+                .hash_password_with_salt(password, salt)
                 .map(|hash| hash.to_string())
                 .map_err(|e| type_error(format!("scrypt hashing failed: {e}")))
         }
@@ -466,7 +465,7 @@ fn password_verify(password: &[u8], stored: &str) -> Result<bool, OpError> {
             .map_err(|e| type_error(format!("bcrypt verification failed: {e}")));
     }
 
-    use argon2::password_hash::{PasswordHash, PasswordVerifier};
+    use argon2::{PasswordHash, PasswordVerifier};
     let parsed = PasswordHash::new(stored)
         .map_err(|e| type_error(format!("unreadable password hash: {e}")))?;
     let algorithm = parsed.algorithm.as_str();
@@ -475,12 +474,13 @@ fn password_verify(password: &[u8], stored: &str) -> Result<bool, OpError> {
             .verify_password(password, &parsed)
             .is_ok(),
         "scrypt" => {
-            // scrypt's `PasswordVerifier` reads its params from the same
-            // string, but it is the 0.11 crate's own `password_hash`
-            // re-export — the same 0.5 generation, so the parsed value passes
-            // straight through.
+            // scrypt's verifier reads its params from the same string, and
+            // speaks the same password-hash 0.6 as argon2's, so the parsed
+            // value passes straight through.
             use scrypt::password_hash::PasswordVerifier as _;
-            scrypt::Scrypt.verify_password(password, &parsed).is_ok()
+            scrypt::Scrypt::new()
+                .verify_password(password, &parsed)
+                .is_ok()
         }
         other => {
             return Err(type_error(format!(

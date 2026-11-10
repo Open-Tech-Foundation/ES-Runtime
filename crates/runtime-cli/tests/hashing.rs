@@ -327,6 +327,35 @@ console.log("ok");
 
 /// Every password algorithm, round-tripped through the module, at costs low
 /// enough for a test suite.
+/// Hashes written by esrun 0.46 (argon2 0.5, scrypt 0.11) still verify: a
+/// stored password must survive a crate upgrade. Each was hashed from
+/// "correct horse" by the released binary.
+#[test]
+fn passwords_hashed_by_an_earlier_release_still_verify() {
+    let s = run(
+        "hash_password_compat.mjs",
+        &format!(
+            r#"
+import {{ password }} from "runtime:hashing";
+{EQ}
+const stored = [
+  "$scrypt$ln=10,r=8,p=1$5wvvp+UOQJkP7dXxJLkz+w$+8UIUhX1g+JmqTCD1/pWqeOlA64/PoxW3bHG88q89U0",
+  "$argon2id$v=19$m=64,t=1,p=1$Go1zAVxbKAuSviOCjLKbgw$j8DG4W+WLKZNfFDwUlVdjliLeOAp13AHuB4VPnVBuJs",
+  "$argon2i$v=19$m=64,t=1,p=1$jwgAPa9W6gTnq+ZtLKSvYg$0K8W7UvvBDmQpAcz86R0MiOSUPcB17y62018M8rWSa0",
+  "$argon2d$v=19$m=64,t=1,p=1$uT+rR57DVaB/80sGJmmBow$u6zcC5fXtZgRZHiiy7NK82GpOs3QDPo1h0ZmNJj/mcY",
+];
+for (const hash of stored) {{
+  const algorithm = hash.split("$")[1];
+  eq(await password.verify("correct horse", hash), true, `${{algorithm}} verifies`);
+  eq(await password.verify("correct horsf", hash), false, `${{algorithm}} rejects`);
+}}
+console.log("ok");
+"#
+        ),
+    );
+    assert_eq!(s.trim(), "ok");
+}
+
 #[test]
 fn every_password_algorithm_hashes_and_verifies() {
     let s = run(
