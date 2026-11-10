@@ -192,26 +192,14 @@ impl SyncFileSystem for SystemSyncFileSystem {
         })
     }
 
+    // Pinned, like the async provider's: a stat or a listing answered through
+    // a directory swapped for a link would describe something outside the jail.
     fn stat(&self, path: &str) -> Result<FileStat, ProviderError> {
-        let resolved = self.jail.jailed(path, Access::Read)?;
-        let meta = std::fs::metadata(&resolved).map_err(|e| io(path, e))?;
-        Ok(file_stat(&meta))
+        self.jail.anchored(path, Access::Read)?.stat()
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, ProviderError> {
-        let resolved = self.jail.jailed(path, Access::Read)?;
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(&resolved).map_err(|e| io(path, e))? {
-            let entry = entry.map_err(|e| io(path, e))?;
-            let file_type = entry.file_type().map_err(|e| io(path, e))?;
-            out.push(DirEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                is_file: file_type.is_file(),
-                is_dir: file_type.is_dir(),
-                is_symlink: file_type.is_symlink(),
-            });
-        }
-        Ok(out)
+        self.jail.anchored(path, Access::Read)?.list()
     }
 
     fn mkdir(&self, path: &str) -> Result<(), ProviderError> {

@@ -114,38 +114,132 @@ fn walk_error(base: &str, base_real: &Path, e: walkdir::Error) -> ProviderError 
     }
 }
 
+/// Every entry below a pinned glob base, links not followed: walked by
+/// descriptor on Unix, so the walk stays in the tree the jail checked.
+#[cfg(unix)]
+fn unfollowed_entries(
+    pinned: &crate::jail::Anchored,
+    _base: &str,
+    _base_real: &Path,
+) -> Result<Vec<(PathBuf, bool)>, ProviderError> {
+    // A base that is a file has nothing below it — the answer a path walk
+    // gives, rather than "not a directory".
+    if !pinned.stat()?.is_dir {
+        return Ok(Vec::new());
+    }
+    Ok(pinned
+        .walk()?
+        .into_iter()
+        .map(|(rel, kind)| (rel, kind == rustix::fs::FileType::RegularFile))
+        .collect())
+}
+
+/// Windows has no `*at` (see the anchor module): the same walk, by path.
+#[cfg(not(unix))]
+fn unfollowed_entries(
+    _pinned: &crate::jail::Anchored,
+    base: &str,
+    base_real: &Path,
+) -> Result<Vec<(PathBuf, bool)>, ProviderError> {
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(base_real) {
+        let entry = entry.map_err(|e| walk_error(base, base_real, e))?;
+        let path = entry.path();
+        if path == base_real {
+            continue;
+        }
+        let rel = path.strip_prefix(base_real).unwrap_or(path);
+        entries.push((rel.to_path_buf(), entry.file_type().is_file()));
+    }
+    Ok(entries)
+}
+
 fn other(p: &str, e: std::io::Error) -> ProviderError {
     ProviderError::from_io(p, &e)
 }
 
-/// Whether two already-jailed paths name the same file on disk.
+/// Copies the file at `from` to `to`, both already pinned, and returns the
+/// number of bytes copied.
 ///
-/// Equal paths are the obvious case, and `jailed` has canonicalized both, so
-/// `a.txt` and `./a.txt` compare equal here. Identity is not path equality
-/// though: two hardlinks to one inode have different names and truncating
-/// either destroys the other, so on Unix the device/inode pair decides. A path
-/// that cannot be stat'd (the destination usually does not exist yet) is not the
-/// same file as anything, and the copy proceeds normally.
-#[cfg(unix)]
-async fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    if a == b {
-        return true;
+/// Both files are opened by descriptor in the directories the jail checked,
+/// and the destination is opened **without** truncating: whether the two are
+/// one file is decided from the open descriptors, before a byte of either is
+/// touched. `fs::copy` opened the destination truncating before it read the
+/// source, so copying a file onto itself emptied it and reported 0 bytes — a
+/// silent wipe of the very file being backed up. Deno refuses that call and
+/// Node treats it as a no-op; it is refused here, since nothing was copied and
+/// there is no honest byte count to resolve with.
+fn copy_pinned(
+    a: &crate::jail::Anchored,
+    b: &crate::jail::Anchored,
+    from: &str,
+    to: &str,
+) -> Result<u64, ProviderError> {
+    let mut source = a.open()?;
+    let meta = source.metadata().map_err(|e| other(a.shown(), e))?;
+    if !meta.is_file() {
+        return Err(other(
+            a.shown(),
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the source path is not a regular file",
+            ),
+        ));
     }
-    // Follows symlinks deliberately: a copy reads and writes through them, so a
-    // link and its target are the same file for this purpose.
-    let (Ok(ma), Ok(mb)) = (tokio::fs::metadata(a).await, tokio::fs::metadata(b).await) else {
-        return false;
-    };
-    ma.dev() == mb.dev() && ma.ino() == mb.ino()
+    let mut dest = b.open_mode(crate::jail::OpenMode {
+        read: false,
+        write: true,
+        append: false,
+        truncate: false,
+        create: true,
+        create_new: false,
+    })?;
+    if same_file(&meta, &dest, a, b) {
+        return Err(ProviderError::Coded {
+            code: ErrorCode::SameFile,
+            message: format!(
+                "Source and destination paths refer to the same file: copy '{from}' -> '{to}'"
+            ),
+        });
+    }
+    dest.set_len(0).map_err(|e| other(b.shown(), e))?;
+    // `io::copy` between two files is `copy_file_range`/`sendfile` on Linux,
+    // which is what `fs::copy` was doing underneath.
+    let copied = std::io::copy(&mut source, &mut dest).map_err(|e| other(a.shown(), e))?;
+    // The mode travels with the bytes, as `fs::copy` (and `cp`) carry it.
+    dest.set_permissions(meta.permissions())
+        .map_err(|e| other(b.shown(), e))?;
+    Ok(copied)
+}
+
+/// Whether the open source and destination are one file.
+///
+/// Identity is not path equality: two hardlinks to one inode have different
+/// names, and truncating either destroys the other — so on Unix the
+/// device/inode pair of the two descriptors decides.
+#[cfg(unix)]
+fn same_file(
+    source: &std::fs::Metadata,
+    dest: &std::fs::File,
+    _a: &crate::jail::Anchored,
+    _b: &crate::jail::Anchored,
+) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    dest.metadata()
+        .is_ok_and(|d| d.dev() == source.dev() && d.ino() == source.ino())
 }
 
 /// Windows exposes no stable inode through `std`, so canonical-path equality is
 /// the whole check there and a hardlinked destination still takes the truncating
 /// path.
 #[cfg(not(unix))]
-async fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
-    a == b
+fn same_file(
+    _source: &std::fs::Metadata,
+    _dest: &std::fs::File,
+    a: &crate::jail::Anchored,
+    b: &crate::jail::Anchored,
+) -> bool {
+    a.path() == b.path()
 }
 
 fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
@@ -224,75 +318,38 @@ impl FileSystem for SystemFileSystem {
         })
     }
 
+    // `stat`, `exists` and `readDir` are pinned like `read`: answering through a
+    // directory swapped for a link would tell the guest the size of a file, or
+    // the names in a directory, outside the jail. Each is a metadata call, so
+    // it runs now rather than on the blocking pool.
     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
-        let shown = self.jail.spelled(&path);
-        let resolved = self.jail.jailed(&path, Access::Read);
-        if let Ok(p) = &resolved
-            && let Ok(md) = std::fs::metadata(p)
-        {
-            let is_symlink = std::fs::symlink_metadata(p)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-            return Box::pin(std::future::ready(Ok(FileStat {
-                size: md.len(),
-                is_file: md.is_file(),
-                is_dir: md.is_dir(),
-                is_symlink,
-                mtime_ms: mtime_ms(&md),
-            })));
-        }
-        Box::pin(async move {
-            let p = resolved?;
-            let md = tokio::fs::metadata(&p)
-                .await
-                .map_err(|e| other(&shown, e))?;
-            let is_symlink = tokio::fs::symlink_metadata(&p)
-                .await
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-            Ok(FileStat {
-                size: md.len(),
-                is_file: md.is_file(),
-                is_dir: md.is_dir(),
-                is_symlink,
-                mtime_ms: mtime_ms(&md),
-            })
-        })
+        let result = self
+            .jail
+            .anchored(&path, Access::Read)
+            .and_then(|anchored| anchored.stat());
+        Box::pin(std::future::ready(result))
     }
 
     fn exists(&self, path: String) -> BoxFuture<Result<bool, ProviderError>> {
-        let shown = self.jail.spelled(&path);
-        let resolved = self.jail.jailed(&path, Access::Read);
-        if let Ok(p) = &resolved {
-            return Box::pin(std::future::ready(
-                p.try_exists().map_err(|e| other(&shown, e)),
-            ));
-        }
-        Box::pin(std::future::ready(Ok(false)))
+        let result = match self.jail.anchored(&path, Access::Read) {
+            // A path the jail refuses does not exist, as far as this run can
+            // tell — the answer it has always given.
+            Err(_) => Ok(false),
+            Ok(anchored) => match anchored.stat() {
+                Ok(_) => Ok(true),
+                Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(false),
+                Err(e) => Err(e),
+            },
+        };
+        Box::pin(std::future::ready(result))
     }
 
     fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>> {
-        let shown = self.jail.spelled(&path);
-        let p = match self.jail.jailed(&path, Access::Read) {
-            Ok(p) => p,
-            // Propagate the jail-escape error, like read/write/stat.
-            Err(e) => return Box::pin(std::future::ready(Err(e))),
-        };
-        let res = (|| -> std::io::Result<Vec<DirEntry>> {
-            let mut out = Vec::new();
-            for entry in std::fs::read_dir(&p)? {
-                let entry = entry?;
-                let ft = entry.file_type()?;
-                out.push(DirEntry {
-                    name: entry.file_name().to_string_lossy().into_owned(),
-                    is_file: ft.is_file(),
-                    is_dir: ft.is_dir(),
-                    is_symlink: ft.is_symlink(),
-                });
-            }
-            Ok(out)
-        })();
-        Box::pin(std::future::ready(res.map_err(|e| other(&shown, e))))
+        let result = self
+            .jail
+            .anchored(&path, Access::Read)
+            .and_then(|anchored| anchored.list());
+        Box::pin(std::future::ready(result))
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
@@ -391,26 +448,20 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn copy(&self, from: String, to: String) -> BoxFuture<Result<u64, ProviderError>> {
-        let shown = self.jail.spelled(&from);
-        let from_r = self.jail.jailed(&from, Access::Read);
-        let to_r = self.jail.jailed(&to, Access::Write);
+        // Both ends pinned **now**, while the call is being made. The copy
+        // itself happens later, on the blocking pool — and a copy that named
+        // its files by path then was the one jailed operation a guest could
+        // point outside the root: `copy("d/x", …)`, then `rename("d", …)` and
+        // `symlink(outside, "d")` in the same tick, and the copy followed the
+        // new `d`. Holding the directories that were checked means it reads
+        // and writes there, whatever the names point at by the time it runs.
+        let from_r = self.jail.anchored(&from, Access::Read);
+        let to_r = self.jail.anchored(&to, Access::Write);
         Box::pin(async move {
             let (a, b) = (from_r?, to_r?);
-            // `fs::copy` opens the destination truncating *before* it reads the
-            // source, so copying a file onto itself emptied it and reported 0
-            // bytes copied — a silent wipe of the very file being backed up.
-            // Deno refuses the same call; Node/libuv treats it as a no-op. It is
-            // refused here: nothing was copied, so there is no honest byte count
-            // to resolve with, and the call is almost certainly a caller bug.
-            if same_file(&a, &b).await {
-                return Err(ProviderError::Coded {
-                    code: ErrorCode::SameFile,
-                    message: format!(
-                        "Source and destination paths refer to the same file: copy '{from}' -> '{to}'"
-                    ),
-                });
-            }
-            tokio::fs::copy(&a, &b).await.map_err(|e| other(&shown, e))
+            tokio::task::spawn_blocking(move || copy_pinned(&a, &b, &from, &to))
+                .await
+                .map_err(|e| ProviderError::Other(e.to_string()))?
         })
     }
 
@@ -532,20 +583,17 @@ impl FileSystem for SystemFileSystem {
         dir: String,
         prefix: String,
     ) -> BoxFuture<Result<String, ProviderError>> {
-        let resolved = self.jail.temp_base(&dir, Access::Write);
-        Box::pin(async move {
-            let base = resolved?;
-            // Built by tempfile, so the name is unpredictable: a guessable temp
-            // name in a shared directory is a symlink-attack invitation, and it
-            // is not something each caller should have to get right.
-            let made = tempfile::Builder::new()
-                .prefix(&prefix)
-                .tempdir_in(&base)
-                .map_err(|e| other(&dir, e))?;
-            // Hand ownership to the guest: it decides when to remove it, exactly
-            // as with any other directory it created.
-            Ok(made.keep().to_string_lossy().into_owned())
-        })
+        // The name is unpredictable — a guessable temp name in a shared
+        // directory is a symlink-attack invitation, and not something each
+        // caller should have to get right — and it is created exclusively,
+        // inside the directory that was checked and is still held open. The
+        // guest owns it from here, as with any directory it created.
+        let result = self
+            .jail
+            .temp_base(&dir, Access::Write)
+            .and_then(|base| base.make_temp(&prefix, true))
+            .map(|made| made.to_string_lossy().into_owned());
+        Box::pin(std::future::ready(result))
     }
 
     fn make_temp_file(
@@ -553,16 +601,12 @@ impl FileSystem for SystemFileSystem {
         dir: String,
         prefix: String,
     ) -> BoxFuture<Result<String, ProviderError>> {
-        let resolved = self.jail.temp_base(&dir, Access::Write);
-        Box::pin(async move {
-            let base = resolved?;
-            let made = tempfile::Builder::new()
-                .prefix(&prefix)
-                .tempfile_in(&base)
-                .map_err(|e| other(&dir, e))?;
-            let (_file, path) = made.keep().map_err(|e| other(&dir, e.error))?;
-            Ok(path.to_string_lossy().into_owned())
-        })
+        let result = self
+            .jail
+            .temp_base(&dir, Access::Write)
+            .and_then(|base| base.make_temp(&prefix, false))
+            .map(|made| made.to_string_lossy().into_owned());
+        Box::pin(std::future::ready(result))
     }
 
     fn open_tree(
@@ -604,46 +648,57 @@ impl FileSystem for SystemFileSystem {
         pattern: String,
         opts: GlobScanOptions,
     ) -> BoxFuture<Result<Vec<String>, ProviderError>> {
-        let resolved = self.jail.jailed(&base, Access::Read);
+        // Pinned now, like every other read: the default walk lists the
+        // directory that was checked, by descriptor, so a base or a
+        // subdirectory swapped for a link while it runs cannot redirect it.
+        let resolved = self.jail.anchored(&base, Access::Read);
         let roots = self.jail.roots(Access::Read).to_vec();
         let allow_read = self.jail.allow_read();
         Box::pin(async move {
-            let base_real = resolved?;
+            let pinned = resolved?;
+            let base_real = pinned.path().to_path_buf();
             let (matcher, negated) = parse_glob(&pattern)?;
-            let mut out = Vec::new();
-            // Default: don't follow symlinks (can't leave the jail). When the
-            // caller opts in, follow them but reject any entry whose real path
-            // escapes the root.
-            for entry in WalkDir::new(&base_real).follow_links(opts.follow_symlinks) {
-                let entry = entry.map_err(|e| walk_error(&base, &base_real, e))?;
-                let path = entry.path();
-                if path == base_real {
-                    continue; // skip the base itself
-                }
-                if opts.follow_symlinks
-                    && path::canonicalize(path)
+            // Every entry below the base, as (relative path, is a file).
+            let entries: Vec<(PathBuf, bool)> = if opts.follow_symlinks {
+                // Opted in: follow links, but drop any entry whose real path
+                // leaves the jail or the scope list — listing a name is a read
+                // either way. That per-entry check is what keeps this walk
+                // honest, so it can stay a path walk.
+                let mut entries = Vec::new();
+                for entry in WalkDir::new(&base_real).follow_links(true) {
+                    let entry = entry.map_err(|e| walk_error(&base, &base_real, e))?;
+                    let path = entry.path();
+                    if path == base_real {
+                        continue; // skip the base itself
+                    }
+                    let left = path::canonicalize(path)
                         .map(|real| {
-                            // A followed link may leave the jail, or stay inside
-                            // it but leave the scope list — listing a name is a
-                            // read either way.
                             !roots.iter().any(|root| path::within_root(&real, root))
                                 || allow_read.as_ref().is_some_and(|a| !a.permits(&real))
                         })
-                        .unwrap_or(false)
-                {
-                    continue; // a followed link left what this run may read
+                        .unwrap_or(false);
+                    if left {
+                        continue; // a followed link left what this run may read
+                    }
+                    let rel = path.strip_prefix(&base_real).unwrap_or(path);
+                    entries.push((rel.to_path_buf(), entry.file_type().is_file()));
                 }
-                let rel = path.strip_prefix(&base_real).unwrap_or(path);
-                let rel_str = crate::path::to_slash(rel);
+                entries
+            } else {
+                unfollowed_entries(&pinned, &base, &base_real)?
+            };
+            let mut out = Vec::new();
+            for (rel, is_file) in entries {
+                let rel_str = crate::path::to_slash(&rel);
                 if !opts.dot && rel_str.split('/').any(|c| c.starts_with('.')) {
                     continue;
                 }
-                if opts.only_files && !entry.file_type().is_file() {
+                if opts.only_files && !is_file {
                     continue;
                 }
                 if negated ^ matcher.is_match(&rel_str) {
                     out.push(if opts.absolute {
-                        path.to_string_lossy().into_owned()
+                        base_real.join(&rel).to_string_lossy().into_owned()
                     } else {
                         rel_str
                     });
@@ -1557,5 +1612,186 @@ mod tests {
         assert!(message.contains("granted on the command line"), "{message}");
         assert!(!message.contains(granted.to_str().unwrap()), "{message}");
         std::fs::remove_dir_all(&granted).ok();
+    }
+
+    // ---- check-then-use: a directory swapped after the call ------------------
+    //
+    // The attack every one of these replays: a guest issues an operation on
+    // `d/…`, then — before it runs — renames `d` away and puts a symlink to a
+    // directory outside the jail in its place. Issued in one tick from
+    // JavaScript, the swap lands before any deferred work does, so this is not
+    // a race to win; it is the order things happen in.
+
+    /// A jail with `d/secret.txt` inside and a directory outside it holding a
+    /// file of the same name, plus a function performing the swap.
+    fn swap_scene(name: &str) -> (PathBuf, PathBuf, SystemFileSystem) {
+        let (root, fs) = jail(name);
+        let outside = root.with_file_name(format!(
+            "{}-outside",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("d/secret.txt"), b"inside").unwrap();
+        std::fs::write(outside.join("secret.txt"), b"OUTSIDE").unwrap();
+        (root, outside, fs)
+    }
+
+    fn plain_scan() -> GlobScanOptions {
+        GlobScanOptions {
+            dot: false,
+            absolute: false,
+            only_files: false,
+            follow_symlinks: false,
+        }
+    }
+
+    fn swap(root: &Path, outside: &Path) {
+        std::fs::rename(root.join("d"), root.join("d_old")).unwrap();
+        std::os::unix::fs::symlink(outside, root.join("d")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_copy_reads_the_directory_it_checked_not_the_one_swapped_in() {
+        let (root, outside, fs) = swap_scene("swap-copy-read");
+        let copying = fs.copy("d/secret.txt".into(), "loot.txt".into());
+        swap(&root, &outside);
+        copying.await.unwrap();
+        assert_eq!(std::fs::read(root.join("loot.txt")).unwrap(), b"inside");
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[tokio::test]
+    async fn a_copy_writes_into_the_directory_it_checked_not_the_one_swapped_in() {
+        let (root, outside, fs) = swap_scene("swap-copy-write");
+        std::fs::write(root.join("in.txt"), b"planted").unwrap();
+        let copying = fs.copy("in.txt".into(), "d/planted.txt".into());
+        swap(&root, &outside);
+        copying.await.unwrap();
+        assert!(
+            !outside.join("planted.txt").exists(),
+            "the copy followed the swapped name out of the jail"
+        );
+        assert_eq!(
+            std::fs::read(root.join("d_old/planted.txt")).unwrap(),
+            b"planted"
+        );
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[tokio::test]
+    async fn a_copy_keeps_the_source_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, fs) = jail("copy-mode");
+        std::fs::write(root.join("run.sh"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(root.join("run.sh"), std::fs::Permissions::from_mode(0o751))
+            .unwrap();
+        fs.copy("run.sh".into(), "copy.sh".into()).await.unwrap();
+        let mode = std::fs::metadata(root.join("copy.sh"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o751);
+    }
+
+    #[tokio::test]
+    async fn copying_a_directory_is_refused_and_creates_nothing() {
+        let (root, fs) = jail("copy-dir");
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        fs.copy("dir".into(), "out".into()).await.unwrap_err();
+        assert!(!root.join("out").exists());
+    }
+
+    #[test]
+    fn a_pinned_stat_and_listing_describe_the_directory_that_was_checked() {
+        let (root, outside, fs) = swap_scene("swap-stat");
+        let file = fs.jail.anchored("d/secret.txt", Access::Read).unwrap();
+        let dir = fs.jail.anchored("d", Access::Read).unwrap();
+        // `d` as a link is a different thing from `d/` the directory: pin the
+        // listing to the directory itself, from its parent, as `readDir` does.
+        swap(&root, &outside);
+        assert_eq!(file.stat().unwrap().size, b"inside".len() as u64);
+        // The listing of `d` names the link now at `d`, which is refused —
+        // never followed to the outside directory's entries.
+        let Err(err) = dir.list() else {
+            panic!("a listing through the swapped link")
+        };
+        assert_eq!(err.code(), Some(ErrorCode::NotFound), "{err}");
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn a_link_at_the_name_is_not_followed_by_stat() {
+        let (root, outside, fs) = swap_scene("swap-stat-final");
+        let anchored = fs.jail.anchored("d/secret.txt", Access::Read).unwrap();
+        std::fs::remove_file(root.join("d/secret.txt")).unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("d/secret.txt")).unwrap();
+        let Err(err) = anchored.stat() else {
+            panic!("a stat through the link")
+        };
+        assert_eq!(err.code(), Some(ErrorCode::NotFound), "{err}");
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn a_temp_entry_lands_in_the_directory_that_was_checked() {
+        let (root, outside, fs) = swap_scene("swap-temp");
+        let base = fs.jail.temp_base("d", Access::Write).unwrap();
+        // The swap replaces `d` itself: what is pinned is `d`'s parent, so the
+        // listing open sees the link and refuses it.
+        swap(&root, &outside);
+        base.make_temp("t-", false).unwrap_err();
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn temp_entries_are_owner_only_and_exclusive() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, fs) = jail("temp-mode");
+        let base = fs.jail.temp_base("", Access::Write).unwrap();
+        let file = base.make_temp("f-", false).unwrap();
+        let dir = base.make_temp("d-", true).unwrap();
+        assert!(file.starts_with(crate::path::canonicalize(&root).unwrap()));
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[tokio::test]
+    async fn a_glob_scan_lists_the_tree_it_checked_not_the_one_swapped_in() {
+        let (root, outside, fs) = swap_scene("swap-glob");
+        std::fs::create_dir_all(root.join("d/sub")).unwrap();
+        std::fs::write(outside.join("only-outside.txt"), b"x").unwrap();
+        let scanning = fs.glob_scan("d".into(), "**/*".into(), plain_scan());
+        swap(&root, &outside);
+        let mut names = scanning.await.unwrap_or_default();
+        names.sort();
+        assert!(
+            !names.iter().any(|n| n.contains("only-outside")),
+            "the scan listed a directory outside the jail: {names:?}"
+        );
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[tokio::test]
+    async fn a_glob_scan_does_not_descend_through_a_link_by_default() {
+        let (root, outside, fs) = swap_scene("glob-link");
+        std::fs::write(root.join("d/a.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("d/out")).unwrap();
+        let mut names = fs
+            .glob_scan("d".into(), "**/*".into(), plain_scan())
+            .await
+            .unwrap();
+        names.sort();
+        assert_eq!(names, ["a.txt", "out", "secret.txt"]);
+        // A base that is a file has nothing below it.
+        let none = fs
+            .glob_scan("d/a.txt".into(), "**/*".into(), plain_scan())
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+        std::fs::remove_dir_all(&outside).ok();
     }
 }

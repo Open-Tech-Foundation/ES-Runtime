@@ -85,6 +85,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **`copy` can no longer be pointed outside the root jail.** It checked both
+  paths when called and opened them by name when it ran, so a `copy` issued
+  with a `rename` of its directory and a `symlink` out of the jail in the same
+  tick read a file outside the root, or wrote one there. Both ends are now
+  pinned by descriptor at the call, like every other mutation. `stat`,
+  `exists`, `readDir`, glob scans and `makeTempFile`/`makeTempDir` are pinned
+  the same way, which closes the same window for threads racing each other.
 - **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to
   RustCrypto `rsa` 0.10.0-rc.20, which fixes RUSTSEC-2023-0071 ("Marvin"):
   constant-time private-key arithmetic, blinded signing and decryption, and

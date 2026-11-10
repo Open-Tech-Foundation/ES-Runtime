@@ -527,6 +527,231 @@ impl Anchored {
     }
 }
 
+// --- reading inside the pinned directory --------------------------------------
+//
+// The same rule as the mutations above, for the operations that only *look*:
+// `stat`, `readDir`, a glob scan, a temp entry's parent. Looking through a
+// swapped directory hands the guest a listing or the size of a file outside the
+// jail, which is a smaller catastrophe than writing there and still one.
+
+/// What a link found at the final name means to an operation that looks.
+///
+/// The path is canonical, so a link at its last component is either dangling
+/// (canonicalizing it failed, and the name was kept literally) or was swapped
+/// in since the check. Following it is wrong either way. Answering "not found"
+/// is what following a dangling link reports, and it says nothing about
+/// whatever a swapped one points at.
+#[cfg(unix)]
+fn not_found(shown: &str) -> ProviderError {
+    failed(shown, std::io::Error::from(std::io::ErrorKind::NotFound))
+}
+
+/// A [`FileStat`](es_runtime_providers::FileStat) from a `stat` the walk made.
+#[cfg(unix)]
+fn file_stat(stat: &rustix::fs::Stat) -> es_runtime_providers::FileStat {
+    use rustix::fs::FileType;
+    let kind = FileType::from_raw_mode(stat.st_mode);
+    // Before the epoch has no `mtime_ms`, as `SystemTime::duration_since`
+    // reports it for the path-based arm.
+    #[allow(clippy::unnecessary_cast)] // `time_t`/`c_long` widths differ by target
+    let (secs, nanos) = (stat.st_mtime as i64, stat.st_mtime_nsec as i64);
+    let mtime_ms = (secs >= 0).then(|| secs as f64 * 1000.0 + nanos as f64 / 1_000_000.0);
+    es_runtime_providers::FileStat {
+        #[allow(clippy::unnecessary_cast)]
+        size: stat.st_size as u64,
+        is_file: kind == FileType::RegularFile,
+        is_dir: kind == FileType::Directory,
+        is_symlink: false,
+        mtime_ms,
+    }
+}
+
+#[cfg(unix)]
+impl Anchored {
+    /// Metadata of the file at the name, read in the pinned directory.
+    ///
+    /// `NOFOLLOW`, and a link found there is "not found" (see [`not_found`]):
+    /// the jail already resolved every link that was there when it checked.
+    pub fn stat(&self) -> Result<es_runtime_providers::FileStat, ProviderError> {
+        use rustix::fs::{AtFlags, FileType, statat};
+        let stat = statat(
+            &self.parent,
+            self.name.as_os_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(|e| failed(&self.shown, e.into()))?;
+        if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink {
+            return Err(not_found(&self.shown));
+        }
+        Ok(file_stat(&stat))
+    }
+
+    /// Opens the name as a directory to read, refusing a link at it.
+    fn open_listing(&self) -> Result<std::os::fd::OwnedFd, ProviderError> {
+        use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat, statat};
+        openat(
+            &self.parent,
+            self.name.as_os_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| {
+            let link = statat(
+                &self.parent,
+                self.name.as_os_str(),
+                AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .is_ok_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink);
+            if link {
+                not_found(&self.shown)
+            } else {
+                failed(&self.shown, e.into())
+            }
+        })
+    }
+
+    /// The entries of the directory at the name, listed from a descriptor.
+    pub fn list(&self) -> Result<Vec<es_runtime_providers::DirEntry>, ProviderError> {
+        let dir = self.open_listing()?;
+        let mut out = Vec::new();
+        for (name, kind) in entries(&dir, &self.shown)? {
+            out.push(es_runtime_providers::DirEntry {
+                name: name.to_string_lossy().into_owned(),
+                is_file: kind == rustix::fs::FileType::RegularFile,
+                is_dir: kind == rustix::fs::FileType::Directory,
+                is_symlink: kind == rustix::fs::FileType::Symlink,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Everything beneath the directory at the name, depth first, each as its
+    /// path relative to that directory and its type — **without following a
+    /// link**, at any level.
+    ///
+    /// What a glob scan walks when it was not asked to follow links. A path
+    /// walk opens every subdirectory by name, so a directory swapped for a link
+    /// partway through lists whatever the link points at; this one opens each
+    /// child from its parent's descriptor with `NOFOLLOW`, and a link is listed
+    /// as the link it is.
+    pub fn walk(&self) -> Result<Vec<(PathBuf, rustix::fs::FileType)>, ProviderError> {
+        let dir = self.open_listing()?;
+        let mut out = Vec::new();
+        walk(&dir, Path::new(""), &self.shown, 0, &mut out)?;
+        Ok(out)
+    }
+
+    /// Creates an entry with an unpredictable name — `prefix` and random hex —
+    /// inside the directory at the name, and returns its path.
+    ///
+    /// Created **exclusively** (`O_EXCL`, or `mkdirat`) and by descriptor: a
+    /// name that is already taken is tried again rather than opened, and the
+    /// directory it lands in is the one the jail checked. Owner-only, as a
+    /// temp entry is everywhere else.
+    pub fn make_temp(&self, prefix: &str, directory: bool) -> Result<PathBuf, ProviderError> {
+        use rustix::fs::{Mode, OFlags, mkdirat, openat};
+        use rustix::io::Errno;
+        let dir = self.open_listing()?;
+        for _ in 0..64 {
+            let name = super::tree::temp_name(prefix)?;
+            let made = if directory {
+                mkdirat(&dir, name.as_str(), Mode::from(0o700))
+            } else {
+                openat(
+                    &dir,
+                    name.as_str(),
+                    OFlags::WRONLY
+                        | OFlags::CREATE
+                        | OFlags::EXCL
+                        | OFlags::NOFOLLOW
+                        | OFlags::CLOEXEC,
+                    Mode::from(0o600),
+                )
+                .map(drop)
+            };
+            match made {
+                Ok(()) => return Ok(self.path.join(name)),
+                Err(Errno::EXIST) => continue,
+                Err(e) => return Err(failed(&self.shown, e.into())),
+            }
+        }
+        Err(failed(
+            &self.shown,
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not find an unused temp name",
+            ),
+        ))
+    }
+}
+
+/// The entries of an open directory, `.` and `..` left out, each with its type
+/// — asked for rather than guessed where the filesystem does not fill `d_type`.
+#[cfg(unix)]
+fn entries(
+    dir: &std::os::fd::OwnedFd,
+    shown: &str,
+) -> Result<Vec<(OsString, rustix::fs::FileType)>, ProviderError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    use rustix::fs::{AtFlags, FileType};
+    let mut out = Vec::new();
+    let listing = rustix::fs::Dir::read_from(dir).map_err(|e| errno(shown, e))?;
+    for entry in listing {
+        let entry = entry.map_err(|e| errno(shown, e))?;
+        let name = entry.file_name();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        let kind = match entry.file_type() {
+            FileType::Unknown => {
+                let stat = rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(|e| errno(shown, e))?;
+                FileType::from_raw_mode(stat.st_mode)
+            }
+            known => known,
+        };
+        out.push((
+            std::ffi::OsStr::from_bytes(name.to_bytes()).to_os_string(),
+            kind,
+        ));
+    }
+    Ok(out)
+}
+
+/// One level of [`Anchored::walk`]. `depth` guards the stack, as `empty` does.
+#[cfg(unix)]
+fn walk(
+    dir: &std::os::fd::OwnedFd,
+    below: &Path,
+    shown: &str,
+    depth: u32,
+    out: &mut Vec<(PathBuf, rustix::fs::FileType)>,
+) -> Result<(), ProviderError> {
+    use rustix::fs::{FileType, Mode, OFlags, openat};
+    if depth > 256 {
+        return Err(failed(
+            shown,
+            std::io::Error::other("directory tree is too deeply nested to walk"),
+        ));
+    }
+    for (name, kind) in entries(dir, shown)? {
+        let rel = below.join(&name);
+        out.push((rel.clone(), kind));
+        if kind == FileType::Directory {
+            let child = openat(
+                dir,
+                name.as_os_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| errno(shown, e))?;
+            walk(&child, &rel, shown, depth + 1, out)?;
+        }
+    }
+    Ok(())
+}
+
 /// Removes everything beneath `dir`, unlinking links rather than following
 /// them. Shared by [`Anchored::remove_tree`] and the pinned tree.
 #[cfg(unix)]
@@ -709,6 +934,63 @@ impl Anchored {
     pub fn is_dir(&self) -> Result<bool, ProviderError> {
         let meta = std::fs::symlink_metadata(self.target()).map_err(|e| self.io(e))?;
         Ok(meta.is_dir())
+    }
+
+    /// Metadata of the file at the name — following it, by path.
+    pub fn stat(&self) -> Result<es_runtime_providers::FileStat, ProviderError> {
+        let md = std::fs::metadata(self.target()).map_err(|e| self.io(e))?;
+        Ok(es_runtime_providers::FileStat {
+            size: md.len(),
+            is_file: md.is_file(),
+            is_dir: md.is_dir(),
+            is_symlink: false,
+            mtime_ms: md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64() * 1000.0),
+        })
+    }
+
+    /// The entries of the directory at the name, by path.
+    pub fn list(&self) -> Result<Vec<es_runtime_providers::DirEntry>, ProviderError> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(self.target()).map_err(|e| self.io(e))? {
+            let entry = entry.map_err(|e| self.io(e))?;
+            let ft = entry.file_type().map_err(|e| self.io(e))?;
+            out.push(es_runtime_providers::DirEntry {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                is_file: ft.is_file(),
+                is_dir: ft.is_dir(),
+                is_symlink: ft.is_symlink(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// An exclusively created temp entry in the directory at the name.
+    pub fn make_temp(&self, prefix: &str, directory: bool) -> Result<PathBuf, ProviderError> {
+        for _ in 0..64 {
+            let path = self.target().join(super::tree::temp_name(prefix)?);
+            let made = if directory {
+                std::fs::create_dir(&path)
+            } else {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map(drop)
+            };
+            match made {
+                Ok(()) => return Ok(self.path.join(path.file_name().expect("a temp name"))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(self.io(e)),
+            }
+        }
+        Err(self.io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not find an unused temp name",
+        )))
     }
 
     /// Removes the name and everything under it.

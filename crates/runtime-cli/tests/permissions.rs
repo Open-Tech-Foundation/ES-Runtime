@@ -1045,6 +1045,52 @@ fn a_symlink_cannot_walk_out_of_a_path_list() {
     );
 }
 
+/// The check-then-use attack on `copy`, from JavaScript: the copy is issued,
+/// and in the same tick its directory is renamed away and replaced with a link
+/// out of the jail. The copy runs after both, so a copy that resolved its paths
+/// again at that point read and wrote outside the root. Both directions.
+#[test]
+#[cfg(unix)]
+fn a_copy_cannot_be_redirected_by_swapping_its_directory() {
+    let root = scoped_tree("copy_swap");
+    let outside = temp("copy_swap_outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("ok.txt"), "TOP-SECRET").expect("write");
+    let out_js = js_path(&real(&outside));
+
+    for (copy, expected) in [
+        ("copy('data/ok.txt', 'loot.txt')", "loot fine"),
+        ("copy('secrets.env', 'data/planted.txt')", "planted"),
+    ] {
+        let _ = std::fs::remove_dir_all(root.join("data_old"));
+        let _ = std::fs::remove_file(root.join("data"));
+        std::fs::create_dir_all(root.join("data")).expect("mkdir");
+        std::fs::write(root.join("data/ok.txt"), "fine").expect("write");
+        let code = format!(
+            "import {{ copy, rename, symlink, file }} from 'runtime:fs'; \
+             const r = await Promise.allSettled([{copy}, rename('data', 'data_old'), \
+               symlink('{out_js}', 'data')]); \
+             if (r.some(x => x.status !== 'fulfilled')) console.log('refused'); \
+             try {{ console.log('loot', await file('loot.txt').text()); }} catch {{}} \
+             try {{ await file('data_old/planted.txt').text(); console.log('planted'); }} catch {{}}"
+        );
+        let out = run_in(&root, &["--allow-read", "--allow-write"], &code);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        assert!(stdout(&out).contains(expected), "{}", stdout(&out));
+        assert!(
+            !stdout(&out).contains("TOP-SECRET"),
+            "the copy read outside the jail: {}",
+            stdout(&out)
+        );
+        assert!(
+            !outside.join("planted.txt").exists(),
+            "the copy wrote outside the jail"
+        );
+        let _ = std::fs::remove_file(root.join("loot.txt"));
+    }
+}
+
 #[test]
 fn a_path_outside_the_jail_is_reachable_only_when_the_command_line_names_it() {
     // D54: the jail is the default boundary, and an explicit path on the

@@ -23,7 +23,6 @@ hyper-util.workspace = true
 tower-service.workspace = true
 async-compression.workspace = true
 http-body-util.workspace = true
-tempfile.workspace = true
 # The compat bridge between hyper's tokio IO and the futures-io the upgrade
 # seam speaks (D55).
 tokio-util = { workspace = true, features = ["compat", "io"] }
@@ -84,6 +83,9 @@ tracing-subscriber.workspace = true
 # tree behind async-compression.
 flate2 = "1.1"
 brotli = "9.1"
+# Test-only: scratch directories. Temp entries the guest asks for are made by
+# the jail itself, by descriptor (crate::jail::anchor).
+tempfile.workspace = true
 
 
 [lints]

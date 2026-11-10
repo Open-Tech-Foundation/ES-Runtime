@@ -145,7 +145,7 @@ fn link_refused(shown: &str, path: &str) -> ProviderError {
 }
 
 /// An unpredictable directory name: `prefix` and 16 hex digits.
-fn temp_name(prefix: &str) -> Result<String, ProviderError> {
+pub(super) fn temp_name(prefix: &str) -> Result<String, ProviderError> {
     let mut bytes = [0_u8; 8];
     getrandom::fill(&mut bytes).map_err(|e| ProviderError::Entropy(e.to_string()))?;
     let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();

@@ -177,14 +177,20 @@ impl Jail {
     /// when empty. Deliberately *not* the OS temp directory — that lives outside
     /// the root jail, so writing there would be the one filesystem call that
     /// escapes it.
-    pub(crate) fn temp_base(&self, dir: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        if dir.is_empty() {
-            confine(&self.base, self.roots(access))
+    ///
+    /// Pinned, like every other directory a write lands in: the entry is
+    /// created relative to this descriptor, so a `dir` swapped for a link
+    /// between the check and the create cannot move it.
+    pub(crate) fn temp_base(&self, dir: &str, access: Access) -> Result<Anchored, ProviderError> {
+        let (real, shown) = if dir.is_empty() {
+            let real = confine(&self.base, self.roots(access))
                 .and_then(|real| self.scoped(real, access))
-                .map_err(|refused| refused.named("."))
+                .map_err(|refused| refused.named("."))?;
+            (real, ".".to_string())
         } else {
-            self.jailed(dir, access)
-        }
+            (self.jailed(dir, access)?, self.spelled(dir))
+        };
+        anchor::anchor(&real, self.roots(access), &shown)
     }
 
     /// The three refusals every resolution passes, in order — the jail, the

@@ -57,6 +57,16 @@ directory, and the operation runs relative to that descriptor: `openat`,
 so renaming or replacing the directory afterwards changes nothing about where
 the write goes.
 
+Every operation that names a path takes this route, reads as much as writes:
+`read`, `write`, `copy` (both ends), `rename`, `remove`, `mkdir`, `truncate`,
+`chmod`, `symlink`, `readLink`, `stat`, `exists`, `readDir`, a glob scan and
+temp-entry creation. The parent is pinned **when the call is made**, not when
+its work runs — an operation issued in the same tick as a rename and a
+`symlink` of its directory still acts on the directory it was checked against.
+A glob scan that is not following links walks by descriptor too, each
+subdirectory opened from its parent with `NOFOLLOW`; one that follows them
+checks every entry's real path against the jail and the scope list instead.
+
 Each step of the walk below the root is opened `NOFOLLOW`. A canonical path has
 no symlinks in it, so a component that *is* one has been swapped since the
 check, and it is refused as an escape rather than followed. Recursive `mkdir`
@@ -128,9 +138,11 @@ which is safe but reports success for what is almost certainly a caller bug.
 temp directory**. The OS temp directory is outside the root, so writing there
 would be the one filesystem call that escapes the jail.
 
-The name comes from the host's temp-file machinery rather than being composed by
-the caller: a guessable name in a shared directory is a symlink-attack
-invitation, and that is not something each call site should have to re-derive.
+The name is the prefix and 64 random bits rather than one composed by the
+caller: a guessable name in a shared directory is a symlink-attack invitation,
+and that is not something each call site should have to re-derive. The entry is
+created exclusively (`O_EXCL`, `mkdirat`) in the pinned directory, owner-only
+(`0600` for a file, `0700` for a directory).
 Nothing is cleaned up automatically — what you create, you remove.
 
 ## Two doors, one filesystem
