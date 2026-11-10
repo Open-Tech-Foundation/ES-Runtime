@@ -46,6 +46,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `brotli` 9 (with `async-compression` 0.4.52) and `base64` 0.23: one copy of
+  each in the binary, matching what `bcrypt` and the bundler already use. No
+  change in behaviour.
+
 - `runtime:websocket` moves to `tungstenite` 0.30: a server refuses a
   handshake whose `Sec-WebSocket-Key` is not a valid 16-byte key, as RFC 6455
   requires, and large messages read faster. The last copy of the older

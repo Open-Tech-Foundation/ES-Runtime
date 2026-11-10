@@ -46,7 +46,7 @@ authors = ["Open Tech Foundation <https://opentechf.org> and its contributors"]
 # Base64, for the two places a payload arrives encoded: the runtime's own
 # `atob`/`btoa` and friends, and an inline source map read back out of a bundle
 # when a stack trace is printed (`cli-common::sourcemap`).
-base64 = "0.22"
+base64 = "0.23"
 
 # Error model (DECISIONS.md D12).
 thiserror = "2.0.18"
