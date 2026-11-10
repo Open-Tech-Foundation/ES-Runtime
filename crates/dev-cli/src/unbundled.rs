@@ -279,6 +279,16 @@ impl SourceTransform for Pipeline {
         self.then.reserved_query()
     }
 
+    /// A file a pass turns into a module (each says what it takes — see
+    /// [`contract::Pass::makes_module`]), or one the compiler after the passes
+    /// claims (D209). A `load` that answers supplies the code itself and
+    /// never reaches the loader.
+    fn makes_module(&self, specifier: &str) -> bool {
+        let claimed = Self::pass_id(specifier)
+            .is_some_and(|id| self.passes.iter().any(|pass| pass.makes_module(&id)));
+        claimed || self.then.makes_module(specifier)
+    }
+
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
         // A mocked module is not the file's source at all, and the compiler
         // after this replaces it whole; a pass has nothing to say about it.

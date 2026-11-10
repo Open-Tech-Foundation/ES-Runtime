@@ -372,6 +372,11 @@ impl es_runtime_cli_common::run::SourceTransform for Recording {
     fn reserved_query(&self) -> Option<&'static str> {
         self.inner.reserved_query()
     }
+
+    /// A plugin written in TypeScript loads because the compiler claims it.
+    fn makes_module(&self, specifier: &str) -> bool {
+        self.inner.makes_module(specifier)
+    }
 }
 
 /// The program the plugin isolate runs.

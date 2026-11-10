@@ -738,6 +738,36 @@ fn a_worker_entry_is_never_handed_back_to_javascript() {
     );
 }
 
+/// A worker's entry is an import, and is held to the same rule (D209): a file
+/// that is not a module is refused before it is read, never run.
+#[test]
+fn a_worker_cannot_be_started_from_a_file_that_is_not_a_module() {
+    let dir = temp("entry_not_module");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("package.json"), "{}").expect("write");
+    std::fs::write(dir.join("job.txt"), "postMessage('ran')\n").expect("write");
+    std::fs::write(
+        dir.join("main.js"),
+        "const w = new Worker(new URL('./job.txt', import.meta.url));\n\
+         w.onmessage = () => console.log('RAN');\n\
+         w.onerror = (e) => { console.log(e.error.code); e.preventDefault(); };\n",
+    )
+    .expect("write");
+    let out = esrun()
+        .current_dir(&dir)
+        .args([
+            "--deny-all",
+            "--allow-imports",
+            "--allow-workers",
+            "main.js",
+        ])
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "ERR_UNKNOWN_FILE_EXTENSION\n");
+}
+
 #[test]
 fn granting_only_workers_says_what_else_is_needed() {
     // Starting a worker means reading its entry module, so it takes `imports`

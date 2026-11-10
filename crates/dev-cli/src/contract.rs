@@ -366,6 +366,21 @@ pub trait Pass: Send + Sync + std::fmt::Debug {
     /// crossing and one crossing per module in the graph.
     fn hooks(&self) -> &Hooks;
 
+    /// Whether this pass turns the file `id` into a module when its name is
+    /// not a module file's (D209) — so the run's loader reads it rather than
+    /// refusing it before the read.
+    ///
+    /// A project's plugin says so the only way a plugin can: a `transform`
+    /// whose filter admits the id (`.vue`, `.svelte`, `widget.component`). A
+    /// plugin with no `id` filter claims every file, which is that plugin's
+    /// statement to make. esdev's own passes rewrite JavaScript and CSS rather
+    /// than adopting file types, and override this with what they really take.
+    fn makes_module(&self, id: &str) -> bool {
+        self.hooks()
+            .get(Hook::Transform)
+            .is_some_and(|spec| spec.filter.admits(id, None))
+    }
+
     /// The build is starting. Returns files the whole build depends on that
     /// nothing imports — a config file, a manifest.
     fn start<'a>(&'a self, _ctx: &'a Arc<dyn Context>) -> Answer<'a, Vec<String>> {

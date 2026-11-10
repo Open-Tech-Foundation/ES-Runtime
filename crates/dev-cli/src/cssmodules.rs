@@ -240,6 +240,16 @@ impl contract::Pass for CssModules {
         "esdev:css-modules"
     }
 
+    /// A `.css` file, which this pass turns into a module. A stylesheet
+    /// language (`.scss`) is a plugin's to claim, by the plugin's filter
+    /// (D209).
+    fn makes_module(&self, id: &str) -> bool {
+        let id = id.split(['?', '#']).next().unwrap_or(id);
+        std::path::Path::new(id)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("css"))
+    }
+
     fn hooks(&self) -> &Hooks {
         &self.hooks
     }

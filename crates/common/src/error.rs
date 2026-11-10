@@ -118,6 +118,10 @@ pub enum ErrorCode {
     /// Source and destination name the same file, for an operation that would
     /// have to read one while truncating the other.
     SameFile,
+    /// An import named a file that is not a module file — not `.js`, `.mjs`,
+    /// `.cjs`, `.json` or `.wasm`, nor a type a source transform claims — and
+    /// it was refused before being read (D209). Node's code for the same rule.
+    UnknownFileExtension,
     /// The peer refused the connection.
     ConnectionRefused,
     /// The connection was reset or aborted by the peer.
@@ -171,6 +175,7 @@ impl ErrorCode {
             ErrorCode::JailEscape => "ERR_JAIL_ESCAPE",
             ErrorCode::InvalidPath => "ERR_INVALID_PATH",
             ErrorCode::SameFile => "ERR_SAME_FILE",
+            ErrorCode::UnknownFileExtension => "ERR_UNKNOWN_FILE_EXTENSION",
             ErrorCode::ConnectionRefused => "ERR_CONNECTION_REFUSED",
             ErrorCode::ConnectionReset => "ERR_CONNECTION_RESET",
             ErrorCode::TimedOut => "ERR_TIMED_OUT",

@@ -581,6 +581,14 @@ fn needs_transform(path: &str) -> bool {
     )
 }
 
+/// The file a module id names, its `?query` and `#fragment` dropped.
+fn file_path_of(specifier: &str) -> Option<String> {
+    let mut url = url::Url::parse(specifier).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    es_runtime_default_providers::path::file_path(&url).map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Whether `path` is the synthetic module an `-e` snippet runs under, named by
 /// [`es_runtime_cli_common::run::INLINE_MODULE`]: a file: URL by construction,
 /// so it has no extension to read a language from.
@@ -606,6 +614,12 @@ impl SourceTransform for TypeStripper {
 
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
         self.transform_recorded(specifier, source, None)
+    }
+
+    /// The languages it strips — the same test that decides whether a file is
+    /// compiled at all, so what loads and what compiles cannot drift (D209).
+    fn makes_module(&self, specifier: &str) -> bool {
+        file_path_of(specifier).is_some_and(|path| needs_transform(&path))
     }
 
     fn transform_as(

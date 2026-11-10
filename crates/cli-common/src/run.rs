@@ -197,6 +197,18 @@ pub trait SourceTransform: Send + Sync {
     /// answer for a file this transform has nothing to do with.
     fn transform(&self, specifier: &str, source: String) -> Result<String, String>;
 
+    /// Whether this transform turns the file at `specifier` (a `file:` URL)
+    /// into a module, when its name is not a module file's (D209) — a
+    /// TypeScript stripper claiming `.ts`, a plugin compiling `.vue`.
+    ///
+    /// The loader refuses any other file before reading it, so an `import` is
+    /// never a way to read `config.yaml`. The default claims nothing, which is
+    /// right for a transform that only rewrites JavaScript.
+    fn makes_module(&self, specifier: &str) -> bool {
+        let _ = specifier;
+        false
+    }
+
     /// The same, for a module an earlier step says is `module_type` (`"js"`,
     /// `"jsx"`, `"ts"`, `"tsx"`) whatever its name says: a build plugin that
     /// compiled `widget.component` to JSX, or served a virtual module. The
@@ -1082,8 +1094,17 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // jailed to — the working directory's project (D25, D79) — so resolution is
     // confined under it and the node_modules walk stops there. Held behind an
     // Arc so dynamic import() can reach it.
-    let loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
+    let mut loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
         .map_err(|e| format!("module loader: {e}"))?;
+    // Module files load; anything else only if the transform turns it into a
+    // module (D209). Asked of the transform itself, so what it compiles and
+    // what the loader admits cannot disagree.
+    if let Some(transform) = &config.transform {
+        let transform = transform.clone();
+        loader_impl = loader_impl.with_module_files(Arc::new(move |specifier: &str| {
+            transform.makes_module(specifier)
+        }));
+    }
     let resolved: Arc<dyn ModuleLoader> = if config.bundler_style_resolution {
         Arc::new(BundlerStyleLoader {
             inner: Arc::new(loader_impl),

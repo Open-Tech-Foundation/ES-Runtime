@@ -89,6 +89,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Security
 
+- **An import loads only what esdev turns into a module** (DECISIONS D209),
+  as under esrun: module files, the TypeScript and JSX esdev compiles,
+  `.css`, and whatever a plugin's `transform` filter admits. Anything else is
+  refused with `ERR_UNKNOWN_FILE_EXTENSION` before it is read — it used to
+  run as JavaScript. A plugin with no `id` filter on its `transform` still
+  claims every file.
 - **A web page can no longer attach to `--inspect`.** The debugger answered
   any `Host` and any `Origin`, so a page using DNS rebinding could read
   `/json/list`, attach and run code in the process — Node's CVE-2018-7160.

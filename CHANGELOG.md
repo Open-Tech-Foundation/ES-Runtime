@@ -98,6 +98,15 @@ namespace) is unstable and may change between minor releases until the API freez
   file in the project, `.env` included, whatever `--allow-read` said. The
   spawn now reads the entry itself. A worker refused for want of `workers`
   says that starting it is what needs the grant.
+- **An import loads only a module file** (DECISIONS D209). Any other file —
+  `.env`, `config.yaml`, `notes.txt`, an extensionless name — is refused
+  with the new code `ERR_UNKNOWN_FILE_EXTENSION` before it is read. The
+  loader used to run whatever a specifier named as JavaScript: a YAML mapping
+  is a valid script, and a trap on the global object collected every value in
+  it, so `--allow-imports` read project files that `--allow-read` did not
+  grant. A module file is `.js`, `.mjs`, `.cjs`, `.json` (with
+  `type: "json"`) or `.wasm`; the file you run, and `import.meta.resolve()`,
+  are unaffected.
 - **`--allow-run=<program>` no longer admits every name of a multi-call
   binary.** Entries were matched on the real file alone, and on Alpine `ls`
   and `sh` are both links to busybox — so `--allow-run=ls` ran `sh -c …`. The

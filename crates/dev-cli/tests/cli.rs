@@ -161,6 +161,25 @@ fn runs_a_module_file() {
     assert_eq!(stdout(&out).trim(), "ran 42");
 }
 
+/// esdev's compiler says what it turns into a module (D209): TypeScript loads
+/// because the stripper claims it, and a file nothing claims is refused before
+/// it is read, as under esrun.
+#[test]
+fn typescript_imports_load_and_a_file_that_is_not_a_module_is_refused() {
+    write("d209-util.ts", "export const n: number = 41;\n");
+    write("d209-creds.yaml", "password: hunter2\n");
+    let app = write(
+        "d209-main.ts",
+        "import { n } from './d209-util.ts';\n\
+         console.log(n + 1);\n\
+         try { await import('./d209-creds.yaml'); console.log('LOADED'); }\n\
+         catch (e) { console.log((e as { code: string }).code); }\n",
+    );
+    let out = esdev().arg(&app).output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "42\nERR_UNKNOWN_FILE_EXTENSION\n");
+}
+
 /// esdev starts from everything, so a Unix socket path needs no flag there —
 /// and under `--deny-all` it must be named, as in esrun (D140).
 #[cfg(unix)]

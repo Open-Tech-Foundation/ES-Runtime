@@ -82,7 +82,7 @@ pub use driver::{DriveFailure, Driver};
 pub use entropy::OsEntropy;
 pub use host_allowlist::HostAllowlist;
 pub use jail::Jail;
-pub use modules::{DenyModuleLoader, FsModuleLoader};
+pub use modules::{DenyModuleLoader, FsModuleLoader, ModuleFiles, is_module_file};
 pub use net::HttpTransport;
 pub use node_modules::NodeModuleLoader;
 pub use path_allowlist::PathAllowlist;

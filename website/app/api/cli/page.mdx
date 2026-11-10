@@ -157,7 +157,7 @@ the other way — everything granted — and there `--allow-all` is the no-op.
 | --- | --- |
 | `read` | `runtime:fs` / `runtime:wasi` reads |
 | `write` | `runtime:fs` / `runtime:wasi` mutations |
-| `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` — of module files (`.js`, `.mjs`, `.cjs`, `.json`, `.wasm`); any other file is refused before it is read |
 | `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
 | `listen` | `runtime:net` listen and bind, `runtime:http` serve |
 | `env` | `runtime:process` env / cwd. Not `args`: that is the command line that started the program |

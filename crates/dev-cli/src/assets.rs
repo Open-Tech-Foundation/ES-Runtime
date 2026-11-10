@@ -231,6 +231,12 @@ impl contract::Pass for Assets {
         PASS_NAME
     }
 
+    /// An asset import is answered by this pass's `load`, which supplies the
+    /// module itself; nothing here needs the loader to read a file (D209).
+    fn makes_module(&self, _id: &str) -> bool {
+        false
+    }
+
     fn hooks(&self) -> &Hooks {
         &self.hooks
     }

@@ -14,10 +14,54 @@
 //! The CLI default (`NodeModuleLoader`) and `runtime:fs` are root-jailed (D25);
 //! `esrun` does not use this loader.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use es_runtime_common::ErrorCode;
 use es_runtime_providers::{BoxFuture, ModuleLoader, ModuleSource, ProviderError};
 use url::Url;
+
+/// What else an embedder turns into a module, by its `file:` URL — a source
+/// transform's claim (D209). Asked only for a file [`is_module_file`] refuses.
+pub type ModuleFiles = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Whether `path` names a **module file**: `.js`, `.mjs`, `.cjs`, `.json` or
+/// `.wasm` (D209).
+///
+/// Node's rule for `file:` loading. Everything else is refused *before it is
+/// read*: a loader that evaluated any file as JavaScript made `import` a way
+/// to read `config.yaml` or `.env` — a YAML mapping is a valid script, and a
+/// trap on the global object collects every value it names. An extensionless
+/// name is not a module file either, which is how a dotfile looks
+/// (`Path::extension` of `.env` is none).
+pub fn is_module_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["js", "mjs", "cjs", "json", "wasm"]
+            .iter()
+            .any(|known| e.eq_ignore_ascii_case(known))
+    })
+}
+
+/// Refuses a file that is neither a module file nor one `extra` claims, naming
+/// it as `shown`, before a byte of it is read.
+pub(crate) fn admit_module_file(
+    path: &Path,
+    specifier: &str,
+    shown: &str,
+    extra: Option<&ModuleFiles>,
+) -> Result<(), ProviderError> {
+    if is_module_file(path) || extra.is_some_and(|claims| claims(specifier)) {
+        return Ok(());
+    }
+    Err(ProviderError::Coded {
+        code: ErrorCode::UnknownFileExtension,
+        message: format!(
+            "cannot import {shown}: it is not a module file — a module is .js, .mjs, \
+             .cjs, .json (with {{ type: \"json\" }}) or .wasm; read other files with \
+             runtime:fs"
+        ),
+    })
+}
 
 /// A [`ModuleLoader`] that resolves and reads ES modules from the local
 /// filesystem.
@@ -107,6 +151,7 @@ impl ModuleLoader for FsModuleLoader {
             let path: PathBuf = crate::path::file_path(&url).ok_or_else(|| {
                 ProviderError::Other(format!("module id is not a file path: {specifier}"))
             })?;
+            admit_module_file(&path, &specifier, &path.display().to_string(), None)?;
             // `.wasm` is binary and joins the graph through the WebAssembly ESM
             // integration; everything else is read as UTF-8 source.
             let is_wasm = path
@@ -160,6 +205,64 @@ impl ModuleLoader for DenyModuleLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_module_file_is_named_by_its_extension() {
+        for name in [
+            "a.js",
+            "a.mjs",
+            "a.cjs",
+            "a.json",
+            "a.wasm",
+            "A.JS",
+            "dir.v2/a.mjs",
+        ] {
+            assert!(is_module_file(Path::new(name)), "{name}");
+        }
+        // Not modules, however they would parse: a dotfile and an
+        // extensionless name have no extension at all.
+        for name in [
+            ".env",
+            "creds.yaml",
+            "id_ed25519",
+            "notes.txt",
+            "key.pem",
+            "a.ts",
+            "a.js.bak",
+            "dir.js/notes",
+        ] {
+            assert!(!is_module_file(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_claim_admits_what_the_rule_refuses_and_a_refusal_names_what_was_written() {
+        let ts: ModuleFiles = Arc::new(|specifier: &str| specifier.ends_with(".ts"));
+        assert!(
+            admit_module_file(Path::new("/p/a.ts"), "file:///p/a.ts", "./a.ts", Some(&ts)).is_ok()
+        );
+        let refused =
+            admit_module_file(Path::new("/p/.env"), "file:///p/.env", "./.env", Some(&ts))
+                .unwrap_err();
+        assert_eq!(refused.code(), Some(ErrorCode::UnknownFileExtension));
+        assert!(
+            refused.to_string().contains("cannot import ./.env"),
+            "{refused}"
+        );
+        assert!(!refused.to_string().contains("/p/"), "{refused}");
+    }
+
+    /// Refused before the read: a file that is not a module is never opened,
+    /// so a missing one says it is not a module rather than that it is missing.
+    #[tokio::test]
+    async fn a_file_that_is_not_a_module_is_refused_without_being_read() {
+        let (loader, base) = loader();
+        let err = loader
+            .load(base.join("no-such-dir/creds.yaml").unwrap().as_str())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::UnknownFileExtension), "{err}");
+    }
 
     /// A loader rooted at the test process's working directory — absolute on
     /// every platform — with the matching base URL to build expectations from.

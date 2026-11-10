@@ -999,7 +999,7 @@ scopes and the rules are otherwise identical.
 | ---- | ---------- | ------ |
 | `--allow-read` | `FileRead` | `runtime:fs` / `runtime:wasi` reads |
 | `--allow-write` | `FileWrite` | `runtime:fs` / `runtime:wasi` mutations |
-| `--allow-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `--allow-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` — of module files only (`.js`, `.mjs`, `.cjs`, `.json`, `.wasm`); anything else is `ERR_UNKNOWN_FILE_EXTENSION` (D209) |
 | `--allow-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect`, a UDP `send` |
 | `--allow-listen` | `NetListen` | `runtime:net` `listen` and `bind`, `runtime:http` `serve` |
 | `--allow-env` | `Env` | `runtime:process` `env` / `cwd()` |
@@ -5738,6 +5738,7 @@ try {
 | `ERR_DURABLE_CYCLE` | A durable worker was called by a chain that already holds it, which would wait for ever. The message names the chain. |
 | `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the root jail itself and the operation would mutate it. |
 | `ERR_SAME_FILE` | Source and destination name the same file, for an operation that would have to read one while truncating the other. |
+| `ERR_UNKNOWN_FILE_EXTENSION` | An import (or a worker's entry) named a file that is not a module file — not `.js`, `.mjs`, `.cjs`, `.json` or `.wasm` — and it was refused before being read (D209). |
 | `ERR_CONNECTION_REFUSED` | The peer refused the connection. |
 | `ERR_CONNECTION_RESET` | The connection was reset/aborted by the peer. |
 | `ERR_TIMED_OUT` | The operation timed out. |

@@ -52,6 +52,11 @@ impl Pass for ReactCompiler {
         "esdev:react-compiler"
     }
 
+    /// Rewrites JavaScript; adopts no file type (D209).
+    fn makes_module(&self, _id: &str) -> bool {
+        false
+    }
+
     fn hooks(&self) -> &Hooks {
         &self.hooks
     }

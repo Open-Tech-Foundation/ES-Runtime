@@ -49,6 +49,11 @@ impl Pass for JsxPass {
         "esdev:jsx"
     }
 
+    /// Rewrites JavaScript; adopts no file type (D209).
+    fn makes_module(&self, _id: &str) -> bool {
+        false
+    }
+
     fn hooks(&self) -> &Hooks {
         &self.hooks
     }

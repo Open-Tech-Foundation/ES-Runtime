@@ -75,6 +75,111 @@ fn import_meta_resolve_takes_one_argument() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A project laid out for the D209 tests: secrets in files that are not
+/// modules, and real modules beside them.
+fn non_module_project(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("esrun-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.json"), "{}").unwrap();
+    std::fs::write(
+        dir.join("creds.yaml"),
+        "user: admin\npassword: hunter2\napi_key: sk_live_abc123\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join(".env"), "TOKEN=abc123secret\n").unwrap();
+    std::fs::write(dir.join("notes"), "plain_text_secret\n").unwrap();
+    std::fs::write(dir.join("mod.mjs"), "export default 'module';\n").unwrap();
+    std::fs::write(dir.join("data.json"), "{\"answer\": 42}\n").unwrap();
+    dir
+}
+
+/// `--allow-imports` loads modules, not files (D209). The loader used to run any
+/// file as JavaScript: a YAML mapping is a valid script, and a trap on the
+/// global object answered every name in it, so one import of `creds.yaml`
+/// collected every value — with `imports` granted and `read` not.
+#[test]
+fn an_import_cannot_read_a_file_that_is_not_a_module() {
+    let dir = non_module_project("not-a-module");
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&dir)
+        .arg("--allow-imports")
+        .arg(
+            "-e=const seen = []; \
+             Object.setPrototypeOf(globalThis, new Proxy(Object.getPrototypeOf(globalThis), { \
+               has(t, k) { if (typeof k === 'string' && !(k in t)) { seen.push(k); return true; } \
+                           return k in t; }, \
+               get(t, k, r) { return k in t ? Reflect.get(t, k, r) : undefined; } })); \
+             for (const [f, o] of [['./creds.yaml'], ['./.env'], ['./notes'], \
+                                   ['./.env', { with: { type: 'json' } }]]) { \
+               try { await import(f, o); console.log(f, 'LOADED'); } \
+               catch (e) { console.log(f, e.code); } \
+             } \
+             console.log('collected', JSON.stringify(seen));",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "./creds.yaml ERR_UNKNOWN_FILE_EXTENSION\n\
+         ./.env ERR_UNKNOWN_FILE_EXTENSION\n\
+         ./notes ERR_UNKNOWN_FILE_EXTENSION\n\
+         ./.env ERR_UNKNOWN_FILE_EXTENSION\n\
+         collected []\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What the rule leaves alone: module files load, JSON through its attribute,
+/// resolution still says where any file is, and the message says what to do.
+#[test]
+fn module_files_still_load_and_any_file_still_resolves() {
+    let dir = non_module_project("module-files");
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&dir)
+        .arg("--allow-imports")
+        .arg(
+            "-e=console.log((await import('./mod.mjs')).default); \
+             console.log((await import('./data.json', { with: { type: 'json' } })).default.answer); \
+             console.log(import.meta.resolve('./creds.yaml').endsWith('/creds.yaml')); \
+             try { await import('./creds.yaml'); } catch (e) { console.log(e.message); }",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(printed.starts_with("module\n42\ntrue\n"), "{printed}");
+    assert!(printed.contains("./creds.yaml"), "{printed}");
+    assert!(
+        printed.contains("read other files with runtime:fs"),
+        "{printed}"
+    );
+    // Named as written, never by its real path (D141).
+    assert!(!printed.contains(&dir.display().to_string()), "{printed}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The entry is what the operator named, not an import: an extensionless
+/// script (`#!/usr/bin/env esrun`) runs as it always has.
+#[test]
+fn an_extensionless_entry_script_still_runs() {
+    let dir = non_module_project("bin-script");
+    std::fs::write(
+        dir.join("tool"),
+        "#!/usr/bin/env esrun\nconsole.log('ran');\n",
+    )
+    .unwrap();
+    let out = Command::new(common::esrun_bin())
+        .current_dir(&dir)
+        .arg("tool")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "ran\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A module is its URL, query included, as in a browser and every other
 /// runtime: `?v=2` evaluates the file afresh, while one query imported twice,
 /// statically or not, is one module.

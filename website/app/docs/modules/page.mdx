@@ -37,6 +37,18 @@ import greeter from "greeter";           // from node_modules (ESM)
 export const message = greet("world");
 ```
 
+## What can be imported
+
+An import loads a **module file**: `.js`, `.mjs` or `.cjs`, `.json` with
+`with { type: "json" }`, or `.wasm`. Any other file — `.env`, `config.yaml`,
+`notes.txt`, a name with no extension — is refused with
+`ERR_UNKNOWN_FILE_EXTENSION` before it is read, as Node refuses it. Read such
+files with [`runtime:fs`](/api/fs), which `--allow-read` governs.
+
+The file you run is not an import, so an extensionless script
+(`#!/usr/bin/env esrun`) still runs. `import.meta.resolve()` still resolves any
+file, since saying where a file is reads nothing.
+
 ## Dynamic import
 
 ```js
