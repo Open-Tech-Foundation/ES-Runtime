@@ -1066,7 +1066,11 @@ name: each entry is resolved once (a bare name through `PATH`, a path as
 written) and a spawn is admitted only if it lands on the same file. So
 `--allow-run=git` admits `git` and `/usr/bin/git` — the same program by two
 spellings — and refuses `/tmp/git`, which is a different program that happens to
-share a name.
+share a name. The file is not the whole identity: a multi-call binary such as
+busybox is one file behind many names, choosing its behaviour from the name it
+was invoked by, so the last component of the path the lookup found (before
+links are followed) must match too. Where `ls` and `sh` both link to busybox,
+`--allow-run=ls` admits `ls` and refuses `sh`.
 
 A name in `--allow-env` matches a variable as the platform names it: exactly
 on Linux and macOS, ignoring case on Windows, where `--allow-env=PATH` grants

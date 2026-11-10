@@ -772,6 +772,38 @@ fn an_absolute_path_to_an_allowed_program_is_still_that_program() {
     assert_eq!(stdout(&out).trim(), "ok");
 }
 
+#[test]
+#[cfg(unix)]
+fn allow_run_on_one_name_of_a_multi_call_binary_admits_only_that_name() {
+    // Alpine's layout: `ls` and `sh` are links to one busybox, which reads
+    // `argv[0]` to decide what to be. Granting `ls` used to grant the file, and
+    // so `sh -c …` as well.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp("multi_call");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let multi = dir.join("multi");
+    std::fs::write(&multi, "#!/bin/sh\necho ran\n").expect("write");
+    std::fs::set_permissions(&multi, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::os::unix::fs::symlink(&multi, dir.join("ls")).expect("symlink");
+    std::os::unix::fs::symlink(&multi, dir.join("sh")).expect("symlink");
+    let dir_js = js_path(&real(&dir));
+
+    let out = run(
+        &["--deny-all", &format!("--allow-run={}/ls", real(&dir))],
+        &format!(
+            "import {{ Command }} from 'runtime:system'; \
+             const ok = await new Command('{dir_js}/ls').output(); \
+             console.log(new TextDecoder().decode(ok.stdout).trim()); \
+             try {{ await new Command('{dir_js}/sh', {{ args: ['-c', 'echo pwned'] }}).output(); \
+                   console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.code); }}"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "ran\nrefused ERR_PERMISSION_DENIED\n");
+}
+
 /// A one-shot HTTP server on an ephemeral port, for the address tests. Returns
 /// the port and the thread, so a test can join it.
 fn one_shot_http(response: &'static str) -> (u16, std::thread::JoinHandle<()>) {

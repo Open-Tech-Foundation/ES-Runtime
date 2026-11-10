@@ -64,12 +64,11 @@ type Registry = Arc<Mutex<HashMap<u64, Slot>>>;
 struct Inner {
     children: Registry,
     next_id: AtomicU64,
-    /// Programs this provider will start, as **real paths** — each entry
-    /// resolved once, the way a spawn resolves one. `None` ⇒ any. Membership is
-    /// therefore a question about a file rather than about a spelling: `["git"]`
-    /// admits `git` and `/usr/bin/git` because they are the same program, and
-    /// refuses `/tmp/git` because it is not.
-    allow: Option<HashSet<PathBuf>>,
+    /// Programs this provider will start, each as a [`Program`] — resolved
+    /// once, the way a spawn resolves one. `None` ⇒ any. `["git"]` admits `git`
+    /// and `/usr/bin/git` because they are the same program, and refuses
+    /// `/tmp/git` because it is not.
+    allow: Option<HashSet<Program>>,
     /// Cap on children alive at once. `None` ⇒ unlimited.
     max_children: Option<usize>,
 }
@@ -125,7 +124,7 @@ impl SystemCommands {
 
     /// The builders each produce a fresh registry, so they are only meaningful
     /// before anything has been spawned — which is where policy belongs.
-    fn build(allow: Option<HashSet<PathBuf>>, max_children: Option<usize>) -> Self {
+    fn build(allow: Option<HashSet<Program>>, max_children: Option<usize>) -> Self {
         SystemCommands {
             inner: Arc::new(Inner {
                 children: Arc::new(Mutex::new(HashMap::new())),
@@ -222,11 +221,39 @@ fn usable_with_extensions(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The real path of `program`, resolved the way a spawn resolves one, for
-/// comparing a policy entry with what a spawn actually found. `None` if it names
-/// no program.
-fn real_program(program: &str) -> Option<PathBuf> {
-    crate::path::canonicalize(resolve_program(program, None).ok()?).ok()
+/// Which program a resolved path starts: the **real file**, and the **name it
+/// is invoked by**.
+///
+/// The file alone is not enough. A multi-call binary — busybox, toybox,
+/// coreutils built as one executable — is a single file behind many names, and
+/// it decides what to be from `argv[0]`. On Alpine `/bin/ls` and `/bin/sh` are
+/// both links to `/bin/busybox`, so comparing real paths made `--allow-run=ls`
+/// admit `sh -c …`, which is every program at once. The name is the last
+/// component of the path the lookup found, before links are followed — the
+/// name the program will see.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Program {
+    real: PathBuf,
+    name: std::ffi::OsString,
+}
+
+impl Program {
+    /// `None` if `resolved` names no file, or has no final component.
+    fn of(resolved: &Path) -> Option<Program> {
+        let real = crate::path::canonicalize(resolved).ok()?;
+        let name = resolved.file_name()?.to_os_string();
+        // Windows names are case-insensitive: `GIT` finds `git.exe`, and must
+        // be the same program the entry `git` named.
+        #[cfg(windows)]
+        let name = std::ffi::OsString::from(name.to_string_lossy().to_lowercase());
+        Some(Program { real, name })
+    }
+}
+
+/// `program`, resolved the way a spawn resolves one, for comparing a policy
+/// entry with what a spawn actually found. `None` if it names no program.
+fn real_program(program: &str) -> Option<Program> {
+    Program::of(&resolve_program(program, None).ok()?)
 }
 
 /// `Some(path)` if this is a file that can actually be executed. On Unix that
@@ -444,13 +471,19 @@ impl CommandProvider for SystemCommands {
             let resolved = resolve_program(&spec.program, cwd.as_deref())?;
             reject_batch_files(&resolved, &spec.program)?;
             if let Some(allow) = &this.inner.allow {
-                // Compared as a real path, never as a name. The basename of
-                // what a spawn resolved to says nothing about which program it
-                // is, so matching on it let `--allow-run=git` admit any file
-                // called `git` the guest could reach — including one it had
-                // just written itself, which turns the allowlist inside out.
-                let real = crate::path::canonicalize(&resolved).ok();
-                if !real.is_some_and(|real| allow.contains(&real)) {
+                // A real file *and* the name it is invoked by (see `Program`).
+                // The name alone let `--allow-run=git` admit any file called
+                // `git` the guest could reach, including one it had just
+                // written; the file alone let `--allow-run=ls` run busybox's
+                // `sh`.
+                //
+                // The spawn below still names `resolved`, not the real path:
+                // a `#!` script receives the exec path as `$0`, and one
+                // installed under a linked name dispatches on it. What that
+                // leaves is a link swapped between this line and the exec by
+                // another thread — in a directory the guest can write, which
+                // an allowlist entry should not name.
+                if !Program::of(&resolved).is_some_and(|program| allow.contains(&program)) {
                     return Err(coded(
                         ErrorCode::PermissionDenied,
                         &format!("{} is not an allowed program", spec.program),
@@ -854,6 +887,51 @@ mod tests {
         // A bare `tool` on the host PATH — if there were one — is not this file.
         let err = commands.spawn(spec("echo", &[])).await.unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+    }
+
+    /// One file behind many names — busybox's layout, where `/bin/ls` and
+    /// `/bin/sh` are links to one executable that picks its behaviour from
+    /// `argv[0]`. Granting one name grants that name, not the whole binary.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn one_name_of_a_multi_call_binary_does_not_admit_the_others() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let multi = dir.path().join("multi");
+        std::fs::write(&multi, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&multi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&multi, dir.path().join("ls")).unwrap();
+        std::os::unix::fs::symlink(&multi, dir.path().join("sh")).unwrap();
+        let ls = dir.path().join("ls");
+        let sh = dir.path().join("sh");
+
+        let commands = SystemCommands::new().with_allowlist([ls.to_str().unwrap()]);
+        let err = commands
+            .spawn(spec(sh.to_str().unwrap(), &["-c", "true"]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+        // Nor the file itself, under its own name: that is a third program.
+        let err = commands
+            .spawn(spec(multi.to_str().unwrap(), &[]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+
+        // The granted name still runs (past ETXTBSY from a parallel fork; see
+        // `a_path_entry_admits_that_file_and_no_other`).
+        let mut spawned = commands.spawn(spec(ls.to_str().unwrap(), &[])).await;
+        for _ in 0..100 {
+            match &spawned {
+                Err(e) if e.to_string().contains("Text file busy") => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    spawned = commands.spawn(spec(ls.to_str().unwrap(), &[])).await;
+                }
+                _ => break,
+            }
+        }
+        assert!(spawned.is_ok(), "{:?}", spawned.err());
     }
 
     #[tokio::test]

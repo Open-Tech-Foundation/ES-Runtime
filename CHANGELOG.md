@@ -98,6 +98,10 @@ namespace) is unstable and may change between minor releases until the API freez
   file in the project, `.env` included, whatever `--allow-read` said. The
   spawn now reads the entry itself. A worker refused for want of `workers`
   says that starting it is what needs the grant.
+- **`--allow-run=<program>` no longer admits every name of a multi-call
+  binary.** Entries were matched on the real file alone, and on Alpine `ls`
+  and `sh` are both links to busybox — so `--allow-run=ls` ran `sh -c …`. The
+  name a program is invoked by must now match as well as the file.
 - **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to
   RustCrypto `rsa` 0.10.0-rc.20, which fixes RUSTSEC-2023-0071 ("Marvin"):
   constant-time private-key arithmetic, blinded signing and decryption, and
