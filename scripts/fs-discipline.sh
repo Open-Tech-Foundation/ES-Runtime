@@ -40,6 +40,8 @@ crates/default-providers/src/node_modules.rs|module resolution, confined with ja
 crates/default-providers/src/system_command.rs|executable lookup on PATH for an allowed command (D38); the rest is tests
 crates/default-providers/src/system_net.rs|Unix socket files, under the socket path list (D140), not the file jail
 crates/default-providers/src/dns/config.rs|/etc/resolv.conf for the name servers to ask (D188), a fixed path
+crates/default-providers/src/trust.rs|reads the --tls-ca and --tls-crl files the operator named (D197, D202); the rest is tests
+crates/default-providers/src/mtls_tests.rs|test-only (cfg(test)): writes the private PKI the mTLS tests handshake with
 crates/cli-common/src/run.rs|reads the entry module the operator named
 crates/cli-common/src/dotenv.rs|reads the --env-file the operator named
 crates/cli-common/src/sourcemap.rs|reads source maps beside modules already loaded
