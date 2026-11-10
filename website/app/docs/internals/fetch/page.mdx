@@ -33,7 +33,7 @@ costs time a script that never fetches should not pay.
 | | |
 | --- | --- |
 | `User-Agent` | `ES-Runtime/<version>`, matching `navigator.userAgent` so a server sees the identity the guest reports. A request that sets its own overrides it. |
-| `Accept-Encoding` | `gzip, br, deflate` |
+| `Accept-Encoding` | `gzip, br, deflate`; `identity` with a `Range` |
 | HTTP version | 1.1 or 2, negotiated by ALPN over TLS |
 | `TE` | `trailers`, so an HTTP/1.1 server may send them |
 | Connect timeout | 30s, DNS, TCP and TLS together |
@@ -41,8 +41,9 @@ costs time a script that never fetches should not pay.
 | `TCP_NODELAY` | On |
 | Proxy | Only with [`--proxy`](/api/cli#outbound-proxy): `http:` forwarded, `https:` tunnelled with `CONNECT`. esrun reads no variable; esdev reads `HTTP(S)_PROXY` |
 
-`Accept-Encoding` is left out of a request that has a `Range`, since a range of
-a compressed representation is not a range of the resource. `TCP_NODELAY` is
+A request that has a `Range` sends `Accept-Encoding: identity` instead, since a
+range of a compressed representation is not a range of the resource. Leaving the
+header out would not do: a request without it accepts any coding. `TCP_NODELAY` is
 set explicitly: hyper-util's connector leaves Nagle's algorithm on, and a
 request written in pieces then waits on the peer's delayed ACK.
 

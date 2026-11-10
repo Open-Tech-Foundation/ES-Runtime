@@ -1,5 +1,5 @@
 // Content-Encoding end-to-end: a real runtime:http server returns genuinely
-// compressed bytes and the real reqwest transport must hand the guest the
+// compressed bytes and the real transport must hand the guest the
 // decoded body, not the compressed one. Only the driven CLI can prove this —
 // the stub transports in the runtime's own tests never compress anything.
 import { serve } from "runtime:http";
@@ -57,6 +57,14 @@ console.log(
   `ACCEPT gzip:${accept.includes("gzip")} br:${accept.includes("br")}` +
     ` deflate:${accept.includes("deflate")}`,
 );
+
+// A range of a compressed representation is not a range of the resource, so a
+// ranged request asks for the identity coding (Fetch standard) — not for
+// nothing, which would accept any coding.
+const ranged = await (
+  await fetch(`${base}/echo-accept`, { headers: { range: "bytes=0-1" } })
+).text();
+console.log(`RANGED accept:${ranged}`);
 
 // Decoding keys off the response's Content-Encoding, not off who asked for it,
 // so a caller that sets its own Accept-Encoding still gets a decoded body.

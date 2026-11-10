@@ -795,6 +795,7 @@ fn decodes_compressed_response_bodies_and_identifies_itself() {
         stdout.contains("ACCEPT gzip:true br:true deflate:true"),
         "{stdout}"
     );
+    assert!(stdout.contains("RANGED accept:identity"), "{stdout}");
     assert!(stdout.contains("EXPLICIT ok:true"), "{stdout}");
     assert!(
         stdout.contains("UNKNOWN body:true content-encoding:zstd"),

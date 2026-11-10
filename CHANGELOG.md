@@ -67,6 +67,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `fetch` with a `Range` header sends `Accept-Encoding: identity`, as the Fetch
+  standard says, instead of leaving the header out — which accepted any coding,
+  so a server could compress the range into a body that cannot be decoded.
 - `runtime:pdf`: a page whose content stream exceeds `maxDecodedSize` fails
   with `ERR_PDF_LIMIT` instead of reading as an empty page, and `pageText`
   reuses the fonts an earlier call loaded on the same document (otf-pdf 0.2).

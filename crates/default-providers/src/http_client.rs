@@ -462,12 +462,17 @@ fn build(
         out.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
     }
     // A range of a compressed representation is not a range of the resource,
-    // so a ranged request asks for none.
-    if !out.contains_key(header::ACCEPT_ENCODING) && !out.contains_key(header::RANGE) {
-        out.insert(
-            header::ACCEPT_ENCODING,
-            HeaderValue::from_static("gzip, br, deflate"),
-        );
+    // so a ranged request asks for the identity coding (Fetch, HTTP-network-or-
+    // cache fetch). Saying nothing would not do: a request without
+    // `Accept-Encoding` accepts any coding (RFC 9110 §12.5.3). A request that
+    // names its own codings keeps them.
+    if !out.contains_key(header::ACCEPT_ENCODING) {
+        let codings = if out.contains_key(header::RANGE) {
+            "identity"
+        } else {
+            "gzip, br, deflate"
+        };
+        out.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(codings));
     }
     // Trailers are welcome. A conformant HTTP/1.1 server sends a trailer
     // section only to a client that asked for one (RFC 9110 §10.1.4), and
@@ -1520,8 +1525,8 @@ mod tests {
         assert_eq!(seen[1].header("accept-encoding"), Some("identity"));
         assert_eq!(
             seen[2].header("accept-encoding"),
-            None,
-            "a range asked for a coding"
+            Some("identity"),
+            "a range must ask for the identity coding, not leave it open"
         );
     }
 
