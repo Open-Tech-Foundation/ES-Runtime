@@ -382,7 +382,7 @@ anyhow = "1.0.104"
 # MIT, one transitive dependency (jetscii, MIT OR Apache-2.0). Considered and
 # rejected: lol-html, whose selector engine is MPL-2.0 (four Servo crates) —
 # copyleft, which deny.toml fails by policy (D10).
-html5gum = "0.8.4"
+html5gum = "0.9.1"
 # Filesystem events for `esdev --watch` (DECISIONS D59). Confined to `dev-cli`:
 # nothing in production watches anything. 8.2.0 rather than the 9.0 release
 # candidates, per D7 — a pre-release is taken only when it is the only option

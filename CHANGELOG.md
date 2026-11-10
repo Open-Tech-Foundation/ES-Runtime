@@ -46,6 +46,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `runtime:serialization` moves to `quick-xml` 0.42 and `toml` 1.2. XML input
+  nested more than 65,535 elements deep is refused instead of overflowing the
+  parser's depth counter; output is unchanged (the writer is our own). esdev's
+  HTML splicing moves to `html5gum` 0.9.
+
 - `brotli` 9 (with `async-compression` 0.4.52) and `base64` 0.23: one copy of
   each in the binary, matching what `bcrypt` and the bundler already use. No
   change in behaviour.

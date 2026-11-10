@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn toml_parses() {
         let toml_str = "a = 'hi'\nb = 42\n";
-        let deserializer = toml::Deserializer::new(toml_str);
+        let deserializer = toml::Deserializer::parse(toml_str).unwrap();
         let val = ValueSeed.deserialize(deserializer).unwrap();
         assert!(matches!(val, Value::Object(_)));
         if let Value::Object(map) = val {

@@ -146,8 +146,9 @@ fn is_xml_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n')
 }
 
-fn checked_name(raw: &[u8]) -> Result<String, Error> {
-    let name = std::str::from_utf8(raw).map_err(|_| Error::syntax("a name is not valid UTF-8"))?;
+/// quick-xml has already checked the input is UTF-8, so a name arrives as
+/// text; what is left is whether it is an XML name.
+fn checked_name(name: &str) -> Result<String, Error> {
     if !is_name(name) {
         return Err(Error::syntax(format!("{name:?} is not an XML name")));
     }
@@ -254,7 +255,7 @@ fn read_attrs(e: &BytesStart<'_>) -> Result<Vec<(String, Value)>, Error> {
     for attr in e.attributes() {
         let attr = attr?;
         let name = checked_name(attr.key.as_ref())?;
-        if attr.value.contains(&b'<') {
+        if attr.value.contains('<') {
             return Err(Error::syntax(format!(
                 "`<` in the value of attribute {name:?}"
             )));
@@ -282,7 +283,7 @@ fn resolve_reference(e: &quick_xml::events::BytesRef<'_>) -> Result<char, Error>
         }
         return Ok(c);
     }
-    match e.decode()?.as_ref() {
+    match &**e {
         "amp" => Ok('&'),
         "lt" => Ok('<'),
         "gt" => Ok('>'),
@@ -347,7 +348,7 @@ fn parse_at(input: &str, base_depth: usize) -> Result<Value, Error> {
                 }
             }
             Event::Text(e) => {
-                let text = e.xml10_content()?;
+                let text = e.xml10_content();
                 match stack.last_mut() {
                     Some(frame) => frame.text.push_plain(&text),
                     None if text.chars().all(is_xml_space) => {}
@@ -355,7 +356,7 @@ fn parse_at(input: &str, base_depth: usize) -> Result<Value, Error> {
                 }
             }
             Event::CData(e) => match stack.last_mut() {
-                Some(frame) => frame.text.push_literal(&e.xml10_content()?),
+                Some(frame) => frame.text.push_literal(&e.xml10_content()),
                 None => return Err(Error::syntax("CDATA outside the root element")),
             },
             Event::GeneralRef(e) => match stack.last_mut() {
@@ -498,7 +499,7 @@ impl StreamDecoder {
                 }
                 Event::End(ref e) => match depth {
                     1 => {
-                        let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                        let name = e.name().as_ref().to_string();
                         if self.root.as_deref() != Some(name.as_str()) {
                             return Err(Error::syntax(format!(
                                 "expected </{}>, found </{name}>",
@@ -519,7 +520,7 @@ impl StreamDecoder {
                     _ => depth -= 1,
                 },
                 Event::Text(ref e) if depth == 0 => {
-                    if !e.xml10_content()?.chars().all(is_xml_space) {
+                    if !e.xml10_content().chars().all(is_xml_space) {
                         return Err(Error::syntax("text outside the root element"));
                     }
                     consumed = after;
