@@ -12057,17 +12057,17 @@ fn start_finds_a_free_port_when_none_was_named() {
         r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
     );
 
-    // The default, held by this test for its length. Other tests start esdev
-    // on the default port too, so a failed bind means one of them has it for
-    // now and will let it go — after which this test's esdev could take it.
-    // Wait until the port is this test's to hold.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    // The default must be taken for the length of the test. This test holds
+    // it when it can. Other tests start esdev on the default port too, so a
+    // failed bind is usually one of them, which lets it go within seconds —
+    // and then this test's esdev could take it. Something holding it longer
+    // than that is a long-lived server on the machine (a developer's own
+    // `esdev start`), which is the same precondition held by somebody else.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let blocker = loop {
         match std::net::TcpListener::bind(("127.0.0.1", 5173)) {
-            Ok(listener) => break listener,
-            Err(e) if std::time::Instant::now() >= deadline => {
-                panic!("port 5173 stayed taken for 60s, so it cannot be held: {e}")
-            }
+            Ok(listener) => break Some(listener),
+            Err(_) if std::time::Instant::now() >= deadline => break None,
             Err(_) => std::thread::sleep(Duration::from_millis(100)),
         }
     };
