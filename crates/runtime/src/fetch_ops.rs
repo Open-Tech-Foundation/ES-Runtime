@@ -423,8 +423,11 @@ fn parse_request(
         },
     };
 
+    // Absent or anything but `false` decodes, as before.
+    let decompress = !matches!(args.get(9), Some(Value::Bool(false)));
+
     let mut headers = Vec::new();
-    let mut i = 9;
+    let mut i = 10;
     while i + 1 < args.len() {
         if let (Some(name), Some(value)) = (args[i].as_str(), args[i + 1].as_str()) {
             headers.push((name.to_string(), value.to_string()));
@@ -438,6 +441,7 @@ fn parse_request(
         body,
         redirect,
         tls,
+        decompress,
     }
 }
 

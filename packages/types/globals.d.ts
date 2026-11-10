@@ -21,6 +21,20 @@ interface RequestInit {
     cert?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
     key?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
   };
+  /**
+   * Whether a compressed response body is decoded (DECISIONS D210) — Bun's
+   * member of the same name. Defaults to `true`. `false` returns the body as
+   * the server sent it, with `Content-Encoding` and `Content-Length` intact,
+   * and sends `Accept-Encoding: identity` unless the request sets its own —
+   * for a stored object whose coding is part of it (an S3 object saved
+   * gzipped), a byte-exact proxy, or a checksum over the wire bytes.
+   *
+   * ```ts
+   * const raw = await fetch(url, { decompress: false });
+   * raw.headers.get("content-encoding"); // "gzip"
+   * ```
+   */
+  decompress?: boolean;
 }
 
 interface WorkerOptions {

@@ -286,6 +286,7 @@ impl NetTransport for MockTransport {
                         body: RequestBody::Empty,
                         redirect: RedirectMode::Follow,
                         tls: Default::default(),
+                        decompress: true,
                     });
                 }
             }

@@ -4379,3 +4379,19 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 - **Extensionless imports as JS** (Node's syntax detection). A name with no extension is how a dotfile looks, and the case it serves is a bin script — which is an entry, and still runs.
 
 **Consequences:** `--allow-imports` means what its name says. **Not solved here:** under esdev, a *project* plugin whose `transform` has no `id` filter claims every file — that is the plugin's statement, and esdev runs grant everything by default and are not the deployment boundary (D194). `type` values other than `json` are still ignored rather than refused.
+
+### D210 — `fetch` decodes unless told `decompress: false`, and a `Range` asks for `identity` · *Accepted (2026-11-11)* · *amends D198*
+
+**Context:** D198's client decodes `gzip`, `br` and `deflate` by the response's `Content-Encoding`, whatever the request asked for, which is the Fetch standard's rule. An object store does not negotiate that header: S3 returns the `Content-Encoding` an object was stored with on every GET. So an S3 client written on `fetch` could not read a gzip-stored object as stored — its bytes no longer matched its ETag or size — and a byte range of one failed mid-decode. There was no way to ask for the wire bytes. Separately, a request with a `Range` left `Accept-Encoding` out, where the standard appends `identity`; a request without the header accepts any coding (RFC 9110 §12.5.3), so a server was free to compress the range. Checked against current sources: undici v8.12.4 follows the standard (appends `identity` to a ranged request, always decodes); Deno v2.9.8 appends `identity` to a ranged request and skips decoding when the request has a `Range` or sends `Accept-Encoding: identity`; Bun v1.4.4 decodes unless `fetch(url, { decompress: false })`, and a request's own `Accept-Encoding` only replaces Bun's; reqwest v0.13.5 always decodes; the AWS SDK for JavaScript on Node avoids the question by sending over `node:http`, which does not decode.
+
+**Decision (maintainer, 2026-11-11):**
+- **A `Range` request sends `Accept-Encoding: identity`** unless it sets its own, as the Fetch standard says. Its response is still decoded by its `Content-Encoding`, as the standard says.
+- **`decompress: false` in the init — Bun's member — turns decoding off for that request.** The body is the bytes the server sent, `Content-Encoding` and `Content-Length` stay, and the request sends `Accept-Encoding: identity` unless it sets its own. Absent or `true` decodes. It is an init member only, like `tls` (D201), not a property of `Request`. The transport carries it as `HttpRequest::decompress`.
+- **A request's own `Accept-Encoding` does not stop decoding.** The header says what the caller accepts, not what it will do with the body.
+
+**Rejected:**
+- **Deno's rule** (no decoding when the request has a `Range` or sends `identity`). It reads intent off a header that means something else, and differs from the standard and undici for every program that sets one.
+- **An HTTP client for S3 over `runtime:net`**, as the AWS SDK does on Node. A second HTTP/1.1 implementation in JavaScript, without HTTP/2, pooling or `--proxy` (D205 leaves `runtime:net` unproxied) — the duplication D198 removed.
+- **Leaving it out.** No JavaScript can recover stored bytes from a decoded body, or decode a compressed range.
+
+**Consequences:** an S3 client on `fetch` passes `decompress: false` on its GETs and reads objects byte for byte. Code that uses the member elsewhere still runs: browsers, Node and Deno ignore an unknown init member and decode.

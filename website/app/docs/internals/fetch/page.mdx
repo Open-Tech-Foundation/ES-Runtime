@@ -86,6 +86,15 @@ Two details that are easy to get wrong and are not:
   answers `zstd`, the guest gets the compressed bytes and the header that says
   so — the honest answer, since pretending to have decoded it would be a lie.
 
+- **`decompress: false` turns it off**, and nothing else does (D210). The
+  coding of an object store's GET is not negotiated: S3 returns the
+  `Content-Encoding` an object was stored with, whatever the request accepted.
+  So a request that sets `Accept-Encoding: identity` is still decoded, as the
+  Fetch standard and undici do, and a caller that needs the stored bytes says
+  so. A `Range` request sends `identity` but is decoded too: a server that
+  compresses a range anyway sent a coding, and the body error is the truth
+  about it.
+
 Decoding happens as the body streams, at most 64 KiB at a time, so a small
 compressed body that expands enormously is handed over in bounded pieces rather
 than in one allocation. A `HEAD`, a `204`, a `304` or an empty body is not

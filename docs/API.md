@@ -184,6 +184,18 @@ response arrives as a body you can read:
 | Decoded | `gzip`, `br`, `deflate`, keyed off the response's `Content-Encoding` rather than off who asked, so a server that compresses unbidden is still handled |
 | Stripped | `Content-Encoding` and `Content-Length`, which described the compressed bytes |
 | Passed through | any other coding (`zstd`, …) — body and headers untouched, since claiming to have decoded it would be a lie |
+| With a `Range` | `Accept-Encoding: identity`, unless the request sets its own |
+
+`decompress: false` in the init — Bun's name (D210) — turns decoding off for
+that request: the body arrives as the server sent it, `Content-Encoding` and
+`Content-Length` intact, and the request asks for `identity` unless it sets its
+own `Accept-Encoding`. Use it when the coding is part of what you are reading: an
+S3 object stored gzipped, a byte-exact proxy, a checksum over the wire bytes.
+
+```js
+const raw = await fetch(url, { decompress: false });
+raw.headers.get("content-encoding"); // "gzip"
+```
 
 `zstd` is deliberately not implemented: nothing else in the runtime speaks it,
 and advertising a coding means carrying a codec that exists for no other reason.

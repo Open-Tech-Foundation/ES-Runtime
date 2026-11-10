@@ -16,6 +16,8 @@ itself.
 ### Added
 
 - `secureTransport`, `cert` and `key` on `runtime:websocket`'s `serve()`.
+- `decompress` on `RequestInit` (D210): `false` returns a compressed response
+  body as the server sent it.
 
 ## [0.21.0] - 2026-11-03
 

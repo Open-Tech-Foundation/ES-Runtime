@@ -102,6 +102,10 @@ pub struct Outbound {
     pub redirects: Redirects,
     /// Checked for the request and for every redirect hop before it is sent.
     pub allow: Option<Arc<HostAllowlist>>,
+    /// Whether a content-coded response body is decoded (D210). `false` asks
+    /// for the identity coding unless the request names its own, and returns
+    /// the body and its headers as the server sent them.
+    pub decompress: bool,
 }
 
 impl Outbound {
@@ -114,6 +118,7 @@ impl Outbound {
             body: Body::Empty,
             redirects: Redirects::Follow,
             allow: None,
+            decompress: true,
         }
     }
 }
@@ -276,6 +281,7 @@ impl HttpClient {
             body,
             redirects,
             allow,
+            decompress,
         } = request;
         let mut headers = header_map(&headers)?;
         let mut body = body;
@@ -309,14 +315,14 @@ impl HttpClient {
             };
             let response = self
                 .client
-                .request(build(&method, &url, &hop_headers, this_body)?)
+                .request(build(&method, &url, &hop_headers, this_body, decompress)?)
                 .await
                 .map_err(classify)?;
             let status = response.status();
             let location = response.headers().get(header::LOCATION).cloned();
             let follow = redirects == Redirects::Follow && is_redirect(status);
             let Some(location) = location.filter(|_| follow) else {
-                return Ok(inbound(&method, url, hops > 0, response));
+                return Ok(inbound(&method, url, hops > 0, response, decompress));
             };
             if hops == MAX_REDIRECTS {
                 return Err(ProviderError::Coded {
@@ -431,6 +437,7 @@ fn build(
     url: &Url,
     headers: &HeaderMap,
     body: Body,
+    decompress: bool,
 ) -> Result<Request<RequestBody>, ProviderError> {
     let mut target = url.clone();
     target.set_fragment(None);
@@ -464,10 +471,11 @@ fn build(
     // A range of a compressed representation is not a range of the resource,
     // so a ranged request asks for the identity coding (Fetch, HTTP-network-or-
     // cache fetch). Saying nothing would not do: a request without
-    // `Accept-Encoding` accepts any coding (RFC 9110 §12.5.3). A request that
-    // names its own codings keeps them.
+    // `Accept-Encoding` accepts any coding (RFC 9110 §12.5.3). Nor does a
+    // request that will not decode invite a coding. A request that names its
+    // own codings keeps them.
     if !out.contains_key(header::ACCEPT_ENCODING) {
-        let codings = if out.contains_key(header::RANGE) {
+        let codings = if !decompress || out.contains_key(header::RANGE) {
             "identity"
         } else {
             "gzip, br, deflate"
@@ -516,12 +524,14 @@ fn inbound(
     url: Url,
     redirected: bool,
     response: hyper::Response<Incoming>,
+    decompress: bool,
 ) -> Inbound {
     let (parts, incoming) = response.into_parts();
     let mut headers = parts.headers;
     let (trailer_tx, trailers) = tokio::sync::oneshot::channel();
     let raw = frames(incoming, trailer_tx);
-    let body: ByteStream = match coding(method, parts.status, &headers) {
+    let coding = coding(method, parts.status, &headers).filter(|_| decompress);
+    let body: ByteStream = match coding {
         Some(coding) => {
             headers.remove(header::CONTENT_ENCODING);
             headers.remove(header::CONTENT_LENGTH);
@@ -1082,6 +1092,7 @@ mod tests {
             body: Body::Empty,
             redirects: Redirects::Follow,
             allow: None,
+            decompress: true,
         }
     }
 
@@ -1433,6 +1444,41 @@ mod tests {
             );
             assert_eq!(response.bytes(usize::MAX).await.unwrap(), plain, "{coding}");
         }
+    }
+
+    // `decompress: false` (D210): the body is the bytes the server sent, and the
+    // headers still describe them. The request asks for no coding unless it
+    // named its own.
+    #[tokio::test]
+    async fn a_request_that_does_not_decompress_gets_the_wire_bytes() {
+        let plain = b"stored compressed".repeat(40);
+        let encoded = gzip(&plain);
+        let length = encoded.len().to_string();
+        let sent = encoded.clone();
+        let server =
+            Server::start(move |_| reply("200 OK", &[("content-encoding", "gzip")], &sent)).await;
+        let mut raw = request(Method::GET, server.url("/"));
+        raw.decompress = false;
+        let response = client().send(raw).await.unwrap();
+        assert_eq!(
+            response.headers.get(header::CONTENT_ENCODING).unwrap(),
+            "gzip"
+        );
+        assert_eq!(
+            response.headers.get(header::CONTENT_LENGTH).unwrap(),
+            length.as_str()
+        );
+        assert_eq!(response.bytes(usize::MAX).await.unwrap(), encoded);
+
+        let mut own = request(Method::GET, server.url("/"));
+        own.decompress = false;
+        own.headers = vec![("accept-encoding".to_string(), "gzip".to_string())];
+        let response = client().send(own).await.unwrap();
+        assert_eq!(response.bytes(usize::MAX).await.unwrap(), encoded);
+
+        let seen = server.seen();
+        assert_eq!(seen[0].header("accept-encoding"), Some("identity"));
+        assert_eq!(seen[1].header("accept-encoding"), Some("gzip"));
     }
 
     // Decoding something this client does not implement would be a lie; the

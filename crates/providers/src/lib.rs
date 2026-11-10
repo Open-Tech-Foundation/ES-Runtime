@@ -243,6 +243,10 @@ pub struct HttpRequest {
     /// TLS material for this request only (D201): a CA trusted in addition to
     /// the process store, and a client certificate. Empty ⇒ the defaults.
     pub tls: RequestTls,
+    /// Whether a content-coded response body is decoded (`fetch`'s
+    /// `decompress`, D210). `false` hands back the bytes as the server sent
+    /// them, with `Content-Encoding` and `Content-Length` intact.
+    pub decompress: bool,
 }
 
 /// A request's own TLS material (D201) — `fetch`'s `tls` member.

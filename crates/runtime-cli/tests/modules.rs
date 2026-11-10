@@ -796,6 +796,11 @@ fn decodes_compressed_response_bodies_and_identifies_itself() {
         "{stdout}"
     );
     assert!(stdout.contains("RANGED accept:identity"), "{stdout}");
+    assert!(
+        stdout.contains("RAW same:true content-encoding:gzip length-kept:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("RAW accept:identity"), "{stdout}");
     assert!(stdout.contains("EXPLICIT ok:true"), "{stdout}");
     assert!(
         stdout.contains("UNKNOWN body:true content-encoding:zstd"),

@@ -876,6 +876,9 @@
   async function fetch(input, init) {
     const request = new Request(input, init);
     const tls = fetchTls(init);
+    // Bun's `decompress` member (D210): `false` returns a content-coded body as
+    // the server sent it. A boolean, as WebIDL converts one; absent decodes.
+    const decompress = init?.decompress === undefined ? true : Boolean(init.decompress);
     const state = request[BODY];
     const signal = request.signal;
 
@@ -952,6 +955,7 @@
       abortId,
       request.redirect === "follow",
       ...tls,
+      decompress,
     ];
     for (const [name, value] of request[REQUEST_HEADERS]()) args.push(name, value);
 

@@ -73,6 +73,18 @@ const explicit = await fetch(`${base}/body?coding=gzip`, {
 });
 console.log(`EXPLICIT ok:${(await explicit.text()) === PLAIN}`);
 
+// `decompress: false` (Bun's member) hands back the wire bytes with the headers
+// that describe them, and asks for no coding of its own.
+const raw = await fetch(`${base}/body?coding=gzip`, { decompress: false });
+const rawBytes = new Uint8Array(await raw.arrayBuffer());
+console.log(
+  `RAW same:${rawBytes.length === bodies.gzip.length && rawBytes.every((b, i) => b === bodies.gzip[i])}` +
+    ` content-encoding:${raw.headers.get("content-encoding")}` +
+    ` length-kept:${raw.headers.get("content-length") === String(bodies.gzip.length)}`,
+);
+const rawAccept = await (await fetch(`${base}/echo-accept`, { decompress: false })).text();
+console.log(`RAW accept:${rawAccept}`);
+
 // A coding this client does not implement passes through untouched rather than
 // being silently mangled — body and headers both stay as the server sent them.
 const unknown = await fetch(`${base}/unknown-coding`);

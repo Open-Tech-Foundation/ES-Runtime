@@ -143,6 +143,7 @@ impl NetTransport for HttpTransport {
                         RedirectMode::Manual => Redirects::Manual,
                     },
                     allow,
+                    decompress: request.decompress,
                 })
                 .await?;
             let mut url = response.url;
@@ -192,6 +193,7 @@ mod tests {
             body: RequestBody::Empty,
             redirect: RedirectMode::Follow,
             tls: Default::default(),
+            decompress: true,
         }
     }
 
