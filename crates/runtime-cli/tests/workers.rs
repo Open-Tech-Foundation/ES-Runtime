@@ -683,6 +683,62 @@ fn a_bad_memory_option_throws_from_the_constructor() {
 }
 
 #[test]
+fn granting_only_imports_says_workers_is_what_starting_one_needs() {
+    // The other half of the pair below: the entry reads, and starting it is
+    // what is refused — said as that, not as a read.
+    let out = run(
+        "importsonly",
+        r#"postMessage("should never run");"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onerror = (e) => { console.log("refused:", e.message); e.preventDefault(); };
+        "#,
+        &["--deny-all", "--allow-imports"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains(r#"starting it needs the "workers" permission — add --allow-workers"#),
+        "stdout: {out}"
+    );
+}
+
+#[test]
+fn a_worker_entry_is_never_handed_back_to_javascript() {
+    // Every op is reachable from guest code through `__ops`, so an op that
+    // returned a worker's entry source was a file reader: under
+    // `--allow-imports` alone it read `.env` and handed the text back. The
+    // spawn now reads the entry itself and nothing returns it.
+    let dir = temp("entry_source");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("package.json"), "{}").expect("write");
+    std::fs::write(dir.join(".env"), "TOKEN=hunter2\n").expect("write");
+    std::fs::write(
+        dir.join("main.js"),
+        "console.log(typeof globalThis.__ops.worker_read_entry);\n\
+         try {\n\
+           await globalThis.__ops.worker_spawn(\n\
+             new URL('./.env', import.meta.url).href, '', [], null, 0);\n\
+           console.log('spawned');\n\
+         } catch (e) { console.log(e.code); }\n",
+    )
+    .expect("write");
+    let out = esrun()
+        .current_dir(&dir)
+        .args(["--deny-all", "--allow-imports", "main.js"])
+        .output()
+        .expect("spawn esrun");
+    let printed = stdout(&out);
+    assert_eq!(
+        printed,
+        "undefined\nERR_CAPABILITY_DENIED\n",
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn granting_only_workers_says_what_else_is_needed() {
     // Starting a worker means reading its entry module, so it takes `imports`
     // as well — Node wants `--allow-fs-read` alongside `--allow-worker` for the

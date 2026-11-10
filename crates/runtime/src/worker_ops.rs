@@ -6,7 +6,8 @@
 //! `worker_self_recv`, `worker_self_close`) through [`WorkerScope`], which is
 //! installed only on a runtime that *is* a worker.
 //!
-//! Only `worker_spawn` is capability-checked, on [`Capability::Worker`]. The
+//! Only `worker_spawn` is capability-checked — on [`Capability::Worker`], and
+//! on [`Capability::FileSystem`] for reading the entry it starts. The
 //! rest operate by an id a checked spawn produced, so they need no capability
 //! of their own — the same reasoning as `net_read` and `ws_send`. The worker
 //! half needs none at all: possessing a `WorkerScope` *is* the authority, and
@@ -42,65 +43,63 @@ pub(crate) fn install(
     handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
     inventory: &crate::handles::Inventory,
 ) -> Result<()> {
-    install_entry_reader(engine, loader)?;
     install_base(engine, entry)?;
-    install_parent(engine, workers, capabilities, handle_refs, inventory)?;
+    install_parent(
+        engine,
+        workers,
+        capabilities,
+        loader,
+        handle_refs,
+        inventory,
+    )?;
     install_scope(engine, scope)
 }
 
-/// `worker_read_entry(url) -> { specifier, source }`: resolve a worker's entry
-/// module and read it, through the loader, on the **parent's** authority.
+/// Resolves a worker's entry module and reads it, through the loader, on the
+/// **parent's** authority — returning `(specifier, source)` to the spawn and to
+/// nothing else.
 ///
-/// Gated on [`Capability::FileSystem`], the same grant an `import` needs, and
-/// running the loader means it obeys the same root jail and import policy — so
-/// a worker URL can never reach somewhere an import could not. Doing it here
-/// rather than on the worker's thread is what lets a spawn that cannot find its
-/// script fail visibly, instead of inside a thread that already exists.
-fn install_entry_reader(
-    engine: &mut dyn Engine,
-    loader: crate::module_ops::LoaderSlot,
-) -> Result<()> {
-    engine.register_op(
-        OpDecl::r#async("worker_read_entry", move |args| {
-            let url = arg_str(&args, 0);
-            let loader = loader.borrow().clone();
-            Box::pin(async move {
-                let Some(loader) = loader else {
-                    return Err(OpError::new(
-                        ExceptionClass::TypeError,
-                        format!(
-                            "cannot start a worker from {url:?}: module loading is not \
-                             permitted in this runtime"
-                        ),
-                    ));
-                };
-                // Resolved against itself: a worker URL is absolute by the time
-                // it gets here, because the prelude resolves it with the realm's
-                // own `URL` first.
-                let specifier = loader.resolve(&url, &url).await.map_err(map_err)?;
-                let source = loader.load(&specifier).await.map_err(map_err)?;
-                let source = match source {
-                    es_runtime_providers::ModuleSource::Text(text) => text,
-                    // A worker entry is a module of source text. Wasm and JSON
-                    // are modules too, but neither has a top level that can run
-                    // a worker, so pointing one at them is a mistake worth
-                    // naming rather than a graph to build.
-                    _ => {
-                        return Err(OpError::new(
-                            ExceptionClass::TypeError,
-                            format!("a worker entry must be a JavaScript module: {specifier}"),
-                        ));
-                    }
-                };
-                Ok(Value::Object(vec![
-                    ("specifier".to_string(), Value::String(specifier)),
-                    ("source".to_string(), Value::String(source)),
-                ]))
-            })
-        })
-        .requires(Capability::FileSystem),
-    )?;
-    Ok(())
+/// Running the loader means the entry obeys the same root jail and import
+/// policy an `import` does, so a worker URL can never reach somewhere an import
+/// could not. Doing it before the spawn rather than on the worker's thread is
+/// what lets a spawn that cannot find its script fail visibly, instead of
+/// inside a thread that already exists.
+///
+/// **The source never reaches JavaScript.** This was once an op of its own,
+/// `worker_read_entry(url) -> { specifier, source }`, gated on `imports`
+/// alone, and every op is callable from guest code through `__ops`. So it was
+/// a file reader: under `--allow-imports` and nothing else, it handed back any
+/// text file in the project — `.env` included — ignoring `--allow-read`'s
+/// scope, and without the `workers` grant the read was there to serve. An
+/// `import` of the same file runs it or fails to parse it; it never returns
+/// its bytes. Reading the entry inside the spawn keeps it that way.
+async fn read_entry(
+    loader: Option<Arc<dyn es_runtime_providers::ModuleLoader>>,
+    url: &str,
+) -> std::result::Result<(String, String), OpError> {
+    let Some(loader) = loader else {
+        return Err(OpError::new(
+            ExceptionClass::TypeError,
+            format!(
+                "cannot start a worker from {url:?}: module loading is not \
+                 permitted in this runtime"
+            ),
+        ));
+    };
+    // Resolved against itself: a worker URL is absolute by the time it gets
+    // here, because the prelude resolves it with the realm's own `URL` first.
+    let specifier = loader.resolve(url, url).await.map_err(map_err)?;
+    let source = loader.load(&specifier).await.map_err(map_err)?;
+    match source {
+        es_runtime_providers::ModuleSource::Text(text) => Ok((specifier, text)),
+        // A worker entry is a module of source text. Wasm and JSON are modules
+        // too, but neither has a top level that can run a worker, so pointing
+        // one at them is a mistake worth naming rather than a graph to build.
+        _ => Err(OpError::new(
+            ExceptionClass::TypeError,
+            format!("a worker entry must be a JavaScript module: {specifier}"),
+        )),
+    }
 }
 
 /// `worker_base() -> string`: the entry module's URL, which a relative
@@ -128,6 +127,7 @@ fn install_parent(
     engine: &mut dyn Engine,
     workers: Option<Arc<dyn WorkerHost>>,
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
+    loader: crate::module_ops::LoaderSlot,
     handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
     inventory: &crate::handles::Inventory,
 ) -> Result<()> {
@@ -144,22 +144,23 @@ fn install_parent(
         OpDecl::r#async("worker_spawn", move |args| {
             let host = host.clone();
             let owned = owned.clone();
-            let specifier = arg_str(&args, 0);
-            let source = arg_str(&args, 1);
-            let name = arg_str(&args, 2);
-            let requested = arg_str_vec(&args, 3);
+            let loader = loader.borrow().clone();
+            let url = arg_str(&args, 0);
+            let name = arg_str(&args, 1);
+            let requested = arg_str_vec(&args, 2);
             // `null` — the ordinary case — means "read the host environment,
             // if you were granted it". A list of pairs is one the parent built
             // out of values it already held.
-            let env = arg_pairs(&args, 4);
+            let env = arg_pairs(&args, 3);
             // Megabytes, as Node's `maxOldGenerationSizeMb` is; 0 when the
             // spawn named no ceiling of its own.
-            let memory_mb = arg_u64(&args, 5);
+            let memory_mb = arg_u64(&args, 4);
             // Read *now*, on the calling thread, rather than inside the future:
             // this is the spawning agent's own grant, and it is the ceiling on
             // what the child can be given.
             let parent = capabilities.get();
             Box::pin(async move {
+                let (specifier, source) = read_entry(loader, &url).await?;
                 let spec = WorkerSpec {
                     specifier,
                     source,
@@ -177,6 +178,10 @@ fn install_parent(
                 Ok(Value::Number(owned.own(id) as f64))
             })
         })
+        // Both: reading the entry is an import, on the parent's authority,
+        // and starting it is the `workers` grant. In that order, which is the
+        // order the two refusals were reported in when they were two ops.
+        .requires(Capability::FileSystem)
         .requires(Capability::Worker),
     )?;
 

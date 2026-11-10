@@ -92,6 +92,12 @@ namespace) is unstable and may change between minor releases until the API freez
   pinned by descriptor at the call, like every other mutation. `stat`,
   `exists`, `readDir`, glob scans and `makeTempFile`/`makeTempDir` are pinned
   the same way, which closes the same window for threads racing each other.
+- **No op hands a worker's entry source back to JavaScript.** Starting a worker
+  was two ops, and the first, reachable from guest code through `__ops`,
+  returned the entry's text: under `--allow-imports` alone it read any text
+  file in the project, `.env` included, whatever `--allow-read` said. The
+  spawn now reads the entry itself. A worker refused for want of `workers`
+  says that starting it is what needs the grant.
 - **`crypto.subtle` RSA is constant-time** (DECISIONS D203). It moves to
   RustCrypto `rsa` 0.10.0-rc.20, which fixes RUSTSEC-2023-0071 ("Marvin"):
   constant-time private-key arithmetic, blinded signing and decryption, and

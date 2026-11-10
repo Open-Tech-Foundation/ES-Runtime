@@ -96,10 +96,14 @@
     // it; what the original adds is the capability behind it, so the trailing
     // repeat of the name comes off.
     const denial = failure.message.replace(/ \(permission "[^"]+"\)$/, "");
+    // The spawn checks two grants: `imports` to read the entry, `workers` to
+    // start it. Each is said as what it is for.
+    const needs =
+      permission === "workers" ? "starting it needs" : "reading its module needs";
     return {
       ...failure,
       message:
-        `cannot start a worker from ${url}: reading its module needs the ` +
+        `cannot start a worker from ${url}: ${needs} the ` +
         `"${permission}" permission — add --allow-${permission} (${denial})`,
     };
   }
@@ -301,10 +305,10 @@
 
       try {
         const absolute = new URL(url, __ops.worker_base()).href;
-        const { specifier, source } = await __ops.worker_read_entry(absolute);
+        // The spawn reads the entry itself, on this agent's authority: its
+        // source is never handed back here, where any guest could ask for it.
         this.#id = await __ops.worker_spawn(
-          specifier,
-          source,
+          absolute,
           name,
           permissions,
           env,

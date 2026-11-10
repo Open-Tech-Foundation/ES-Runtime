@@ -43,7 +43,8 @@ every other reach outside the isolate:
 
 ```text
   new Worker(url)
-    └▶ worker_spawn op  ── capability: workers
+    └▶ worker_spawn op  ── capabilities: imports (to read the entry), workers
+         └▶ entry resolved and read by the loader, never returned to JS
          └▶ WorkerHost provider
               └▶ OS thread ──▶ its own V8 isolate ──▶ its own Driver
 ```
