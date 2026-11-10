@@ -266,6 +266,78 @@ async fn the_discovery_endpoints_describe_the_target() {
     assert!(listing.contains("inspect-list.mjs"), "{listing}");
 }
 
+/// Sends a raw request head and returns the response's status line.
+async fn status_of(address: &str, head: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = TcpStream::connect(address).await.expect("connect");
+    stream.write_all(head.as_bytes()).await.expect("send");
+    let mut response = vec![0_u8; 512];
+    let n = stream.read(&mut response).await.expect("read");
+    String::from_utf8_lossy(&response[..n])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A web page cannot reach the debugger. DNS rebinding makes a page's own name
+/// resolve to 127.0.0.1, and the requests still carry that name; a page that
+/// dials the address directly still says which page it is in `Origin`.
+/// Either way it would read `/json/list`, attach, and run code in a process
+/// that holds every grant (Node's CVE-2018-7160).
+#[tokio::test]
+async fn a_web_page_cannot_reach_the_debugger() {
+    if !inspector_available() {
+        return;
+    }
+    let app = write("inspect-origin.mjs", "setInterval(() => {}, 1000);\n");
+    let program = Program::start("--inspect", &app);
+    let address = program.url("");
+    let listing = get(&address, "/json/list").await;
+    let path = listing
+        .split(&format!("ws://{address}"))
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a target")
+        .to_string();
+
+    // Discovery under a rebound name.
+    let rebound = format!(
+        "GET /json/list HTTP/1.1\r\nHost: attacker.example:{}\r\n\r\n",
+        program.port
+    );
+    assert!(status_of(&address, &rebound).await.contains("403"));
+
+    let upgrade = |host: &str, origin: &str| {
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\n{origin}Connection: Upgrade\r\n\
+             Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+    };
+    // The upgrade, under a rebound name, and by address from a web page.
+    let rebound_host = format!("attacker.example:{}", program.port);
+    assert!(
+        status_of(&address, &upgrade(&rebound_host, ""))
+            .await
+            .contains("403")
+    );
+    assert!(
+        status_of(
+            &address,
+            &upgrade(&address, "Origin: http://attacker.example\r\n")
+        )
+        .await
+        .contains("403")
+    );
+    // A real debugger still attaches.
+    assert!(
+        status_of(&address, &upgrade(&address, ""))
+            .await
+            .contains("101")
+    );
+}
+
 #[tokio::test]
 async fn a_breakpoint_stops_the_program_where_it_was_set() {
     if !inspector_available() {

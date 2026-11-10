@@ -87,6 +87,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   three attempts in all, and shows a progress bar for the archive when
   stderr is a terminal.
 
+### Security
+
+- **A web page can no longer attach to `--inspect`.** The debugger answered
+  any `Host` and any `Origin`, so a page using DNS rebinding could read
+  `/json/list`, attach and run code in the process — Node's CVE-2018-7160.
+  It now answers only to `localhost` or an IP address, refuses a WebSocket
+  upgrade carrying any `Origin` but Chrome DevTools' (`devtools://devtools`),
+  and its session id comes from the OS random source rather than the clock.
+
 ## [0.26.0] - 2026-11-03
 
 ### Security

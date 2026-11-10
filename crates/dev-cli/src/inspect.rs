@@ -301,7 +301,30 @@ async fn handle(mut stream: TcpStream, shared: Arc<Shared>, target: Arc<Target>)
     };
     let path = request_path(&head).unwrap_or_default();
 
+    // Before anything is answered, discovery included: `/json/list` is where a
+    // rebound page would learn the WebSocket path.
+    if !host_is_allowed(&head) {
+        let _ = respond(
+            &mut stream,
+            "403 Forbidden",
+            "text/plain",
+            "the debugger answers only to localhost or an IP address",
+        )
+        .await;
+        return;
+    }
+
     if let Some(key) = websocket_key(&head) {
+        if !origin_is_allowed(&head) {
+            let _ = respond(
+                &mut stream,
+                "403 Forbidden",
+                "text/plain",
+                "a debugger cannot be attached from a web page",
+            )
+            .await;
+            return;
+        }
         if path.trim_start_matches('/') != target.id {
             let _ = respond(&mut stream, "404 Not Found", "text/plain", "no such target").await;
             return;
@@ -563,38 +586,80 @@ fn escape(text: &str) -> String {
     out
 }
 
-/// A UUID-shaped id for this session's WebSocket path.
+/// Whether a request's `Host` names this machine by a loopback name or an IP
+/// literal — the only names a debugger reached on purpose is reached by.
 ///
-/// It is not a secret and is not treated as one — the endpoint's protection is
-/// that it is bound to loopback, and the warning above says what happens when it
-/// is not. This exists because clients expect the shape.
-fn session_id() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    // The counter is what keeps two ids in one process apart: a clock read is
-    // not guaranteed to have moved between them.
-    static MINTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let serial = MINTED.fetch_add(1, Ordering::Relaxed);
-    let mut state = (now as u64)
-        ^ (u64::from(std::process::id()) << 32)
-        ^ serial.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    let mut next = || {
-        // SplitMix64: a few lines, no dependency, and plenty for a name.
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
+/// **DNS rebinding.** Loopback keeps other machines out, but not a web page in
+/// the developer's own browser: a page on `attacker.example` can have that name
+/// re-resolve to `127.0.0.1` and then talk to this port as if it were its own
+/// origin. It reads `/json/list`, learns the WebSocket path, attaches, and
+/// evaluates code in a process `esdev` grants everything. Node's inspector had
+/// exactly this hole (CVE-2018-7160) and closed it the same way: the request
+/// still carries the name the page used, so anything but `localhost` or an
+/// address is refused. A remote `--inspect=0.0.0.0` is reached by address.
+pub fn host_is_allowed(head: &str) -> bool {
+    let Some(host) = header(head, "host") else {
+        return false;
     };
-    let (high, low) = (next(), next());
+    let name = match host.strip_prefix('[') {
+        // `[::1]:9229`
+        Some(rest) => match rest.split_once(']') {
+            Some((v6, after)) if after.is_empty() || after.starts_with(':') => {
+                return v6.parse::<std::net::Ipv6Addr>().is_ok();
+            }
+            _ => return false,
+        },
+        None => host.rsplit_once(':').map_or(host, |(name, _port)| name),
+    };
+    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+/// Whether an upgrade's `Origin` may attach a debugger.
+///
+/// The `Host` check stops a rebound name; this stops a page that connects to
+/// `ws://127.0.0.1:9229/…` by address, which a browser lets any page do — and
+/// a browser always says which page it is. A CDP client either sends no
+/// `Origin` (VS Code, Node clients, `chrome-remote-interface`) or is Chrome's
+/// own DevTools front end, `devtools://devtools`. Chrome refuses every other
+/// origin on its own debugging port for the same reason (`--remote-allow-origins`).
+pub fn origin_is_allowed(head: &str) -> bool {
+    match header(head, "origin") {
+        None => true,
+        Some(origin) => origin.eq_ignore_ascii_case("devtools://devtools"),
+    }
+}
+
+/// The value of the first `name` header in a request head, trimmed.
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+/// A random, UUID-shaped id for this session's WebSocket path.
+///
+/// Drawn from the operating system's CSPRNG. The `Host` and `Origin` checks
+/// are the endpoint's protection; the id is the one after them, and an id a
+/// page could compute from the clock and the process id would be no protection
+/// at all. Clients expect the UUID shape, so it has that too.
+fn session_id() -> String {
+    use es_runtime_providers::Entropy as _;
+    let mut bytes = [0_u8; 16];
+    es_runtime_default_providers::OsEntropy
+        .fill(&mut bytes)
+        .expect("the operating system's random source is available");
+    // Version 4, variant 1 (RFC 9562).
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        high >> 32,
-        (high >> 16) & 0xffff,
-        high & 0xfff,
-        0x8000 | (low >> 52),
-        low & 0xffff_ffff_ffff
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
     )
 }
 
@@ -730,5 +795,66 @@ mod tests {
             "{id}"
         );
         assert_ne!(id, session_id(), "two ids in one process must differ");
+        // A version-4 UUID, variant 1.
+        assert_eq!(&parts[2][..1], "4", "{id}");
+        assert!("89ab".contains(&parts[3][..1]), "{id}");
+    }
+
+    fn with_host(host: &str) -> String {
+        format!("GET /json/list HTTP/1.1\r\nHost: {host}\r\n\r\n")
+    }
+
+    #[test]
+    fn the_debugger_answers_to_loopback_names_and_addresses() {
+        for host in [
+            "localhost",
+            "localhost:9229",
+            "LocalHost:9229",
+            "127.0.0.1:9229",
+            "[::1]:9229",
+            "[::1]",
+            // `--inspect=0.0.0.0`, reached from another machine by address.
+            "192.168.1.20:9229",
+        ] {
+            assert!(host_is_allowed(&with_host(host)), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_rebound_name_is_refused() {
+        // DNS rebinding: the page's own name, now resolving to 127.0.0.1.
+        for host in [
+            "attacker.example:9229",
+            "attacker.example",
+            "localhost.attacker.example:9229",
+            "127.0.0.1.nip.io:9229",
+            "[::1]evil:9229",
+            "[not-an-address]:9229",
+            "",
+        ] {
+            assert!(!host_is_allowed(&with_host(host)), "{host:?}");
+        }
+        // HTTP/1.1 requires `Host`; a request without one is not a client's.
+        assert!(!host_is_allowed("GET /json/list HTTP/1.1\r\n\r\n"));
+    }
+
+    #[test]
+    fn only_a_debugger_origin_may_attach() {
+        let upgrade = |origin: Option<&str>| {
+            let origin = origin.map_or(String::new(), |o| format!("Origin: {o}\r\n"));
+            format!("GET /x HTTP/1.1\r\nHost: 127.0.0.1:9229\r\n{origin}\r\n")
+        };
+        // A CDP client: no `Origin`, or Chrome's DevTools front end.
+        assert!(origin_is_allowed(&upgrade(None)));
+        assert!(origin_is_allowed(&upgrade(Some("devtools://devtools"))));
+        // A web page always names itself, and is refused.
+        for origin in [
+            "http://attacker.example",
+            "http://localhost:3000",
+            "http://127.0.0.1:9229",
+            "null",
+        ] {
+            assert!(!origin_is_allowed(&upgrade(Some(origin))), "{origin}");
+        }
     }
 }

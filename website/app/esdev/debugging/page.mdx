@@ -59,6 +59,11 @@ all the files share one process and one debugger session.
   run code in the process regardless of what it was denied.
 </Callout>
 
+The debugger answers only to `localhost` or an IP address in `Host`, so reach a
+remote one by address rather than by name. It refuses a WebSocket from a web page:
+a client that sends an `Origin` must be Chrome DevTools (`devtools://devtools`).
+VS Code and other CDP clients send none.
+
 `esdev --watch --inspect` reclaims its port across a restart, so you can leave a
 debugger attached while you edit.
 
