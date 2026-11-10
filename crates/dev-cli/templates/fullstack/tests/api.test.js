@@ -1,6 +1,7 @@
 import { expect, test } from "runtime:test";
 import { GET } from "../app/api/hello/route.js";
 import loader from "../app/loader.js";
+import todosLoader from "../app/todos/loader.js";
 
 test("GET /api/hello answers JSON", async () => {
   const response = await GET(new Request("http://localhost/api/hello"));
@@ -10,4 +11,9 @@ test("GET /api/hello answers JSON", async () => {
 
 test("the root loader feeds the page", async () => {
   expect(await loader({ params: {}, query: {} })).toEqual({ message: "Hello, world!" });
+});
+
+test("the todos loader calls its server function directly", async () => {
+  const { todos } = await todosLoader({ locals: {} });
+  expect(todos).toContain("Try the dev server");
 });

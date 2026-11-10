@@ -28,6 +28,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **The `fullstack` template's server is the generated AFW handler**
+  (`@afw/server`): API routes, loaders, middleware, server functions and
+  server-rendered pages all come through one `createHandler`, so a new route
+  needs no edit to `server.js`. It ships a server-function sample
+  (`app/todos/todos.server.js`) that the todos page calls and its loader calls
+  directly. In TypeScript the sample is typed; that needs
+  `@opentf/esdev-plugin-afw` with its `.tsx` type fix (after 0.7.0).
+
 - **`dev.servers`** (DECISIONS D208): `esdev start` runs several servers —
   each with its own `target`, `port`, `env`, `args`, started `after` the ones
   it names — restarts only those whose output changed, and shows each one's

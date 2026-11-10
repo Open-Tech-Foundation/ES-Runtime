@@ -1328,6 +1328,7 @@ fn afw_rename(path: &str) -> Option<String> {
     if (base == "route.js" && path.contains("/api/"))
         || base == "_middleware.js"
         || base == "loader.js"
+        || base.ends_with(".server.js")
     {
         return path.strip_suffix(".js").map(|stem| format!("{stem}.ts"));
     }
@@ -1342,7 +1343,8 @@ fn afw_patch_source(template: &str, basename: &str, content: &str) -> String {
         .replace("app/api/hello/route.js", "app/api/hello/route.ts")
         .replace("app/_middleware.js", "app/_middleware.ts")
         .replace("app/loader.js", "app/loader.ts")
-        .replace("route.js", "route.ts");
+        .replace("route.js", "route.ts")
+        .replace(".server.js\"", ".server.ts\"");
     if template == "library" {
         next = next
             .replace("./src/Counter.jsx", "./src/Counter.tsx")
@@ -1427,10 +1429,38 @@ fn afw_patch_handler_types(content: &str, basename: &str) -> String {
             "export function GET(_request: Request)",
         );
     } else if basename == "loader.ts" {
-        next = next.replace(
-            "export default function (_context)",
-            "export default function (_context: {\n  params: Record<string, string>;\n  query: Record<string, string>;\n})",
-        );
+        next = next
+            .replace(
+                "export default function (_context)",
+                "export default function (_context: {\n  params: Record<string, string>;\n  query: Record<string, string>;\n})",
+            )
+            .replace(
+                "export default async function loader({ locals })",
+                "export default async function loader({ locals }: { locals: Record<string, unknown> })",
+            );
+    } else if basename.ends_with(".server.ts") {
+        // The server-function sample: the list, and the action's argument.
+        next = next
+            .replace("const todos = [", "const todos: string[] = [")
+            .replace(
+                "action(async ({ title })",
+                "action(async ({ title }: { title: string })",
+            );
+    } else if basename == "page.tsx" && next.contains("router.data?.todos") {
+        next = next
+            .replace(
+                "router.data?.todos",
+                "(router.data as { todos?: string[] } | undefined)?.todos",
+            )
+            .replace(
+                "async function add(event)",
+                "async function add(event: SubmitEvent)",
+            )
+            .replace(
+                "oninput={(e) => (title = e.target.value)}",
+                "oninput={(e: Event) => (title = (e.target as HTMLInputElement).value)}",
+            )
+            .replace("todos.map((todo) =>", "todos.map((todo: string) =>");
     }
     next
 }
@@ -3201,14 +3231,41 @@ mod tests {
         );
     }
 
-    /// The fullstack server is explicit file-convention wiring: server.js is
-    /// the server target's entry — the plugin resolves framework imports in a
-    /// server build to the DOM-free `@opentf/afw/server`, so nothing needs a
-    /// DOM shim ahead of it — and it registers routes, API, loaders and
-    /// middleware against `/app`-rooted map keys the framework derives URLs
-    /// from — keys a bundler cannot discover, so they are written, not found.
+    /// In TypeScript the server-function sample is TypeScript too, typed the
+    /// way the Vite scaffolder types it, and its importers follow the rename.
     #[test]
-    fn fullstack_server_wiring_is_explicit() {
+    fn fullstack_server_functions_are_typed_in_typescript() {
+        let files = afw_written("fullstack", "ts", Some("css"), None);
+        let functions = afw_text(&files, "app/todos/todos.server.ts");
+        assert!(functions.contains("const todos: string[]"), "{functions}");
+        assert!(
+            functions.contains("({ title }: { title: string })"),
+            "{functions}"
+        );
+        let page = afw_text(&files, "app/todos/page.tsx");
+        assert!(page.contains("from \"./todos.server.ts\""), "{page}");
+        assert!(page.contains("event: SubmitEvent"), "{page}");
+        assert!(page.contains("as HTMLInputElement"), "{page}");
+        let loader = afw_text(&files, "app/todos/loader.ts");
+        assert!(
+            loader.contains("{ locals }: { locals: Record<string, unknown> }"),
+            "{loader}"
+        );
+        assert!(
+            !files
+                .iter()
+                .any(|(name, _)| name.ends_with("todos.server.js")),
+            "the JavaScript sample shipped beside the TypeScript one"
+        );
+    }
+
+    /// The fullstack server is the generated handler (`@afw/server`): API
+    /// routes, server functions, loader data and SSR pages come through it, so
+    /// adding one is adding a file under `app/` — `server.js` names none of
+    /// them. What stays the app's is how static files are served. The server
+    /// target's entry imports nothing that needs a DOM.
+    #[test]
+    fn fullstack_server_is_the_generated_handler() {
         let files = afw_written("fullstack", "js", Some("css"), None);
         assert!(
             !files.iter().any(|(name, _)| name.ends_with("bootstrap.js")),
@@ -3220,21 +3277,35 @@ mod tests {
             config["build"]["targets"]["server"]["entry"],
             serde_json::json!("server.js")
         );
+        assert_eq!(config["dev"]["run"], serde_json::json!("server"));
         let server = afw_text(&files, "server.js");
         for expected in [
-            "registerRoutes(pages)",
-            "createApiHandler",
-            "createLoaderRegistry",
-            "createMiddleware",
-            "\"/app/api/hello/route.js\"",
-            "\"/app/loader.js\"",
-            "\"/app/_middleware.js\"",
+            "from \"@afw/server\"",
+            "createHandler",
+            "createPageRenderer({ shell })",
+            "async function files(request)",
         ] {
-            assert!(server.contains(expected), "server.js wires {expected}");
+            assert!(
+                server.contains(expected),
+                "server.js has {expected}: {server}"
+            );
         }
+        for hand_wired in ["registerRoutes", "createApiHandler", "\"/app/"] {
+            assert!(
+                !server.contains(hand_wired),
+                "server.js still wires {hand_wired} by hand"
+            );
+        }
+        // A server function sample: the page calls it, and its loader calls it
+        // directly.
+        let functions = afw_text(&files, "app/todos/todos.server.js");
         assert!(
-            server.contains("from \"@opentf/afw/server\""),
-            "registration comes from the server entry: {server}"
+            functions.contains("query(") && functions.contains("action("),
+            "{functions}"
+        );
+        assert!(afw_text(&files, "app/todos/page.jsx").contains("from \"./todos.server.js\""));
+        assert!(
+            afw_text(&files, "app/todos/loader.js").contains("listTodos(undefined, { locals })")
         );
         let manifest: serde_json::Value =
             serde_json::from_str(&afw_text(&files, "package.json")).expect("valid package.json");
