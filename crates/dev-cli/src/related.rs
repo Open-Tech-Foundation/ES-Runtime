@@ -267,13 +267,13 @@ impl<'a> Visit<'a> for Specifiers {
     fn visit_statement(&mut self, statement: &Statement<'a>) {
         match statement {
             Statement::ImportDeclaration(import) if !import.import_kind.is_type() => {
-                self.found.push(import.source.value.to_string());
+                self.found.push(import.source.value.display().to_string());
             }
             Statement::ExportFromDeclaration(export) if !export.export_kind.is_type() => {
-                self.found.push(export.source.value.to_string());
+                self.found.push(export.source.value.display().to_string());
             }
             Statement::ExportAllDeclaration(export) if !export.export_kind.is_type() => {
-                self.found.push(export.source.value.to_string());
+                self.found.push(export.source.value.display().to_string());
             }
             _ => {}
         }
@@ -284,7 +284,7 @@ impl<'a> Visit<'a> for Specifiers {
         if let Expression::ImportExpression(import) = expression
             && let Expression::StringLiteral(literal) = &import.source
         {
-            self.found.push(literal.value.to_string());
+            self.found.push(literal.value.display().to_string());
         }
         oxc::ast_visit::walk::walk_expression(self, expression);
     }

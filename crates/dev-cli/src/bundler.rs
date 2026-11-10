@@ -505,7 +505,9 @@ pub fn builder(
     let mut all: Vec<rolldown::plugin::__inner::SharedPluginable> =
         Vec::with_capacity(plugins.len() + 1);
     if !options.alias.is_empty() {
-        all.push(Arc::new(crate::alias::Rewrite::new(options.alias.clone())));
+        all.push(rolldown::plugin::Pluginable::new_shared(
+            crate::alias::Rewrite::new(options.alias.clone()),
+        ));
     }
     all.extend(plugins);
     Ok(rolldown::BundlerBuilder::default()
@@ -602,10 +604,13 @@ pub fn translate(
         sourcemap_path_transform: output.sourcemap.as_deref().and_then(|kind| {
             (kind != "none").then(|| {
                 rolldown_common::SourceMapPathTransform::new(std::sync::Arc::new(
-                    |source: &str, map: &str| {
-                        let published = published_source(source, map);
+                    |sources: Vec<String>, map: &str| {
+                        let published: Vec<String> = sources
+                            .iter()
+                            .map(|source| published_source(source, map))
+                            .collect();
                         Box::pin(async move { Ok(published) })
-                            as Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>
+                            as Pin<Box<dyn Future<Output = anyhow::Result<Vec<String>>> + Send>>
                     },
                 ))
             })

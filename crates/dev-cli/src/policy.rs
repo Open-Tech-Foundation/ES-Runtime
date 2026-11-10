@@ -35,8 +35,8 @@ pub struct Graph(Arc<Mutex<BTreeSet<String>>>);
 
 impl Graph {
     /// The bundler plugin that records into this graph.
-    pub fn plugin(&self) -> Arc<dyn rolldown::plugin::Pluginable> {
-        Arc::new(Recorder(self.clone()))
+    pub fn plugin(&self) -> rolldown::plugin::__inner::SharedPluginable {
+        rolldown::plugin::Pluginable::new_shared(Recorder(self.clone()))
     }
 
     fn ids(&self) -> Vec<String> {

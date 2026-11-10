@@ -182,7 +182,7 @@ fn local_import_type(program: &oxc::ast::ast::Program<'_>) -> Option<String> {
 
     impl<'a> Visit<'a> for Found {
         fn visit_ts_import_type(&mut self, it: &oxc::ast::ast::TSImportType<'a>) {
-            let specifier = it.source.value.as_str();
+            let specifier = it.source.value.as_str().unwrap_or_default();
             if self.0.is_none() && (specifier.starts_with("./") || specifier.starts_with("../")) {
                 self.0 = Some(specifier.to_string());
             }
@@ -267,7 +267,7 @@ fn read_statement(
 ) -> Result<(), String> {
     match statement {
         Statement::ImportDeclaration(import) => {
-            let specifier = import.source.value.to_string();
+            let specifier = import.source.value.display().to_string();
             let declaration_type_only = import.import_kind.is_type();
             let Some(specifiers) = &import.specifiers else {
                 // `import "./side-effect.js"` — no bindings, and a declaration
@@ -280,7 +280,7 @@ fn read_statement(
                         let imported = match &named.imported {
                             ModuleExportName::IdentifierName(id) => id.name.to_string(),
                             ModuleExportName::IdentifierReference(id) => id.name.to_string(),
-                            ModuleExportName::StringLiteral(s) => s.value.to_string(),
+                            ModuleExportName::StringLiteral(s) => s.value.display().to_string(),
                         };
                         analysis.imports.push(Import {
                             local: named.local.name.to_string(),
@@ -341,7 +341,7 @@ fn read_statement(
         // `export { Foo } from "./foo.js";` — never bound locally, so it is
         // resolved against the other module rather than among our bindings.
         Statement::ExportFromDeclaration(export) => {
-            let specifier = export.source.value.to_string();
+            let specifier = export.source.value.display().to_string();
             for entry in &export.specifiers {
                 analysis.exports.push(Export {
                     exported: module_export_name(&entry.exported),
@@ -361,7 +361,9 @@ fn read_statement(
                     "a namespace re-export means synthesising a namespace declaration",
                 ));
             }
-            analysis.star_exports.push(export.source.value.to_string());
+            analysis
+                .star_exports
+                .push(export.source.value.display().to_string());
             Ok(())
         }
         Statement::ExportDefaultDeclaration(export) => {
@@ -568,7 +570,7 @@ fn declared_names(label: &str, declaration: &Declaration<'_>) -> Result<Vec<Stri
         Declaration::TSExternalModuleDeclaration(module) => {
             return Err(unsupported(
                 label,
-                &format!("declare module {}", module.id.value),
+                &format!("declare module {}", module.id.value.display()),
                 "a module augmentation belongs to the module it names, not to a bundle",
             ));
         }
@@ -586,7 +588,7 @@ fn module_export_name(name: &ModuleExportName<'_>) -> String {
     match name {
         ModuleExportName::IdentifierName(id) => id.name.to_string(),
         ModuleExportName::IdentifierReference(id) => id.name.to_string(),
-        ModuleExportName::StringLiteral(s) => s.value.to_string(),
+        ModuleExportName::StringLiteral(s) => s.value.display().to_string(),
     }
 }
 

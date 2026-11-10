@@ -444,7 +444,7 @@ impl Found {
 }
 
 fn key_name(key: &PropertyKey<'_>) -> Option<String> {
-    key.static_name().map(|name| name.to_string())
+    key.static_name().map(|name| name.display().to_string())
 }
 
 impl<'a> Visit<'a> for Found {

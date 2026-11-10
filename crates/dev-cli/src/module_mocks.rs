@@ -223,7 +223,7 @@ fn apply(source: &str, span: Span, edits: &[(u32, String)]) -> String {
 /// `import … from "x"` as the `await import("x")` that binds the same names,
 /// or `None` when it binds only types.
 fn dynamic_import(import: &oxc::ast::ast::ImportDeclaration<'_>) -> Option<String> {
-    let from = serde_json::Value::String(import.source.value.to_string());
+    let from = serde_json::Value::String(import.source.value.display().to_string());
     let Some(specifiers) = &import.specifiers else {
         return Some(format!("await import({from});"));
     };
@@ -270,11 +270,11 @@ fn dynamic_import(import: &oxc::ast::ast::ImportDeclaration<'_>) -> Option<Strin
     ))
 }
 
-fn export_name<'a>(name: &'a ModuleExportName<'_>) -> &'a str {
+fn export_name(name: &ModuleExportName<'_>) -> String {
     match name {
-        ModuleExportName::IdentifierName(name) => name.name.as_str(),
-        ModuleExportName::IdentifierReference(name) => name.name.as_str(),
-        ModuleExportName::StringLiteral(name) => name.value.as_str(),
+        ModuleExportName::IdentifierName(name) => name.name.to_string(),
+        ModuleExportName::IdentifierReference(name) => name.name.to_string(),
+        ModuleExportName::StringLiteral(name) => name.value.display().to_string(),
     }
 }
 

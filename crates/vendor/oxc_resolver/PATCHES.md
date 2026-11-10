@@ -1,7 +1,7 @@
 # oxc_resolver, as esdev builds it
 
 A copy of [oxc_resolver](https://github.com/oxc-project/oxc-resolver)
-11.24.2 from crates.io (MIT, see `LICENSE`), with esdev's tsconfig discovery
+11.24.3 from crates.io (MIT, see `LICENSE`), with esdev's tsconfig discovery
 rule ([D196](../../../docs/DECISIONS.md)). It is wired in through the
 workspace's `[patch.crates-io]`, so rolldown's resolver and the one esdev runs
 unbundled modules through are this copy. Every changed line is marked

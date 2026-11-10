@@ -1771,7 +1771,7 @@ fn browser_plugins(
     jsx_settings: &crate::transform::JsxSettings,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
     graph: &crate::policy::Graph,
-) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
+) -> Vec<rolldown::plugin::__inner::SharedPluginable> {
     let mut own: Vec<std::sync::Arc<dyn crate::contract::Pass>> = Vec::new();
     if jsx_settings.react_compiler {
         own.push(std::sync::Arc::new(
@@ -1804,13 +1804,10 @@ fn browser_plugins(
 fn installed(
     own: Vec<std::sync::Arc<dyn crate::contract::Pass>>,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
-) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
+) -> Vec<rolldown::plugin::__inner::SharedPluginable> {
     own.into_iter()
         .chain(configured.iter().cloned())
-        .map(|pass| {
-            std::sync::Arc::new(crate::adapter::Adapter::new(pass))
-                as std::sync::Arc<dyn rolldown::plugin::Pluginable>
-        })
+        .map(|pass| rolldown::plugin::Pluginable::new_shared(crate::adapter::Adapter::new(pass)))
         .collect()
 }
 
@@ -2053,9 +2050,15 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
         );
     }
 
+    // `top_level_evaluated` is left empty, which rolldown documents as inert: a
+    // module missing from it is only shipped again. Filling it would need the
+    // set the page ran at load, re-taken on every reload, for bytes a local
+    // dev loop does not miss.
+    let evaluated = rustc_hash::FxHashMap::default();
     let clients = [rolldown_common::ClientHmrInput {
         client_id: "esdev",
         shipped: &session.shipped,
+        top_level_evaluated: &evaluated,
     }];
     let updates = warm
         .bundler
@@ -2064,6 +2067,9 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
             &clients,
             &mut session.stamps,
             std::sync::Arc::clone(&session.next_patch),
+            false,
+            // rolldown's `hotUpdate` plugin hook stays off: esdev's plugins
+            // speak its own contract, not rolldown's.
             false,
         )
         .await;

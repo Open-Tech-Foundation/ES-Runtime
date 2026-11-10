@@ -288,7 +288,7 @@ es-runtime-cli-common = { path = "crates/cli-common", version = "0.46.0" }
 # linter has never been published), so either would mean a git dependency —
 # the first exception to D7's pinned-crates.io rule. `oxlint` and `oxfmt` are
 # npm binaries that already work.
-oxc = { version = "0.151.0", features = [
+oxc = { version = "0.157.0", features = [
     "transformer",
     "semantic",
     "codegen",
@@ -326,42 +326,42 @@ oxc_react_compiler = "=0.143.0"
 # otherwise be writing ourselves, against a bundler that already has all three.
 # Nothing else in the feature is used, and the flag stays confined to `dev-cli`
 # like the bundler itself.
-rolldown = { version = "=1.2.3", features = ["experimental"] }
+rolldown = { version = "=1.3.1", features = ["experimental"] }
 # The types a rolldown *plugin* speaks — `ModuleType` for what a transform hook
 # says it produced, and anyhow's `Result`, which is the error type rolldown's
 # hook signatures use. Both are already in the graph via `rolldown` itself, so
 # naming them adds no crate; they are named because a plugin cannot be written
 # against re-exports that do not exist. Pinned with rolldown, since a plugin is
 # written against one version of its host.
-rolldown_common = "=1.2.3"
+rolldown_common = "=1.3.1"
 # The source-map type rolldown's `load`/`transform` hooks return. Named here
 # because `runtime:build` lets a *JavaScript* plugin return one, and the JSON it
 # sends has to become this type. Already in the graph via rolldown; pinned with
 # it, since a hook signature and its types travel together.
-rolldown_sourcemap = "=1.2.3"
+rolldown_sourcemap = "=1.3.1"
 # The string editor rolldown's own passes use: edits a module in place and
 # reports the map from what was written to what came out. Named for esdev's
 # built-in passes that rewrite part of a module. Already in the graph via
 # rolldown; pinned with it.
-string_wizard = "=1.2.3"
+string_wizard = "=1.3.1"
 # The diagnostic type rolldown keeps whole when a hook fails. A pass failure is
 # handed back as one so the plugin's own message survives; any other error a
 # `load` returns is flattened to "plugin `x` threw an error". Already in the
 # graph via rolldown; pinned with it.
-rolldown_error = "=1.2.3"
+rolldown_error = "=1.3.1"
 # The types `compute_hmr_update_for_file_changes` speaks: the changed-file map it
 # takes, the ship map each client carries, and the interned module id both are
 # keyed by. Named here because a hot update is assembled in our code and has to
 # hand rolldown its own vocabulary to do it — all three are already in the graph
 # via rolldown itself, so this adds no crate. Pinned with it for the same reason
 # `rolldown_common` is: these are the types its signatures name.
-rolldown_utils = "=1.2.3"
+rolldown_utils = "=1.3.1"
 # The resolver rolldown resolves with. `esdev` converts a CommonJS package it
 # is asked to load unbundled, and has to find the package the way `esdev build`
 # would before converting it — naming the resolver the bundler already uses
 # rather than writing a second one. Already in the graph via rolldown; pinned
 # with it.
-oxc_resolver = "=11.24.2"
+oxc_resolver = "=11.24.3"
 rustc-hash = "2.1.3"
 arcstr = "1.2.0"
 anyhow = "1.0.104"

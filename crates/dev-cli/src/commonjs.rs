@@ -283,10 +283,10 @@ async fn convert(plan: &Plan) -> Result<Vec<Plan>, String> {
         &options,
         options.output.clone(),
         None,
-        vec![Arc::new(Packaging {
+        vec![rolldown::plugin::Pluginable::new_shared(Packaging {
             entry: plan.entry.clone(),
             required: required.clone(),
-        }) as Arc<dyn rolldown::plugin::Pluginable>],
+        })],
     )?
     .build()
     .map_err(|e| crate::bundler::report(&crate::failures!(e)))?;
@@ -786,7 +786,7 @@ fn required(expression: &Expression<'_>) -> Option<String> {
         return None;
     }
     match &call.arguments[0] {
-        Argument::StringLiteral(text) => Some(text.value.to_string()),
+        Argument::StringLiteral(text) => text.value.as_str().map(str::to_string),
         _ => None,
     }
 }
@@ -794,7 +794,7 @@ fn required(expression: &Expression<'_>) -> Option<String> {
 fn key_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
-        PropertyKey::StringLiteral(text) => Some(text.value.to_string()),
+        PropertyKey::StringLiteral(text) => text.value.as_str().map(str::to_string),
         _ => None,
     }
 }
@@ -834,8 +834,10 @@ impl<'a> oxc::ast_visit::Visit<'a> for Found {
             }
             // exports["x"] = …
             AssignmentTarget::ComputedMemberExpression(member) if is_exports(&member.object) => {
-                if let Expression::StringLiteral(text) = &member.expression {
-                    self.names.push(text.value.to_string());
+                if let Expression::StringLiteral(text) = &member.expression
+                    && let Some(name) = text.value.as_str()
+                {
+                    self.names.push(name.to_string());
                 }
             }
             // module.exports = …
@@ -860,8 +862,10 @@ impl<'a> oxc::ast_visit::Visit<'a> for Found {
         match callee {
             // Object.defineProperty(exports, "x", …)
             Some("defineProperty") if argument(0).is_some_and(is_exports) => {
-                if let Some(Expression::StringLiteral(text)) = argument(1) {
-                    self.names.push(text.value.to_string());
+                if let Some(Expression::StringLiteral(text)) = argument(1)
+                    && let Some(name) = text.value.as_str()
+                {
+                    self.names.push(name.to_string());
                 }
             }
             // TypeScript's and Babel's re-export helpers:
@@ -925,7 +929,7 @@ impl<'a> oxc::ast_visit::Visit<'a> for Found {
     fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
         match &it.exported {
             Some(name) => self.names.push(name.name().to_string()),
-            None => self.reexports.push(it.source.value.to_string()),
+            None => self.reexports.push(it.source.value.display().to_string()),
         }
     }
 }

@@ -2753,10 +2753,20 @@ fn every_importer_resolves_through_the_projects_tsconfig_and_alias() {
     let bundle = built(
         r#"{ "plugins": ["./mdx.js"], "resolve": { "alias": { "pkg": "./vendor/pkg.js" } } }"#,
     );
+    // Every importer reads the aliased file and none the package `paths`
+    // names. Whether the bundler folds the constant into each string is its
+    // business, so the module is what is looked for, not the folded text.
     assert!(
-        bundle.contains(r#""jsx:alias", "mdx:alias", "js:alias""#),
+        bundle.contains("// vendor/pkg.js") && bundle.contains(r#""alias""#),
         "the alias comes before paths: {bundle}"
     );
+    assert!(
+        !bundle.contains(r#""own""#) && !bundle.contains("own\""),
+        "{bundle}"
+    );
+    for importer in ["jsx:", "mdx:", "js:"] {
+        assert!(bundle.contains(importer), "{importer} is missing: {bundle}");
+    }
     write_in(
         &dir,
         "src/run.js",
@@ -3484,7 +3494,11 @@ fn lib_refuses_a_top_level_await_in_the_commonjs_output() {
         .expect("spawn esdev build --lib");
     assert!(!out.status.success(), "{}", stdout(&out));
     let message = slash_paths(&stderr(&out));
-    assert!(message.contains("Top-level await"), "{message}");
+    assert!(message.contains("INVALID_TLA_FORMAT"), "{message}");
+    assert!(
+        message.to_lowercase().contains("top-level await"),
+        "{message}"
+    );
     assert!(message.contains("src/index.ts"), "{message}");
     assert!(message.contains("cjs output"), "{message}");
 
@@ -11070,7 +11084,8 @@ fn a_library_ships_its_css_modules_scoped_as_its_javascript_names_them() {
         .expect("spawn esdev");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
 
-    let js = std::fs::read_to_string(dir.join("dist/ui/button.module.js")).expect("names module");
+    let js =
+        std::fs::read_to_string(dir.join("dist/ui/button.module.css.js")).expect("names module");
     let names = js
         .split("\"btn\": \"")
         .nth(1)

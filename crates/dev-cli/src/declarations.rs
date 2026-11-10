@@ -283,11 +283,15 @@ struct Rewrite<'a> {
 
 impl<'a> Rewrite<'a> {
     fn point(&self, source: &mut oxc::ast::ast::StringLiteral<'a>) {
-        let Some(rewritten) = output_specifier(source.value.as_str(), &self.dir, self.format)
+        // A specifier holding a lone surrogate names no file the build wrote.
+        let Some(rewritten) = source
+            .value
+            .as_str()
+            .and_then(|specifier| output_specifier(specifier, &self.dir, self.format))
         else {
             return;
         };
-        source.value = oxc::str::Str::from_str_in(&rewritten, &self.allocator);
+        source.value = oxc::str::Str::from_str_in(&rewritten, &self.allocator).into();
         // The printer prefers the raw text it was parsed from, which is still
         // the specifier as written.
         source.raw = None;

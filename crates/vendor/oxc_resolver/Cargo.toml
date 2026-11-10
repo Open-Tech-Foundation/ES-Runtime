@@ -1,4 +1,4 @@
-# oxc_resolver 11.24.2, vendored and patched (DECISIONS.md D196).
+# oxc_resolver 11.24.3, vendored and patched (DECISIONS.md D196).
 #
 # Upstream: https://github.com/oxc-project/oxc-resolver (MIT, see LICENSE).
 # The patch is esdev's tsconfig discovery rule; it is listed in PATCHES.md,
@@ -9,7 +9,7 @@
 edition = "2024"
 rust-version = "1.95.0"
 name = "oxc_resolver"
-version = "11.24.2"
+version = "11.24.3"
 authors = ["Boshen <boshenc@gmail.com>"]
 description = "ESM / CJS module resolution"
 license = "MIT"
@@ -25,7 +25,7 @@ name = "oxc_resolver"
 path = "src/lib.rs"
 
 [dependencies]
-compact_str = "0.9"
+compact_str = "0.10"
 dashmap = { version = "6.2.1", features = ["raw-api"] }
 document-features = { version = "0.2.12", optional = true }
 fast-glob = "1"
@@ -35,7 +35,7 @@ memchr = "2"
 nodejs-built-in-modules = "1.0.0"
 once_cell = "1"
 percent-encoding = "2"
-pnp = { version = "0.12.10", optional = true }
+pnp = { version = "0.12.12", optional = true }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -48,7 +48,7 @@ rustix = { version = "1.1.4", features = ["fs"] }
 
 [target.'cfg(target_endian = "little")'.dependencies]
 self_cell = "1"
-simd-json = { version = "0.17.0", default-features = false, features = ["runtime-detection"] }
+simd-json = { version = "0.18.0", default-features = false, features = ["runtime-detection"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }

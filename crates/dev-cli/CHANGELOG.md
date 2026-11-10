@@ -64,6 +64,21 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   `checksums.txt`. `--only=esdev` or `--only=esrun` (install.sh's spelling)
   limits it to one, and `--dry-run` reports on both. An `esrun` elsewhere on
   `PATH` is left alone. This replaces `esrun upgrade`, which is removed.
+- **The bundler moves to rolldown 1.3.1 and oxc 0.157.** Among rolldown's
+  fixes since 1.2.3: a use-after-free in async transforms that read a
+  `tsconfig.json`, side effects dropped by tree-shaking (through import
+  cycles, after `exports.x` writes, and when an exported constant was inlined),
+  several renaming collisions, chunk execution order, and module namespace
+  objects that are now null-prototype and non-extensible. oxc fixes TypeScript
+  enums exported across namespace blocks and the lowering of private class
+  members and `using`. The React Compiler pass stays on the oxc it targets.
+- **A library build names a non-JavaScript module's output after the whole
+  file**: `button.module.css` becomes `button.module.css.js` (was
+  `button.module.js`), and `data.json` becomes `data.json.js`, as Rollup and
+  Vite library builds name them. A module can no longer collide with a
+  `button.module.js` beside it. The imports, `require`s and declarations the
+  build writes name the new files; a package `exports` map that names one of
+  the old paths needs updating.
 
 ### Fixed
 
