@@ -848,9 +848,13 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_proxy_is_named_without_its_credentials() {
-        let free = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
+        // Bound but never listening, and held for the test: a connect is
+        // refused, and no test running beside this one can be handed the port
+        // (a port bound and dropped can be, and then this "unreachable" proxy
+        // is somebody else's test proxy).
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = reserved.local_addr().unwrap().port();
         let server = ProxyServer::parse(&format!("http://u:hunter2@127.0.0.1:{port}")).unwrap();
         let Err(error) = server.tunnel(&plain_tls(), "example.org", 443).await else {
             panic!("an unreachable proxy tunnelled");
