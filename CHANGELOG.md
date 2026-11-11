@@ -20,7 +20,9 @@ namespace) is unstable and may change between minor releases until the API freez
   a response parser framed by RFC 9112 §6.3, checked against llhttp's response
   cases; and HPACK, HTTP/2's header compression (RFC 7541), its tables generated
   from the RFC's text, checked against the RFC's own examples and against
-  47,142 header blocks from 14 independent encoders (hpack-test-case).
+  47,142 header blocks from 14 independent encoders (hpack-test-case); and the
+  HTTP/2 frame codec (RFC 9113 §4, §6), each refusal naming whether it ends the
+  stream or the connection.
 
 ### Changed
 
