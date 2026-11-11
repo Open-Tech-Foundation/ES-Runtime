@@ -17,6 +17,18 @@
 const BODY = "Hello, World!";
 const PORT = Number(await benchEnv("BENCH_PORT")) || 3000;
 const H2 = (await benchEnv("BENCH_H2")) === "1";
+// Two header modes for `cpu-per-request.sh` (both off by default, and for the
+// Fetch-API servers only — Deno, Bun and esrun):
+//   BENCH_READ_HEADER=<name>       the handler reads that request header
+//   BENCH_RESPONSE_HEADERS=<n>     the response carries n extra headers
+const READ_HEADER = (await benchEnv("BENCH_READ_HEADER")) || "";
+const RESPONSE_HEADERS = {};
+for (let i = 1; i <= (Number(await benchEnv("BENCH_RESPONSE_HEADERS")) || 0); i++) {
+  RESPONSE_HEADERS[`x-r${i}`] = `response-value-${i}`;
+}
+const answer = READ_HEADER
+  ? (request) => new Response(request.headers.get(READ_HEADER) ?? BODY, { headers: RESPONSE_HEADERS })
+  : () => new Response(BODY, { headers: RESPONSE_HEADERS });
 
 // Reading the environment is the one thing with no shared spelling: Deno gates
 // it behind Deno.env, esrun behind the capability-checked runtime:process, and
@@ -36,7 +48,7 @@ const NODE_LIKE =
 if (typeof Deno !== "undefined") {
   Deno.serve(
     { hostname: "127.0.0.1", port: PORT, onListen() {} },
-    () => new Response(BODY),
+    answer,
   );
 } else if (H2 && NODE_LIKE) {
   // `http2.createServer` is h2c-only — it does not also answer HTTP/1.1 — so
@@ -51,7 +63,7 @@ if (typeof Deno !== "undefined") {
     })
     .listen(PORT, "127.0.0.1");
 } else if (typeof Bun !== "undefined") {
-  Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: () => new Response(BODY) });
+  Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: answer });
 } else if (NODE_LIKE) {
   const http = await import("node:http");
   http
@@ -62,5 +74,5 @@ if (typeof Deno !== "undefined") {
     .listen(PORT, "127.0.0.1");
 } else {
   const { serve } = await import("runtime:http");
-  serve({ hostname: "127.0.0.1", port: PORT }, () => new Response(BODY));
+  serve({ hostname: "127.0.0.1", port: PORT }, answer);
 }

@@ -11,6 +11,12 @@
 # Usage:  bench/cpu-per-request.sh
 #         RUNTIMES="esrun deno" REQUESTS=500000 bench/cpu-per-request.sh
 #         SERVER=scripts/hono.js bench/cpu-per-request.sh
+#         REQUEST_HEADERS=15 BENCH_READ_HEADER=x-h7 bench/cpu-per-request.sh
+#         BENCH_RESPONSE_HEADERS=10 bench/cpu-per-request.sh
+#
+# REQUEST_HEADERS=<n> sends n extra request headers (x-h1 … x-hn).
+# helloserver.js reads BENCH_READ_HEADER and BENCH_RESPONSE_HEADERS from the
+# environment (see the script); they pass straight through.
 #
 # The server is pinned to one CPU and oha to the upper half of the machine, so
 # the server's time is its own. Times come from /proc/<pid>/stat (utime, stime),
@@ -37,6 +43,8 @@ CMD[node]="node"
 RUNTIMES="${RUNTIMES:-esrun deno bun node}"
 
 TICK="$(getconf CLK_TCK)"
+HEADERS=(-H "Accept-Encoding: identity")
+for i in $(seq 1 "${REQUEST_HEADERS:-0}"); do HEADERS+=(-H "x-h$i: value-number-$i"); done
 cpu_ticks() { awk '{print $14, $15}' "/proc/$1/stat"; }
 
 printf '%-6s %10s %12s %12s %12s\n' runtime req/s "user µs/req" "sys µs/req" "total"
@@ -57,9 +65,9 @@ for rt in $RUNTIMES; do
     sleep 0.1
   done
   url="http://127.0.0.1:$PORT/"
-  taskset -c "$LOAD_CPUS" oha -c "$CONN" -n $((REQUESTS / 4)) --no-tui -H "Accept-Encoding: identity" "$url" >/dev/null
+  taskset -c "$LOAD_CPUS" oha -c "$CONN" -n $((REQUESTS / 4)) --no-tui "${HEADERS[@]}" "$url" >/dev/null
   read -r u1 s1 < <(cpu_ticks "$pid")
-  rps="$(taskset -c "$LOAD_CPUS" oha -c "$CONN" -n "$REQUESTS" --no-tui -H "Accept-Encoding: identity" "$url" |
+  rps="$(taskset -c "$LOAD_CPUS" oha -c "$CONN" -n "$REQUESTS" --no-tui "${HEADERS[@]}" "$url" |
     awk '/Requests\/sec/ {printf "%d", $2}')"
   read -r u2 s2 < <(cpu_ticks "$pid")
   kill "$pid"; wait "$pid" 2>/dev/null || true

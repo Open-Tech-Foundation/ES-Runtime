@@ -4502,7 +4502,7 @@ Deno (`ext/http/http_next.rs`, `00_serve.ts`) keeps the request in a host record
 - **Keeping unread headers after the response** in case a detached continuation reads them. It holds every request's headers for as long as a reference might exist, to serve a read that is almost always a bug.
 - **Turning timeouts off, or a multi-threaded server.** The first trades D43's defence for throughput; the second contradicts D4.
 
-Every number below is from the NVMe benchmark worktree (`~/es-bench`, as `bench/publish.sh` uses), each before/after taken as three interleaved pairs, and reproducible with `bench/cpu-per-request.sh` or the same server with `-H` headers added to its load.
+Every number below is from the NVMe benchmark worktree (`~/es-bench`, as `bench/publish.sh` uses), each before/after taken as three interleaved pairs, and reproducible with `bench/cpu-per-request.sh` (its `REQUEST_HEADERS`, `BENCH_READ_HEADER` and `BENCH_RESPONSE_HEADERS` knobs give the header cases).
 
 **Outcome (2026-11-11, first step):** the request head is held and read on demand. Interleaved against the previous build (three pairs each): user time per request 12.8 → 11.8 µs on the hello-world server, 13.8 → 12.0 through Hono (+5–6% req/s). Two findings changed the plan:
 - **An object literal with getters costs ~400 ns to create in V8**, against ~10 ns for a class instance with prototype getters. The first version of the lazy `info` used one and erased the whole saving; it is a class, with `toJSON()` so it still serializes with both fields.
