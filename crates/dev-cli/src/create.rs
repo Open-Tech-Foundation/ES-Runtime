@@ -262,6 +262,9 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
     // Everything below resolves before anything is written, so a person who
     // changes their mind at a prompt leaves no directory behind.
     let scripted = config.yes || !crate::prompt::interactive();
+    if !scripted {
+        crate::prompt::intro("esdev create");
+    }
     // A flag's value is checked before any question: a package manager that is
     // not one is the caller's mistake whatever else is missing, and asking for
     // a template first would hide it behind a question it does not depend on.
@@ -584,8 +587,14 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
     // in the order things happened: what was written, then what installing it
     // printed. Returning the whole report at the end would put the install's
     // own output above the line announcing the project it installed into.
-    print!("{report}");
-    let _ = std::io::Write::flush(&mut std::io::stdout());
+    // Inside the questions' gutter when they drew one, so the transcript stays
+    // one column; on stdout as before when nothing was asked.
+    if crate::prompt::is_open() {
+        crate::prompt::log(report.trim_end());
+    } else {
+        print!("{report}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
     report.clear();
 
     // Only now, with the project on disk: an install that fails leaves a
@@ -1030,24 +1039,14 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
     if ask.scripted || !crate::prompt::interactive() {
         return Ok(if DEFAULT_BLOG { Blog::On } else { Blog::Off });
     }
-    let choices = [
-        crate::prompt::Choice {
-            name: "Yes — add a blog",
-            label: "Yes — add a blog",
-            description: "Adds app/blog/ with a sample post, a Blog link, and RSS and Atom feeds",
-            disabled: false,
-        },
-        crate::prompt::Choice {
-            name: "No — docs only",
-            label: "No — docs only",
-            description: "Documentation pages without a blog section",
-            disabled: false,
-        },
-    ];
-    let preselect = if DEFAULT_BLOG { 0 } else { 1 };
-    match crate::prompt::select("Add a blog?", &choices, Some(preselect), ask.esc()) {
-        Some(0) => Ok(Blog::On),
-        Some(_) => Ok(Blog::Off),
+    // Worded as create-afw asks it, so the two scaffolders read the same.
+    match crate::prompt::confirm(
+        "Add a blog? (posts with RSS and Atom feeds)",
+        DEFAULT_BLOG,
+        ask.esc(),
+    ) {
+        Some(true) => Ok(Blog::On),
+        Some(false) => Ok(Blog::Off),
         None => Ok(Blog::Back),
     }
 }
@@ -1736,32 +1735,12 @@ pub(crate) fn ask_install(
     if let Some(wanted) = preferred
         && install_confirms(Some(wanted), &available)
     {
+        // Esc declines, as `No` does: the project is already on disk by now,
+        // and declining the *install* is not cancelling the project. Either
+        // way the next steps say how to install it.
         let question = format!("Install with {}?", wanted.name);
-        let confirm = format!("install now with {}", wanted.name);
-        let choices = [
-            crate::prompt::Choice {
-                name: wanted.name,
-                label: "Yes",
-                description: confirm.as_str(),
-                disabled: false,
-            },
-            crate::prompt::Choice {
-                name: "skip",
-                label: "No",
-                description: "write the files and stop",
-                disabled: false,
-            },
-        ];
-        // Esc lands on the same answer `No` does: the project is already on
-        // disk by now, and cancelling the *install* question is not cancelling
-        // the project. Either way the next steps say how to install it.
-        let chosen = crate::prompt::select(
-            question.as_str(),
-            &choices,
-            Some(0),
-            crate::prompt::OnEsc::Cancel,
-        )?;
-        return if chosen == 0 { Some(wanted) } else { None };
+        let install = crate::prompt::confirm(&question, true, crate::prompt::OnEsc::Skip)?;
+        return install.then_some(wanted);
     }
 
     let mut choices: Vec<crate::prompt::Choice<'_>> = available
@@ -1780,9 +1759,9 @@ pub(crate) fn ask_install(
         disabled: false,
     });
 
-    // Esc lands on the same answer `skip` does: the project is already on disk
-    // by now, and cancelling the *install* question is not cancelling the
-    // project. Either way the next steps say how to install it.
+    // Esc declines, as `skip` does: the project is already on disk by now, and
+    // declining the *install* is not cancelling the project. Either way the
+    // next steps say how to install it.
     let preselect = preferred
         .and_then(|manager| available.iter().position(|m| *m == manager))
         .or(Some(0));
@@ -1790,7 +1769,7 @@ pub(crate) fn ask_install(
         "Install the Dependencies?",
         &choices,
         preselect,
-        crate::prompt::OnEsc::Cancel,
+        crate::prompt::OnEsc::Skip,
     )?;
     available.get(chosen).copied()
 }
@@ -1960,13 +1939,13 @@ async fn registry_version_with_retries(
                         failure.message
                     ));
                 };
-                eprintln!(
+                crate::prompt::log(&format!(
                     "npm registry lookup for {package} failed on attempt {}/{}, {}; retrying in {} ms",
                     attempt + 1,
                     REGISTRY_BACKOFFS.len() + 1,
                     failure.message,
                     backoff.as_millis()
-                );
+                ));
                 tokio::time::sleep(backoff).await;
             }
         }
@@ -1983,13 +1962,14 @@ async fn resolve_registry_versions(
     if packages.is_empty() {
         return Ok(HashMap::new());
     }
-    eprintln!(
+    crate::prompt::log("");
+    crate::prompt::log(&format!(
         "Resolving current versions for {} template packages from {}...",
         packages.len(),
         std::env::var("npm_config_registry")
             .or_else(|_| std::env::var("NPM_CONFIG_REGISTRY"))
             .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
-    );
+    ));
     let registry = configured_registry()?;
     let client = HttpClient::new(&TrustStore::bundled()).with_proxy(proxies);
     let requests = packages.iter().map(|package| {
@@ -2018,7 +1998,7 @@ async fn resolve_registry_versions(
     let mut resolved: Vec<_> = versions.iter().collect();
     resolved.sort_by(|a, b| a.0.cmp(b.0));
     for (package, version) in resolved {
-        eprintln!("  {package}@{version}");
+        crate::prompt::log(&format!("  {package}@{version}"));
     }
     Ok(versions)
 }

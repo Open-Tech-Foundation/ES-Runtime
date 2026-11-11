@@ -3289,17 +3289,25 @@ async fn run() -> ExitCode {
         },
         Ok(Command::Create(config)) => match create::create(&config).await {
             Ok(report) => {
+                prompt::outro("Done.");
                 print!("{report}");
                 Ok(())
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                prompt::outro("Stopped.");
+                Err(err)
+            }
         },
         Ok(Command::Init(config)) => match init::init(&config) {
             Ok(report) => {
+                prompt::outro("Done.");
                 print!("{report}");
                 Ok(())
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                prompt::outro("Stopped.");
+                Err(err)
+            }
         },
         Err(err) => Err(err),
     };

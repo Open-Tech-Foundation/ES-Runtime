@@ -89,7 +89,7 @@ pub fn available() -> Vec<Manager> {
 /// re-print a summary would be worse at every part of it. What this adds is the
 /// working directory and a sentence when it fails.
 pub fn run(manager: Manager, dir: &Path) -> Result<(), String> {
-    eprintln!("\n  {} {}", manager.name, manager.command);
+    crate::prompt::log(&format!("\n  {} {}", manager.name, manager.command));
 
     let status = Command::new(manager.name)
         .arg(manager.command)

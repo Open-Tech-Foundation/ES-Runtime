@@ -163,6 +163,9 @@ fn init_new(config: &InitConfig, target: &Path) -> Result<String, String> {
         ));
     }
     let interactive = !config.yes && crate::prompt::interactive();
+    if interactive {
+        crate::prompt::intro("esdev init");
+    }
     let fallback_name = crate::create::package_name(target);
     let name = match &config.name {
         // Sanitised like a directory-derived name: this lands in
