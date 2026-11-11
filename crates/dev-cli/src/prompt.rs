@@ -1,25 +1,25 @@
 //! Asking a question on a terminal.
 //!
 //! Arrow-key menus, a yes/no toggle and a line of text, drawn with ratatui into
-//! an **inline viewport**, in Clack's look (`@clack/prompts`, which create-vite,
+//! an **inline viewport**, in Clack's layout (`@clack/prompts`, which create-vite,
 //! create-svelte and create-afw use): one gutter down the left joining a run's
-//! questions, `◆` on the one being asked, `◇` on each answered one, `●`/`○` for
+//! questions, `◆` on the one being asked, `✔` on each answered one, `●`/`○` for
 //! the options.
 //!
 //! ```text
 //! ┌  esdev create
 //! │
-//! ◇  Which Template?
+//! ✔  Which Template?
 //! │  AFW
 //! │
 //! ◆  Add a blog? (posts with RSS and Atom feeds)
 //! │  ○ Yes / ● No
-//! └  ←/→ choose · enter confirm · esc back
+//! └
 //! ```
 //!
-//! The look is Clack's and the keys are this module's own: Esc steps back to
-//! the question before, as it did before the restyle, and a digit jumps to an
-//! option. So the closing line names the keys, which Clack leaves unsaid.
+//! The layout is Clack's and the keys are this module's own: Esc steps back to
+//! the question before, and a digit jumps to an option, so a menu's footer
+//! names Esc beside Clack's two.
 //!
 //! This file used to argue against the dependency, and the argument was that a
 //! scaffolder does not need a redraw loop. That was true and it was not the
@@ -126,15 +126,54 @@ pub enum OnEsc {
 }
 
 // --- the transcript ----------------------------------------------------------
+//
+// The layout and colours are Clack's (`@clack/prompts` 1.8, the version
+// create-afw ships); the outcome marks are ticks, crosses and warning signs,
+// which read at a glance where Clack's ◇ and ■ have to be learned:
+//
+//   gutter            gray (ANSI bright black)
+//   question asked    cyan ◆, its bars and └ cyan
+//   question answered green ✔, the answer dim
+//   question stopped  red ✖, the answer struck through, `Cancelled.` red
+//   question skipped  gray –
+//   progress          green ✔ for something done, yellow ⚠ for a warning
+//   option            green ● on the focused one, dim ○ and label on the rest,
+//                     gray for one that cannot be chosen, the hint dim
+//   title             a cyan badge
+//
+// Text symbols, not colour emoji: ✅ and ❌ are two columns wide in most
+// terminals, which knocks the gutter out of line, and carry colours of their
+// own. Without colour every glyph still says what it means.
 
 const BAR: &str = "│";
 const START: &str = "┌";
 const END: &str = "└";
 const ACTIVE: &str = "◆";
-const DONE: &str = "◇";
-const STOPPED: &str = "■";
+const DONE: &str = "✔";
+const STOPPED: &str = "✖";
+const WARNED: &str = "⚠";
+const SKIPPED: &str = "–";
 const ON: &str = "●";
 const OFF: &str = "○";
+
+/// SGR codes for the lines printed between frames — the transcript a question
+/// leaves behind. A frame itself is drawn with [`Styles`].
+const GRAY: &str = "90";
+const GREEN: &str = "32";
+const RED: &str = "31";
+const YELLOW: &str = "33";
+const DIM: &str = "2";
+const STRUCK: &str = "2;9";
+const BADGE: &str = "30;46";
+
+/// `text` in `code`, or plain without colour.
+fn sgr(colour: bool, code: &str, text: &str) -> String {
+    if colour {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
 
 /// One command's run of questions: the title its gutter opens with, and
 /// whether it has been opened. Opened by the first question actually drawn,
@@ -149,8 +188,8 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
     open: false,
 });
 
-/// Names the run whose questions follow: `┌  esdev create`. Nothing is printed
-/// until a question is.
+/// Names the run whose questions follow: `┌   esdev create `. Nothing is
+/// printed until a question is.
 pub fn intro(title: &'static str) {
     if let Ok(mut session) = SESSION.lock() {
         session.title = Some(title);
@@ -167,16 +206,27 @@ fn open() {
         return;
     }
     session.open = true;
-    let paint = crate::style::Palette::stderr();
+    let colour = colour();
+    let start = sgr(colour, GRAY, START);
     match session.title {
-        Some(title) => eprintln!("{}  {title}", paint.dim(START)),
-        None => eprintln!("{}", paint.dim(START)),
+        Some(title) if colour => {
+            eprintln!("{start}  {}", sgr(colour, BADGE, &format!(" {title} ")))
+        }
+        Some(title) => eprintln!("{start}  {title}"),
+        None => eprintln!("{start}"),
     }
 }
 
 /// Whether a run's questions have drawn their gutter and not yet closed it.
 pub fn is_open() -> bool {
     SESSION.lock().is_ok_and(|session| session.open)
+}
+
+/// Closes the gutter, returning whether it was open.
+fn close() -> bool {
+    SESSION
+        .lock()
+        .is_ok_and(|mut session| std::mem::replace(&mut session.open, false))
 }
 
 /// A line of progress between questions: inside the gutter while one is open,
@@ -189,101 +239,152 @@ pub fn log(text: &str) {
         }
         return;
     }
-    let paint = crate::style::Palette::stderr();
+    let bar = sgr(colour(), GRAY, BAR);
     if text.is_empty() {
-        eprintln!("{}", paint.dim(BAR));
+        eprintln!("{bar}");
         return;
     }
     for line in text.lines() {
         if line.is_empty() {
-            eprintln!("{}", paint.dim(BAR));
+            eprintln!("{bar}");
         } else {
-            eprintln!("{}  {line}", paint.dim(BAR));
+            eprintln!("{bar}  {line}");
         }
+    }
+}
+
+/// Something done, between questions: `✔  created my-docs`. Plain without a
+/// gutter, as [`log`] is.
+pub fn success(text: &str) {
+    mark(GREEN, DONE, text);
+}
+
+/// Something to know about, between questions: `⚠  retrying in 500 ms`.
+pub fn warn(text: &str) {
+    mark(YELLOW, WARNED, text);
+}
+
+/// A marked line inside the gutter, its continuation lines under the bar.
+fn mark(code: &str, glyph: &str, text: &str) {
+    if !is_open() {
+        eprintln!("{text}");
+        return;
+    }
+    let colour = colour();
+    let bar = sgr(colour, GRAY, BAR);
+    let mut lines = text.lines();
+    eprintln!(
+        "{bar}\n{}  {}",
+        sgr(colour, code, glyph),
+        lines.next().unwrap_or("")
+    );
+    for line in lines {
+        eprintln!("{bar}  {line}");
     }
 }
 
 /// Closes the gutter, if a question opened it: `└  Done.`
 pub fn outro(message: &str) {
-    let Ok(mut session) = SESSION.lock() else {
-        return;
-    };
-    if !session.open {
+    if !close() {
         return;
     }
-    session.open = false;
-    let paint = crate::style::Palette::stderr();
-    eprintln!("{}\n{}  {message}", paint.dim(BAR), paint.dim(END));
+    let colour = colour();
+    eprintln!(
+        "{}\n{}  {message}",
+        sgr(colour, GRAY, BAR),
+        sgr(colour, GRAY, END)
+    );
+}
+
+/// Closes the gutter on a run that stopped: `└  Stopped.`, in red as Clack's
+/// `cancel()` is.
+pub fn abort(message: &str) {
+    if !close() {
+        return;
+    }
+    let colour = colour();
+    eprintln!(
+        "{}\n{}  {}",
+        sgr(colour, GRAY, BAR),
+        sgr(colour, GRAY, END),
+        sgr(colour, RED, message)
+    );
 }
 
 /// What a question leaves behind once it has been answered.
 fn answered(question: &str, answer: &str) {
-    let paint = crate::style::Palette::stderr();
+    let colour = colour();
+    let bar = sgr(colour, GRAY, BAR);
     eprintln!(
-        "{}\n{}  {question}\n{}  {}",
-        paint.dim(BAR),
-        paint.green(DONE),
-        paint.dim(BAR),
-        paint.dim(answer)
+        "{bar}\n{}  {question}\n{bar}  {}",
+        sgr(colour, GREEN, DONE),
+        sgr(colour, DIM, answer)
     );
 }
 
 /// What a question Esc ended leaves behind, which depends on what Esc meant.
 /// Stepping back leaves nothing: the earlier question is asked again below.
-fn ended(question: &str, esc: OnEsc) {
+/// `left` is what was on offer when it ended, struck through on a cancel.
+fn ended(question: &str, esc: OnEsc, left: &str) {
     match esc {
         OnEsc::Back => {}
-        OnEsc::Skip => answered(question, "Skipped"),
-        OnEsc::Cancel => {
-            if let Ok(mut session) = SESSION.lock() {
-                session.open = false;
-            }
-            let paint = crate::style::Palette::stderr();
+        OnEsc::Skip => {
+            let colour = colour();
+            let bar = sgr(colour, GRAY, BAR);
             eprintln!(
-                "{}\n{STOPPED}  {question}\n{}  Cancelled.",
-                paint.dim(BAR),
-                paint.dim(END)
+                "{bar}\n{}  {question}\n{bar}  {}",
+                sgr(colour, GRAY, SKIPPED),
+                sgr(colour, DIM, "Skipped")
             );
+        }
+        OnEsc::Cancel => {
+            let colour = colour();
+            let bar = sgr(colour, GRAY, BAR);
+            eprintln!("{bar}\n{}  {question}", sgr(colour, RED, STOPPED));
+            if !left.is_empty() {
+                eprintln!("{bar}  {}", sgr(colour, STRUCK, left));
+            }
+            abort("Cancelled.");
         }
     }
 }
 
-/// The closing line's key hint.
+/// The keys a menu takes, in Clack's words, with what Esc does here.
 fn esc_hint(esc: OnEsc) -> &'static str {
     match esc {
-        OnEsc::Cancel => "esc cancel",
-        OnEsc::Back => "esc back",
-        OnEsc::Skip => "esc skip",
+        OnEsc::Cancel => "cancel",
+        OnEsc::Back => "back",
+        OnEsc::Skip => "skip",
     }
 }
 
 /// The styles a frame is drawn with, or none at all without colour: the glyphs
 /// carry every meaning on their own.
 struct Styles {
-    bar: Style,
+    gray: Style,
     active: Style,
     on: Style,
     dim: Style,
-    bold: Style,
+    cursor: Style,
 }
 
 impl Styles {
     fn new(colour: bool) -> Self {
         if !colour {
             return Self {
-                bar: Style::new(),
+                gray: Style::new(),
                 active: Style::new(),
                 on: Style::new(),
                 dim: Style::new(),
-                bold: Style::new(),
+                cursor: Style::new(),
             };
         }
         Self {
-            bar: Style::new().fg(Color::Cyan),
+            gray: Style::new().fg(Color::DarkGray),
             active: Style::new().fg(Color::Cyan),
             on: Style::new().fg(Color::Green),
             dim: Style::new().add_modifier(Modifier::DIM),
-            bold: Style::new().add_modifier(Modifier::BOLD),
+            cursor: Style::new().add_modifier(Modifier::REVERSED),
         }
     }
 }
@@ -291,22 +392,24 @@ impl Styles {
 /// The first two lines of an asked question: the gutter, then `◆  question`.
 fn heading<'a>(question: &'a str, styles: &Styles) -> Vec<Line<'a>> {
     vec![
-        Line::from(Span::styled(BAR, styles.dim)),
+        Line::from(Span::styled(BAR, styles.gray)),
         Line::from(vec![
             Span::styled(ACTIVE, styles.active),
             Span::raw("  "),
-            Span::styled(question, styles.bold),
+            Span::raw(question),
         ]),
     ]
 }
 
-/// The closing line of an asked question: `└` and the keys.
-fn closing<'a>(hint: String, styles: &Styles) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(END, styles.bar),
-        Span::raw("  "),
-        Span::styled(hint, styles.dim),
-    ])
+/// One line inside an asked question: the cyan bar, then what it holds.
+fn row<'a>(mut spans: Vec<Span<'a>>, styles: &Styles) -> Line<'a> {
+    spans.insert(0, Span::styled(format!("{BAR}  "), styles.active));
+    Line::from(spans)
+}
+
+/// The cyan `└` an asked question ends on.
+fn closing<'a>(styles: &Styles) -> Line<'a> {
+    Line::from(Span::styled(END, styles.active))
 }
 
 // --- select ------------------------------------------------------------------
@@ -342,9 +445,9 @@ pub fn select(
     // A terminal that will not go into raw mode is not a terminal this can draw
     // on, and the question still has to be asked. The fallback is the plain
     // numbered list, which needs nothing but a line of input.
-    let chosen = match menu(question, choices, default, esc) {
-        Ok(chosen) => chosen,
-        Err(_) => numbered(question, choices, default),
+    let (chosen, cursor) = match menu(question, choices, default, esc) {
+        Ok(answer) => answer,
+        Err(_) => (numbered(question, choices, default), default.unwrap_or(0)),
     };
     match chosen {
         Some(chosen) => {
@@ -352,7 +455,7 @@ pub fn select(
             Some(chosen)
         }
         None => {
-            ended(question, esc);
+            ended(question, esc, choices[cursor].label);
             None
         }
     }
@@ -386,14 +489,15 @@ fn step_enabled(choices: &[Choice<'_>], cursor: usize, direction: isize) -> Opti
     None
 }
 
-/// The menu, drawn and driven. `Err` means the terminal would not cooperate.
+/// The menu, drawn and driven: what was chosen, and where the cursor stood.
+/// `Err` means the terminal would not cooperate.
 fn menu(
     question: &str,
     choices: &[Choice<'_>],
     default: Option<usize>,
     esc: OnEsc,
-) -> std::io::Result<Option<usize>> {
-    let mut inline = Inline::new(choices.len() + 3)?;
+) -> std::io::Result<(Option<usize>, usize)> {
+    let mut inline = Inline::new(choices.len() + 4)?;
     let colour = colour();
     // A `None` default still starts somewhere: the first thing that can be
     // chosen. `select` guarantees at least one enabled choice above.
@@ -452,7 +556,7 @@ fn menu(
         }
     };
     inline.finish()?;
-    Ok(chosen)
+    Ok((chosen, cursor))
 }
 
 /// The menu's frame.
@@ -460,7 +564,8 @@ fn menu(
 /// Only the option under the cursor shows its description, as Clack shows a
 /// hint: a list of templates reads as names, and the one being considered
 /// says what it is. A disabled option always says so, since it is the reason
-/// the cursor will not land on it.
+/// the cursor will not land on it. The keys are Clack's footer, with Esc
+/// added, since here it steps back.
 fn render<'a>(
     question: &'a str,
     choices: &'a [Choice<'a>],
@@ -471,64 +576,76 @@ fn render<'a>(
     let styles = Styles::new(colour);
     let mut lines = heading(question, &styles);
     for (index, choice) in choices.iter().enumerate() {
-        let mut spans = vec![Span::styled(BAR, styles.bar), Span::raw("  ")];
-        if choice.disabled {
-            spans.push(Span::styled(
-                format!("{OFF} {} (not available)", choice.label),
-                styles.dim,
-            ));
+        let spans = if choice.disabled {
+            vec![
+                Span::styled(format!("{OFF} {}", choice.label), styles.gray),
+                Span::styled(" (not available)", styles.dim),
+            ]
         } else if index == cursor {
-            spans.push(Span::styled(ON, styles.on));
-            spans.push(Span::raw(format!(" {}", choice.label)));
+            let mut spans = vec![
+                Span::styled(ON, styles.on),
+                Span::raw(format!(" {}", choice.label)),
+            ];
             if !choice.description.is_empty() {
                 spans.push(Span::styled(
                     format!(" ({})", choice.description),
                     styles.dim,
                 ));
             }
+            spans
         } else {
-            spans.push(Span::styled(format!("{OFF} {}", choice.label), styles.dim));
-        }
-        lines.push(Line::from(spans));
+            vec![Span::styled(format!("{OFF} {}", choice.label), styles.dim)]
+        };
+        lines.push(row(spans, &styles));
     }
-    lines.push(closing(
-        format!("↑/↓ move · enter select · {}", esc_hint(esc)),
+    lines.push(row(
+        vec![
+            Span::styled("↑/↓", styles.dim),
+            Span::raw(" to navigate • "),
+            Span::styled("Enter:", styles.dim),
+            Span::raw(" confirm • "),
+            Span::styled("Esc:", styles.dim),
+            Span::raw(format!(" {}", esc_hint(esc))),
+        ],
         &styles,
     ));
+    lines.push(closing(&styles));
     lines
 }
 
 // --- confirm -----------------------------------------------------------------
 
-/// Asks a yes/no question, drawn as Clack draws one: `○ Yes / ● No` on a line.
+/// Asks a yes/no question, drawn as Clack draws one: `● Yes / ○ No` on a line.
 ///
 /// `None` is Esc, or ^C; end of input is the default. `y` and `n` answer at
 /// once, the arrows and Tab move between the two, and Enter takes the one
 /// marked.
 pub fn confirm(question: &str, default: bool, esc: OnEsc) -> Option<bool> {
     open();
-    let answer = match toggle(question, default, esc) {
+    let label = |yes: bool| if yes { "Yes" } else { "No" };
+    let (answer, last) = match toggle(question, default) {
         Ok(answer) => answer,
-        Err(_) => yes_no(question, default),
+        Err(_) => (yes_no(question, default), default),
     };
     match answer {
         Some(yes) => {
-            answered(question, if yes { "Yes" } else { "No" });
+            answered(question, label(yes));
             Some(yes)
         }
         None => {
-            ended(question, esc);
+            ended(question, esc, label(last));
             None
         }
     }
 }
 
-fn toggle(question: &str, default: bool, esc: OnEsc) -> std::io::Result<Option<bool>> {
+/// The toggle, drawn and driven: the answer, and what was marked when it ended.
+fn toggle(question: &str, default: bool) -> std::io::Result<(Option<bool>, bool)> {
     let mut inline = Inline::new(4)?;
     let colour = colour();
     let mut yes = default;
     let answer = loop {
-        inline.draw(render_confirm(question, yes, esc, colour), None)?;
+        inline.draw(render_confirm(question, yes, colour), None)?;
         let Some(key) = key()? else {
             continue;
         };
@@ -550,29 +667,27 @@ fn toggle(question: &str, default: bool, esc: OnEsc) -> std::io::Result<Option<b
         }
     };
     inline.finish()?;
-    Ok(answer)
+    Ok((answer, yes))
 }
 
-/// The yes/no frame.
-fn render_confirm<'a>(question: &'a str, yes: bool, esc: OnEsc, colour: bool) -> Vec<Line<'a>> {
+/// The yes/no frame. No footer, as in Clack: the two answers are the keys.
+fn render_confirm(question: &str, yes: bool, colour: bool) -> Vec<Line<'_>> {
     let styles = Styles::new(colour);
-    let option = |label: &'static str, marked: bool| -> Vec<Span<'a>> {
+    let option = |label: &'static str, marked: bool| -> Vec<Span<'static>> {
         if marked {
             vec![Span::styled(ON, styles.on), Span::raw(format!(" {label}"))]
         } else {
             vec![Span::styled(format!("{OFF} {label}"), styles.dim)]
         }
     };
-    let mut row = vec![Span::styled(BAR, styles.bar), Span::raw("  ")];
-    row.extend(option("Yes", yes));
-    row.push(Span::styled(" / ", styles.dim));
-    row.extend(option("No", !yes));
+    let mut spans = option("Yes", yes);
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled("/", styles.dim));
+    spans.push(Span::raw(" "));
+    spans.extend(option("No", !yes));
     let mut lines = heading(question, &styles);
-    lines.push(Line::from(row));
-    lines.push(closing(
-        format!("←/→ choose · enter confirm · {}", esc_hint(esc)),
-        &styles,
-    ));
+    lines.push(row(spans, &styles));
+    lines.push(closing(&styles));
     lines
 }
 
@@ -620,30 +735,34 @@ fn parse_yes_no(line: &str) -> Option<Option<bool>> {
 pub fn ask_text(question: &str, default: &str) -> Option<String> {
     open();
     match line_editor(question, default) {
-        Ok(Some(answer)) => {
+        Ok(Ok(answer)) => {
             answered(question, &answer);
             Some(answer)
         }
-        Ok(None) => {
-            ended(question, OnEsc::Cancel);
+        Ok(Err(typed)) => {
+            ended(question, OnEsc::Cancel, typed.trim());
             std::process::exit(130);
         }
         Err(_) => plain_text(question, default),
     }
 }
 
-fn line_editor(question: &str, default: &str) -> std::io::Result<Option<String>> {
+/// The line editor: the answer, or what had been typed when it was abandoned.
+fn line_editor(question: &str, default: &str) -> std::io::Result<Result<String, String>> {
     let mut inline = Inline::new(4)?;
     let colour = colour();
     let mut text = String::new();
     let answer = loop {
         let (lines, column) = render_text(question, &text, default, colour);
-        inline.draw(lines, Some((column, 2)))?;
+        // With colour the cursor is drawn, as Clack draws it: an inverse cell.
+        // Without, inverse may not show, so the terminal's own cursor stands in.
+        let cursor = (!colour).then_some((column, 2));
+        inline.draw(lines, cursor)?;
         let Some(key) = key()? else {
             continue;
         };
         if cancels(&key) {
-            break None;
+            break Err(text);
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -652,7 +771,7 @@ fn line_editor(question: &str, default: &str) -> std::io::Result<Option<String>>
             KeyCode::Backspace => {
                 text.pop();
             }
-            KeyCode::Enter => break Some(typed_or_default(&text, default)),
+            KeyCode::Enter => break Ok(typed_or_default(&text, default)),
             _ => {}
         }
     };
@@ -671,6 +790,9 @@ fn typed_or_default(text: &str, default: &str) -> String {
 
 /// The text frame, and the column the cursor stands in: after what was typed,
 /// or on the placeholder's first character while nothing has been.
+///
+/// The placeholder is Clack's: its first character inverse, where the cursor
+/// is, and the rest dim.
 fn render_text<'a>(
     question: &'a str,
     text: &'a str,
@@ -679,22 +801,25 @@ fn render_text<'a>(
 ) -> (Vec<Line<'a>>, u16) {
     let styles = Styles::new(colour);
     let mut lines = heading(question, &styles);
-    let shown = if text.is_empty() {
-        Span::styled(default, styles.dim)
+    let spans = if text.is_empty() {
+        let mut first = default.chars();
+        match first.next() {
+            Some(head) => vec![
+                Span::styled(head.to_string(), styles.cursor),
+                Span::styled(first.as_str(), styles.dim),
+            ],
+            None => vec![Span::styled(" ", styles.cursor)],
+        }
     } else {
-        Span::raw(text)
+        vec![Span::raw(text), Span::styled(" ", styles.cursor)]
     };
     let column = 3 + if text.is_empty() {
         0
     } else {
         u16::try_from(Span::raw(text).width()).unwrap_or(u16::MAX - 3)
     };
-    lines.push(Line::from(vec![
-        Span::styled(BAR, styles.bar),
-        Span::raw("  "),
-        shown,
-    ]));
-    lines.push(closing("enter confirm · esc cancel".to_string(), &styles));
+    lines.push(row(spans, &styles));
+    lines.push(closing(&styles));
     (lines, column)
 }
 
@@ -915,7 +1040,7 @@ mod tests {
 
     /// The frame is what somebody chooses from, in Clack's shape: the gutter,
     /// `◆` and the question, one `●` on the option under the cursor and `○` on
-    /// the rest, and `└` closing on the keys.
+    /// the rest, the keys, and `└`.
     #[test]
     fn the_menu_draws_every_choice_and_marks_one() {
         let choices = [
@@ -941,7 +1066,8 @@ mod tests {
                 "◆  Which Mode?",
                 "│  ○ Static",
                 "│  ● FullStack (a server)",
-                "└  ↑/↓ move · enter select · esc cancel",
+                "│  ↑/↓ to navigate • Enter: confirm • Esc: cancel",
+                "└",
             ],
         );
     }
@@ -956,15 +1082,12 @@ mod tests {
             disabled: false,
         }];
         for (esc, hint) in [
-            (OnEsc::Back, "esc back"),
-            (OnEsc::Cancel, "esc cancel"),
-            (OnEsc::Skip, "esc skip"),
+            (OnEsc::Back, "Esc: back"),
+            (OnEsc::Cancel, "Esc: cancel"),
+            (OnEsc::Skip, "Esc: skip"),
         ] {
             let text = text(&render("Which Template?", &choices, 0, esc, false));
-            assert!(
-                text.last().is_some_and(|line| line.ends_with(hint)),
-                "{text:?}"
-            );
+            assert!(text[3].ends_with(hint), "{text:?}");
             assert_eq!(text[2], "│  ● SPA", "no description, no hint: {text:?}");
         }
     }
@@ -972,17 +1095,9 @@ mod tests {
     /// A yes/no is one line, the marked answer filled.
     #[test]
     fn a_confirm_marks_one_answer() {
-        let no = text(&render_confirm("Add a blog?", false, OnEsc::Back, false));
-        assert_eq!(
-            no,
-            [
-                "│",
-                "◆  Add a blog?",
-                "│  ○ Yes / ● No",
-                "└  ←/→ choose · enter confirm · esc back",
-            ],
-        );
-        let yes = text(&render_confirm("Add a blog?", true, OnEsc::Back, false));
+        let no = text(&render_confirm("Add a blog?", false, false));
+        assert_eq!(no, ["│", "◆  Add a blog?", "│  ○ Yes / ● No", "└"]);
+        let yes = text(&render_confirm("Add a blog?", true, false));
         assert_eq!(yes[2], "│  ● Yes / ○ No");
     }
 
@@ -1004,7 +1119,11 @@ mod tests {
         assert_eq!(text(&empty)[2], "│  my-app");
         assert_eq!(column, 3);
         let (typed, column) = render_text("Project name", "shop", "my-app", false);
-        assert_eq!(text(&typed)[2], "│  shop");
+        assert_eq!(
+            text(&typed)[2],
+            "│  shop ",
+            "the drawn cursor follows the text"
+        );
         assert_eq!(column, 7);
         assert_eq!(typed_or_default("  ", "my-app"), "my-app");
         assert_eq!(typed_or_default(" shop ", "my-app"), "shop");

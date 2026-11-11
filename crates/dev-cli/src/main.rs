@@ -3294,7 +3294,7 @@ async fn run() -> ExitCode {
                 Ok(())
             }
             Err(err) => {
-                prompt::outro("Stopped.");
+                prompt::abort("Stopped.");
                 Err(err)
             }
         },
@@ -3305,7 +3305,7 @@ async fn run() -> ExitCode {
                 Ok(())
             }
             Err(err) => {
-                prompt::outro("Stopped.");
+                prompt::abort("Stopped.");
                 Err(err)
             }
         },

@@ -563,6 +563,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
     };
     let paint = crate::style::Palette::stdout();
     if written == 0 {
+        crate::prompt::outro("Nothing to write.");
         return Ok(format!(
             "nothing to write: {} already holds every file the {named} template has.\n",
             config.dir
@@ -590,7 +591,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
     // Inside the questions' gutter when they drew one, so the transcript stays
     // one column; on stdout as before when nothing was asked.
     if crate::prompt::is_open() {
-        crate::prompt::log(report.trim_end());
+        crate::prompt::success(report.trim_end());
     } else {
         print!("{report}");
         let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -628,6 +629,8 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         &manager,
         paint,
     ));
+    // create-afw's closing words, with the next steps under them.
+    crate::prompt::outro("Done. Now run:");
     Ok(report)
 }
 
@@ -1939,7 +1942,7 @@ async fn registry_version_with_retries(
                         failure.message
                     ));
                 };
-                crate::prompt::log(&format!(
+                crate::prompt::warn(&format!(
                     "npm registry lookup for {package} failed on attempt {}/{}, {}; retrying in {} ms",
                     attempt + 1,
                     REGISTRY_BACKOFFS.len() + 1,

@@ -67,14 +67,17 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
-- **`esdev create` and `esdev init` ask in Clack's look**, the one create-afw,
-  create-vite and create-svelte share: one gutter joining the questions
-  (`┌ │ └`), `◆` on the question being asked and `◇` on each answered one,
-  `●`/`○` options with the hint beside the focused one, an inline
-  `○ Yes / ● No` for yes/no questions, and a text input with its default as
-  the placeholder. The keys stay as they were (Esc steps back, a digit jumps),
-  and the closing line names them. Esc on the install question now reads
-  `Skipped`; it still installs nothing.
+- **`esdev create` and `esdev init` ask in Clack's layout and colours**, as
+  create-afw does (`@clack/prompts` 1.8): a gray gutter joining the questions
+  under a cyan title badge, the question being asked in cyan with a
+  `↑/↓ to navigate • Enter: confirm • Esc: back` footer, `●`/`○` options with
+  the hint beside the focused one, an inline `● Yes / ○ No` for yes/no
+  questions, and a text input with its default as the placeholder. Outcomes
+  are marked with ticks, crosses and warning signs: a green `✔` on each answer
+  and on `created`, a red `✖` and struck-through answer on a cancel, a gray `–`
+  on a skipped question and a yellow `⚠` on a registry retry. The keys stay as
+  they were (Esc steps back, a digit jumps). Esc on the install question now
+  reads `Skipped`; it still installs nothing.
 
 - **`esdev create --template=docs` leaves the blog out unless asked**, as
   create-afw does: the question is now "Add a blog?" and starts on No, and an
