@@ -45,20 +45,20 @@ served, and nothing else able to take the address.
 Both are bounded by `timeouts.handshake`, and a TLS connection passes through
 both, so it can take up to twice that value before it counts as established.
 
-They are separate mechanisms. The handshake is wrapped in a timeout because
-rustls will otherwise wait for the peer's next flight indefinitely. The
-first-byte wait cannot be: version detection reads up to 24 bytes — the length
-of the HTTP/2 connection preface — *before* either kind of hyper connection
-exists, so no timer hyper owns is running yet. A wrapper around the stream
-applies the deadline until one byte arrives and goes inert afterwards, because a
-long-lived connection must not be interrupted by it.
+They are separate reads under the same deadline. The handshake is wrapped in a
+timeout because rustls will otherwise wait for the peer's next flight
+indefinitely. On a cleartext port, version detection then reads only until the
+bytes decide — the first byte that differs from the HTTP/2 connection preface
+means HTTP/1.1 — so an HTTP/1.1 request is never held waiting for the
+preface's 24 bytes. Over TLS, ALPN has already decided and nothing is read
+here.
 
 ### Request head, and the idle connection
 
 `timeouts.headerRead` bounds how long a request head may take to arrive. On
 HTTP/1.1 it is **also the idle keep-alive limit** — not a second timer, the same
-one. hyper arms it whenever it waits for a request head, and waiting for the
-*next* request on a kept-alive connection is exactly that. At the default, an
+one. The connection arms it whenever it waits for a request head, and waiting
+for the *next* request on a kept-alive connection is exactly that. At the default, an
 idle connection is closed after 30s and a client that wants another request
 opens a new one.
 
@@ -104,6 +104,26 @@ elapsed time is not what these timeouts look at.
 Still unbounded today: total request duration. That is a decision rather than a
 gap — a total cap would break SSE and long-polling, and there is no per-route
 override to escape it.
+
+## Which code serves which version
+
+HTTP/1.1 is served by ES-Runtime's own parser and connection loop; HTTP/2, for
+now, by hyper. The HTTP/1.1 code reads each connection into one buffer, parses a
+head in place without copying it, and converts its headers only if the handler
+reads them. It is strict where parsers have come to disagree — CRLF line endings
+only, no folded lines, one `Host`, never both `Content-Length` and
+`Transfer-Encoding` — and is checked against llhttp's request cases and by
+fuzzing. Why, and what was rejected: [DECISIONS D217](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+What the switch from hyper measured, as user CPU per request on one core
+(`bench/cpu-per-request.sh`, interleaved runs):
+
+| Request | hyper | ES-Runtime |
+| --- | ---: | ---: |
+| Hello world | 10.75 µs | 9.9 µs |
+| Through Hono | 11.7 µs | 10.4 µs |
+| 15 request headers, none read | 14.3 µs | 10.85 µs |
+| 10 response headers | 19.4 µs | 18.5 µs |
 
 ## Every limit, in one place
 

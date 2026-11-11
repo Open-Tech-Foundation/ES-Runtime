@@ -23,8 +23,7 @@ not read from documentation. Reproduce with `bash bench/probe-runtimes.sh`.
 A silent connection — one that completes the TCP handshake and then says nothing
 — is the cheapest hold on a server there is: one syscall to the peer, no state to
 keep. Node bounds it at 88s, which is a 60s `headersTimeout` polled on a 30s
-interval. Deno does not bound it at all, despite being built on the same HTTP
-implementation we are; nor does it bound an idle keep-alive connection.
+interval. Deno does not bound it at all, nor an idle keep-alive connection.
 
 The HTTP/2 rows are read off the wire from each server's `SETTINGS` frame, which
 is what it tells every client its limits are. Node and Bun advertise unlimited

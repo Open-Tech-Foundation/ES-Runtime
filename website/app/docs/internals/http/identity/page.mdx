@@ -49,7 +49,7 @@ sink, and `esrun` installs one filtered by `RUST_LOG`.
 | `accept failed; retrying` | `warn` | The listener could not accept, and is backing off |
 | `tls handshake failed` | `debug` | A peer's TLS handshake did not complete |
 | `<what> timed out; closing the connection` | `debug` | A connection hit `handshake` or the first-byte deadline |
-| `connection ended with an error` | `debug` | hyper ended the connection on a protocol error, an early EOF, or a failed write |
+| `connection ended with an error` | `debug` | The connection ended on a protocol error — a refused HTTP/1.1 request head included — an early EOF, or a failed write |
 
 Each served connection is a `debug` span carrying `peer` and `tls`, so every
 event above is attributable to one client and correlated across a connection's

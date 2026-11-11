@@ -8,11 +8,11 @@ description: Understand isolate handoff, client disconnects, graceful shutdown, 
 JavaScript runs on one thread, and connections do not. Everything above the
 socket is shaped by that.
 
-hyper parses a request on whichever reactor thread owns the connection, then
-hands the runtime a triple — the request, a one-shot channel to send the
+The connection's task parses a request — with ES-Runtime's own HTTP/1.1 code,
+or hyper on HTTP/2 — then hands the runtime a triple — the request, a one-shot channel to send the
 response back on, and a half that reports whether the peer is still there — and
 awaits the response. The isolate drains that channel, runs the handler, and
-answers by id. hyper is free to keep feeding the request body while it waits.
+answers by id. The connection keeps feeding the request body while it waits.
 
 The consequence worth understanding: **responses are matched to requests by id,
 not by arrival order**. Nothing in the handoff knows which connection a request
@@ -41,8 +41,8 @@ one peer could fill the shared 1024-slot queue from a single connection.
 `request.signal` is built backwards from the delivery half of that triple. The
 connection task *sends* on it once it has the handler's response in hand — so
 "delivered" is an explicit signal, and the future being **dropped** without
-sending is what a vanished client looks like, because hyper drops the service
-future when the connection dies. There is nothing to poll and nothing to clean
+sending is what a vanished client looks like, because the connection drops its
+half when the client goes away before the answer is written. There is nothing to poll and nothing to clean
 up on either path.
 
 Reading `request.signal` is what starts the watch, so a handler that never asks
@@ -54,8 +54,8 @@ pays nothing for it.
 In-flight requests still complete.
 
 Draining waits for **connections to close**, not for handlers to return. Those
-are different moments: a response is handed to hyper before it reaches the
-socket, and exiting in between is exactly what turns a completed request into an
+are different moments: a response is handed to the connection before it
+reaches the socket, and exiting in between is exactly what turns a completed request into an
 empty reply on the client. So the drain watches live connections, and a
 connection counts as live until its task ends.
 
