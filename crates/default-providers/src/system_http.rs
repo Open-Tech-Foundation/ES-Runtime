@@ -1,26 +1,26 @@
-//! OS-backed [`HttpServerProvider`] — a hyper HTTP/1.1 + HTTP/2 server for
-//! `runtime:http`.
+//! OS-backed [`HttpServerProvider`] — the HTTP/1.1 and HTTP/2 server for
+//! `runtime:http`, on our own protocol code (DECISIONS D217): `h1_conn` and
+//! `h2_conn` drive `es-runtime-http`'s sans-I/O cores on tokio.
 //!
-//! Each accepted connection is served on its own spawned task. hyper parses the
-//! request and, for each one, hands `(request, oneshot)` to a per-server channel
-//! and `await`s the oneshot for the response; the runtime drains that channel via
+//! Each accepted connection is served on its own spawned task. The connection
+//! parses each request and hands `(request, oneshot)` to a per-server channel,
+//! then awaits the oneshot for the response; the runtime drains that channel via
 //! [`next_request`](HttpServerProvider::next_request) and completes each request
-//! with [`respond`](HttpServerProvider::respond). This handoff lets hyper run
-//! across the reactor's threads while the single-threaded JS isolate produces
-//! responses one at a time. Bodies **stream** in both directions: the inbound
-//! `Incoming` body crosses as an [`HttpServerBody::Stream`] the guest pulls
-//! chunk-by-chunk (hyper keeps feeding it while the connection task awaits the
-//! response oneshot), and a streamed response body is written with chunked
-//! transfer-encoding as the guest produces it.
+//! with [`respond`](HttpServerProvider::respond). This handoff lets connections
+//! run on the reactor while the single-threaded JS isolate produces responses
+//! one at a time. Bodies **stream** in both directions: the inbound body crosses
+//! as an [`HttpServerBody::Stream`] the guest pulls chunk-by-chunk (the
+//! connection keeps feeding it while the response is awaited), and a streamed
+//! response body is written as the guest produces it — chunked on HTTP/1.1,
+//! DATA frames under flow control on HTTP/2.
 //!
 //! Each request also carries a "was the response delivered?" half that
 //! [`request_disconnected`](HttpServerProvider::request_disconnected) reads,
-//! which is what backs the guest's `request.signal`: hyper dropping the service
-//! future — what a vanished client does to it — drops that half unsent, and the
+//! which is what backs the guest's `request.signal`: a connection that loses
+//! its client (or a stream the client resets) drops that half unsent, and the
 //! watcher reads the drop as the disconnect.
 //!
-//! The protocol version is the client's choice, not the listener's: every
-//! connection is served through hyper-util's version-detecting builder, so an
+//! The protocol version is the client's choice, not the listener's, so an
 //! HTTP/1.1 client and an HTTP/2 client are both answered on the same port by
 //! the same handler. Over TLS the choice is ALPN (`serve` advertises `h2` and
 //! `http/1.1` unless the guest narrows it); on a cleartext port it is the HTTP/2
@@ -29,35 +29,28 @@
 //! which is what HTTP/2 multiplexing needs.
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, HttpRequestHeaders, HttpServeOptions, HttpServerBody, HttpServerProvider,
-    HttpServerRequest, HttpServerResponse, HttpTimeouts, PeerCertificate, ProviderError,
-    SecureContext, SocketInfo, UpgradedIo,
+    BoxFuture, HttpServeOptions, HttpServerProvider, HttpServerRequest, HttpServerResponse,
+    HttpTimeouts, PeerCertificate, ProviderError, SecureContext, SocketInfo, UpgradedIo,
 };
-use futures_util::StreamExt;
-use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::{BodyExt, Full, StreamBody};
-use hyper::body::{Body as _, Frame, Incoming};
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
-use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
-use crate::body_deadline::{BodyDeadline, BodyLimit};
+use crate::body_deadline::BodyLimit;
 use crate::checkout::Checkout;
 use crate::peer_limit::PeerLimit;
+
+// What the test modules below reach through `use super::*`.
+#[cfg(test)]
+use {es_runtime_providers::HttpServerBody, futures_util::StreamExt as _, hyper::body::Body as _};
 
 /// The most header fields one HTTP/1.1 request head may carry.
 const MAX_HEADERS: usize = 100;
@@ -72,14 +65,9 @@ const MAX_H1_BUFFER: usize = 8192 + 4096 * 100;
 /// peer in `SETTINGS` so a client learns it before sending one.
 const MAX_H2_HEADER_LIST: u32 = 16 * 1024;
 
-/// The response body handed to hyper: buffered (`Full`) or streamed
-/// (`StreamBody`), erased behind one type so both share the service signature.
-/// Unsync because the guest's [`ByteStream`](es_runtime_providers::ByteStream)
-/// is `Send` but not `Sync` — hyper only needs `Send` here.
-type OutBody = UnsyncBoxBody<Bytes, ProviderError>;
-
-/// One inbound request, the channel that carries its response back to hyper, and
-/// the half that reports whether the peer outlived the wait for that response.
+/// One inbound request, the channel that carries its response back to its
+/// connection, and the half that reports whether the peer outlived the wait
+/// for that response.
 ///
 /// The `delivered` receiver is the disconnect signal, read backwards: the
 /// service future *sends* on it once it has the guest's response in hand, and
@@ -93,7 +81,7 @@ pub(crate) type Pending = (
     Option<PendingUpgrade>,
 );
 
-/// A request that asked to become a WebSocket: hyper's half of the takeover,
+/// A request that asked to become a WebSocket: the connection's half of the takeover,
 /// and the `Sec-WebSocket-Accept` its `101` has to carry.
 ///
 /// Both are captured when the request head is parsed, because both come from
@@ -109,14 +97,10 @@ pub(crate) struct PendingUpgrade {
     pub(crate) accept: String,
 }
 
-/// How the upgraded connection arrives once the `101` is written: from hyper
-/// (HTTP/2's path, until D217's phase 3) or from our HTTP/1.1 connection,
-/// which hands over the stream itself together with any bytes it had already
-/// read past the head.
-pub(crate) enum Upgrade {
-    Hyper(hyper::upgrade::OnUpgrade),
-    Raw(oneshot::Receiver<UpgradedIo>),
-}
+/// How the upgraded connection arrives once the `101` is written: our
+/// HTTP/1.1 connection hands over the stream itself, together with any bytes
+/// it had already read past the head. (HTTP/2 has no upgrade: RFC 9113 §8.6.)
+pub(crate) type Upgrade = oneshot::Receiver<UpgradedIo>;
 
 /// One handed-over request's parts, each consumed by a different call in an
 /// order none of them controls.
@@ -165,8 +149,8 @@ struct Control {
 
 /// Live connection accounting, shared by every server in one registry.
 ///
-/// A response is *handed to* hyper by `respond`, which is not the same as
-/// written to the socket — hyper needs to be polled again for that. So a caller
+/// A response is *handed to* its connection by `respond`, which is not the
+/// same as written to the socket — the connection's task does that later. So a caller
 /// draining for shutdown cannot ask "are all responses sent?"; it asks "are all
 /// connections finished?", which is this.
 #[derive(Clone, Default)]
@@ -207,7 +191,7 @@ impl LiveConnections {
     }
 }
 
-/// An [`HttpServerProvider`] over a hyper HTTP/1.1 + HTTP/2 server. The `Arc`s are cloned
+/// An [`HttpServerProvider`] over our HTTP/1.1 and HTTP/2 connections. The `Arc`s are cloned
 /// into each returned future so the futures stay `'static`.
 #[derive(Clone, Default)]
 pub struct SystemHttpServer {
@@ -279,8 +263,9 @@ impl SystemHttpServer {
             // Dropping the request receiver ends idle keep-alive connections;
             // aborting the acceptor stops new ones; the notify wakes a parked
             // `next_requests` so the guest's accept loop finishes; and the
-            // drain flag puts every live connection into hyper's graceful
-            // shutdown, which answers what is in flight and then closes.
+            // drain flag puts every live connection into graceful shutdown
+            // (HTTP/2: GOAWAY), which answers what is in flight and then
+            // closes.
             self.requests
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -297,8 +282,8 @@ impl SystemHttpServer {
     ///
     /// Pairs with [`shutdown_all`](Self::shutdown_all). Waiting for the guest's
     /// work to finish is not enough on its own: the guest hands a response to
-    /// [`respond`](HttpServerProvider::respond) and moves on, and hyper has to be
-    /// polled again to put the bytes on the socket. Exiting between those two
+    /// [`respond`](HttpServerProvider::respond) and moves on, and the
+    /// connection's task still has to put the bytes on the socket. Exiting between those two
     /// points is exactly how an in-flight request turns into an empty reply.
     pub async fn wait_for_idle(&self, grace: std::time::Duration) -> bool {
         self.live.wait_idle(grace).await
@@ -316,136 +301,6 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
     }
 }
 
-/// Turns a parsed hyper request into the [`HttpServerRequest`] handoff shape
-/// without touching the body: the `Incoming` body crosses as a chunk stream the
-/// guest pulls (hyper feeds it while the connection task awaits the response).
-/// The absolute URL is reconstructed from the listener's scheme plus the request
-/// authority — the `Host` header, or on HTTP/2 the `:authority` pseudo-header
-/// hyper puts in the URI — falling back to the bound address. `None` means the
-/// client named something that is not an authority, which the caller answers
-/// with `400` rather than passing on ([`request_url`]).
-fn to_server_request(
-    req: Request<Incoming>,
-    origin: &str,
-    peer_host: &str,
-    peer_port: u16,
-    peer_certificate: Option<Arc<PeerCertificate>>,
-    body_limit: Option<BodyLimit>,
-) -> Option<HttpServerRequest> {
-    let method = req.method().to_string();
-    // `origin` is "<scheme>://<bound address>", the fallback when a request
-    // names no authority. The authority replaces only the host part — the scheme
-    // is the listener's, and a client cannot talk this into claiming https:.
-    let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
-    let url = request_url(&req, scheme, authority)?;
-    let (parts, incoming) = req.into_parts();
-    // Converted only if the guest reads them (D216): hyper's parsed map moves
-    // into the closure, and most handlers never ask.
-    let header_map = parts.headers;
-    let headers = HttpRequestHeaders::deferred(move || {
-        header_map
-            .iter()
-            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect()
-    });
-    let body = if incoming.is_end_stream() {
-        HttpServerBody::Empty
-    } else {
-        // Bounded here rather than around the whole connection: the head is
-        // already past `header_read`, and what is left to bound is a body that
-        // arrives too slowly to be one (`body_deadline`).
-        HttpServerBody::Stream(BodyDeadline::wrap(
-            Box::pin(incoming.into_data_stream().map(|item| {
-                item.map(|bytes| bytes.to_vec())
-                    .map_err(|e| ProviderError::Other(e.to_string()))
-            })),
-            body_limit,
-        ))
-    };
-    Some(HttpServerRequest {
-        method,
-        url,
-        headers,
-        body,
-        // The connection's peer, so every stream of an h2 connection reports
-        // the same one — they are one connection.
-        remote_address: peer_host.to_owned(),
-        remote_port: peer_port,
-        peer_certificate,
-    })
-}
-
-/// Hyper's half of a WebSocket takeover, if this request is asking for one.
-///
-/// The test is the handshake's own (RFC 6455 §4.2.1): a `GET` carrying
-/// `Upgrade: websocket`, `Connection: …upgrade…` and a `Sec-WebSocket-Key`.
-/// Anything short of that is an ordinary request, and taking `on` for it would
-/// hold a connection open waiting for a `101` that is never coming.
-fn take_upgrade(req: &mut Request<Incoming>) -> Option<PendingUpgrade> {
-    if req.method() != hyper::Method::GET {
-        return None;
-    }
-    let header = |name: hyper::header::HeaderName| {
-        req.headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned)
-    };
-    if !header(hyper::header::UPGRADE).is_some_and(|v| v.eq_ignore_ascii_case("websocket")) {
-        return None;
-    }
-    // Comma-separated, and `keep-alive, Upgrade` is ordinary from a browser.
-    if !header(hyper::header::CONNECTION).is_some_and(|v| {
-        v.split(',')
-            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
-    }) {
-        return None;
-    }
-    let key = header(hyper::header::SEC_WEBSOCKET_KEY)?;
-    Some(PendingUpgrade {
-        accept: tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()),
-        on: Upgrade::Hyper(hyper::upgrade::on(req)),
-    })
-}
-
-/// The absolute URL for a request, or `None` if the authority it names is not
-/// one.
-///
-/// The authority is spliced into a string the guest routes on, so an unchecked
-/// one is a routing forgery rather than a cosmetic problem: `Host: h/admin?`
-/// turns `GET /public` into `http://h/admin?/public`, whose `pathname` is
-/// `/admin` — a request the client is not making, aimed at whatever the
-/// application decided `/admin` was worth protecting. hyper will not catch it,
-/// because to hyper `Host` is a header like any other; the grammar (RFC 9110
-/// §7.2, RFC 3986 §3.2) is this function's to enforce.
-fn request_url(req: &Request<Incoming>, scheme: &str, fallback: &str) -> Option<String> {
-    // HTTP/2 has no `Host` header: the client sends `:authority`, which hyper
-    // parses into the URI. Reading only the header would leave every h2 request
-    // reporting the bound address as its host.
-    let named = match req.headers().get(hyper::header::HOST) {
-        // A `Host` carrying bytes that are not text is not a host name.
-        Some(value) => Some(value.to_str().ok()?),
-        None => req
-            .uri()
-            .authority()
-            .map(hyper::http::uri::Authority::as_str),
-    }
-    .filter(|named| !named.is_empty());
-
-    let host = match named {
-        Some(named) => valid_authority(named)?,
-        // No authority named at all is not an error: HTTP/1.0 predates `Host`,
-        // and the bound address is the honest answer for such a request.
-        None => fallback.to_owned(),
-    };
-    let path = req
-        .uri()
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or("/");
-    Some(format!("{scheme}://{host}{path}"))
-}
-
 /// `authority` if it is exactly a host and an optional port.
 ///
 /// Rebuilt from the parsed parts and compared, rather than trusted once it
@@ -461,121 +316,6 @@ pub(crate) fn valid_authority(authority: &str) -> Option<String> {
         None => host.to_owned(),
     };
     (rebuilt == authority).then_some(rebuilt)
-}
-
-/// Builds the hyper response from the guest's [`HttpServerResponse`]. A buffered
-/// body goes out as `Full` (hyper sets `Content-Length`); a streamed body goes
-/// out as a `StreamBody` (hyper uses chunked transfer-encoding), and a chunk
-/// `Err` aborts the connection mid-body — the only honest signal once the status
-/// line is on the wire. Guest-supplied framing headers are dropped either way to
-/// avoid conflicting with what hyper computes.
-///
-/// One exception: the answer to a `HEAD` has no body for hyper to measure, so
-/// a `Content-Length` the guest set is the size a `GET` would have returned
-/// (RFC 9110 §9.3.2) — what a proxy or an object store answers with — and is
-/// kept, as Deno keeps it. Only a plain decimal is: anything else is dropped as
-/// before. A body the guest returned for a `HEAD` still sets the length when
-/// the guest named none.
-fn build_response(resp: HttpServerResponse, head: bool) -> Response<OutBody> {
-    let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
-    let mut builder = Response::builder().status(status);
-    let mut head_length: Option<hyper::header::HeaderValue> = None;
-    if let Some(map) = builder.headers_mut() {
-        map.reserve(resp.headers.len());
-        for (name, value) in resp.headers {
-            // Compared in place rather than through a lowercased copy: the
-            // guest's `Headers` already lowercased them, and an embedder's
-            // provider that did not is still matched.
-            if name.eq_ignore_ascii_case("content-length") {
-                if head
-                    && head_length.is_none()
-                    && !value.is_empty()
-                    && value.len() <= 20
-                    && value.bytes().all(|b| b.is_ascii_digit())
-                    && value.parse::<u64>().is_ok()
-                {
-                    head_length = hyper::header::HeaderValue::from_str(&value).ok();
-                }
-                continue;
-            }
-            if name.eq_ignore_ascii_case("transfer-encoding") {
-                continue;
-            }
-            // The value's bytes move into the header rather than being copied.
-            // Both are checked as `builder.header` checks them, and a pair that
-            // fails makes the answer a 500, as a failed builder did.
-            let (Ok(name), Ok(value)) = (
-                hyper::header::HeaderName::from_bytes(name.as_bytes()),
-                hyper::header::HeaderValue::from_maybe_shared(Bytes::from(value)),
-            ) else {
-                return status_only(StatusCode::INTERNAL_SERVER_ERROR);
-            };
-            map.append(name, value);
-        }
-        if let Some(length) = head_length {
-            map.insert(hyper::header::CONTENT_LENGTH, length);
-        }
-    }
-    let body: OutBody = match (resp.body, resp.trailers) {
-        (body, None) => match body {
-            HttpServerBody::Empty => buffered(Bytes::new()),
-            HttpServerBody::Bytes(b) => buffered(Bytes::from(b)),
-            HttpServerBody::Stream(s) => BodyExt::boxed_unsync(StreamBody::new(
-                s.map(|item| item.map(|chunk| Frame::data(Bytes::from(chunk)))),
-            )),
-        },
-        // With trailers the body is always a stream, even when it is one known
-        // chunk: a `Full` body has a size hint, which makes hyper frame HTTP/1.1
-        // with `Content-Length` — and a response with no chunked encoding has
-        // nowhere to put a trailer section.
-        (body, Some(trailers)) => {
-            let data = match body {
-                HttpServerBody::Empty => futures_util::stream::empty().boxed(),
-                HttpServerBody::Bytes(b) => {
-                    futures_util::stream::once(async move { Ok(Bytes::from(b)) }).boxed()
-                }
-                HttpServerBody::Stream(s) => s.map(|item| item.map(Bytes::from)).boxed(),
-            };
-            let tail = futures_util::stream::once(async move {
-                let mut map = hyper::HeaderMap::new();
-                for (name, value) in trailers.await {
-                    if let (Ok(name), Ok(value)) = (
-                        hyper::header::HeaderName::from_bytes(name.as_bytes()),
-                        hyper::header::HeaderValue::from_str(&value),
-                    ) {
-                        map.append(name, value);
-                    }
-                }
-                map
-            });
-            BodyExt::boxed_unsync(StreamBody::new(
-                data.map(|item| item.map(Frame::data))
-                    // An empty trailer map would still be a trailers frame, and
-                    // an empty `HEADERS` frame is not what "no trailers" looks
-                    // like on the wire.
-                    .chain(tail.filter_map(|map| async move {
-                        (!map.is_empty()).then(|| Ok(Frame::trailers(map)))
-                    })),
-            ))
-        }
-    };
-    builder
-        .body(body)
-        .unwrap_or_else(|_| status_only(StatusCode::INTERNAL_SERVER_ERROR))
-}
-
-/// A fully-buffered [`OutBody`] (`Infallible` widened to the shared error type).
-fn buffered(bytes: Bytes) -> OutBody {
-    Full::new(bytes)
-        .map_err(|never: Infallible| match never {})
-        .boxed_unsync()
-}
-
-fn status_only(status: StatusCode) -> Response<OutBody> {
-    Response::builder()
-        .status(status)
-        .body(buffered(Bytes::new()))
-        .expect("status-only response is always valid")
 }
 
 /// Serves one accepted connection to completion, honouring the drain signal.
@@ -653,7 +393,7 @@ async fn serve_connection<S>(
     origin: Arc<str>,
     peer: SocketAddr,
     tls: Negotiated,
-    mut drain_rx: watch::Receiver<bool>,
+    drain_rx: watch::Receiver<bool>,
     timeouts: HttpTimeouts,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -678,65 +418,9 @@ async fn serve_connection<S>(
         grace,
         min_rate: timeouts.body_min_rate,
     });
-    // The HTTP/1.1 path takes its own handles; the service below, HTTP/2's,
-    // takes the originals.
-    let tx_h1 = tx.clone();
-    let origin_h1 = origin.clone();
-    let peer_host_h1 = peer_host.clone();
-    let peer_certificate_h1 = peer_certificate.clone();
-    let service = service_fn(move |req: Request<Incoming>| {
-        let tx = tx.clone();
-        let origin = origin.clone();
-        let peer_host = peer_host.clone();
-        let peer_certificate = peer_certificate.clone();
-        async move {
-            // Taken before the request is consumed: `on` needs it whole, and
-            // the key is a header the guest never sees. `None` for anything that
-            // is not a WebSocket handshake, which is almost every request.
-            let mut req = req;
-            let head = req.method() == hyper::Method::HEAD;
-            let upgrade = take_upgrade(&mut req);
-            // A request naming something that is not an authority never reaches
-            // the guest: there is no URL to hand it that is both faithful to
-            // what was sent and safe to route on.
-            let Some(server_req) = to_server_request(
-                req,
-                &origin,
-                &peer_host,
-                peer_port,
-                peer_certificate,
-                body_limit,
-            ) else {
-                return Ok::<_, Infallible>(status_only(StatusCode::BAD_REQUEST));
-            };
-            let (rtx, rrx) = oneshot::channel();
-            let (dtx, drx) = oneshot::channel();
-            if tx.send((server_req, rtx, drx, upgrade)).await.is_err() {
-                // Server closed: the request channel is gone.
-                return Ok::<_, Infallible>(status_only(StatusCode::SERVICE_UNAVAILABLE));
-            }
-            match rrx.await {
-                Ok(resp) => {
-                    // Say "delivered" before building, so a handler awaiting the
-                    // disconnect signal learns the request completed. If this
-                    // future is instead dropped — which is what a vanished
-                    // client does to it — `dtx` drops unsent and the watcher
-                    // sees the disconnect.
-                    let _ = dtx.send(());
-                    Ok(build_response(resp, head))
-                }
-                // Guest dropped the request without responding.
-                Err(_) => {
-                    let _ = dtx.send(());
-                    Ok(status_only(StatusCode::INTERNAL_SERVER_ERROR))
-                }
-            }
-        }
-    });
-
     // The version is the client's choice, not the listener's (D42): ALPN on
     // TLS, otherwise the HTTP/2 connection preface (h2c by prior knowledge).
-    // HTTP/1.1 is ours (D217); HTTP/2 stays on hyper until phase 3.
+    // Both versions are ours (D217).
     let (h2, prefix, io) = match alpn.as_deref() {
         Some(b"h2") => (true, Vec::new(), io),
         Some(_) => (false, Vec::new(), io),
@@ -753,81 +437,45 @@ async fn serve_connection<S>(
             (h2, prefix, io)
         }
     };
-    if !h2 {
-        let body_limit = timeouts.body_read.map(|grace| BodyLimit {
-            grace,
-            min_rate: timeouts.body_min_rate,
-        });
-        let ctx = crate::h1_conn::ConnContext {
-            tx: tx_h1,
-            origin: origin_h1,
-            peer_host: peer_host_h1,
+    if h2 {
+        let ctx = crate::h2_conn::ConnContext {
+            tx,
+            origin,
+            peer_host,
             peer_port,
-            peer_certificate: peer_certificate_h1,
+            peer_certificate,
             drain_rx,
-            header_read: timeouts.header_read,
+            keep_alive: timeouts.h2_keep_alive,
             body_limit,
-            limits: es_runtime_http::h1::Limits {
-                max_head_bytes: MAX_H1_BUFFER,
-                max_fields: MAX_HEADERS,
-                ..es_runtime_http::h1::Limits::default()
+            config: es_runtime_http::h2::conn::Config {
+                max_header_list_size: MAX_H2_HEADER_LIST,
+                // Explicit rather than inherited: an HTTP/2 peer can open
+                // streams far faster than a single-threaded isolate answers
+                // them, and every open stream holds a queued `Pending` plus its
+                // body channel (D42's budget).
+                max_concurrent_streams: 256,
+                ..es_runtime_http::h2::conn::Config::default()
             },
         };
-        crate::h1_conn::serve(io, prefix, ctx).await;
+        crate::h2_conn::serve(io, prefix, ctx).await;
         return;
     }
-    let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
-    // A configured timeout with no timer panics in hyper, and a default one
-    // with no timer is silently dropped; the timer goes on first.
-    builder.timer(TokioTimer::new());
-    if let Some(interval) = timeouts.h2_keep_alive {
-        builder
-            .keep_alive_interval(interval)
-            .keep_alive_timeout(interval);
-    }
-    builder.max_header_list_size(MAX_H2_HEADER_LIST);
-    // Explicit rather than inherited: an HTTP/2 peer can open streams far faster
-    // than a single-threaded isolate answers them, and every open stream holds a
-    // queued `Pending` plus its body channel (D42's budget).
-    builder.max_concurrent_streams(256);
-    let conn = builder.serve_connection(
-        TokioIo::new(crate::prefixed::Prefixed::new(io, prefix)),
-        service,
-    );
-    tokio::pin!(conn);
-    // Race the connection against the drain signal. On shutdown,
-    // `graceful_shutdown` stops reading new requests but still finishes the one
-    // in flight and writes its response — the difference between draining and
-    // dropping. Awaiting the connection afterwards is what makes the response
-    // actually reach the socket.
-    let outcome = tokio::select! {
-        outcome = conn.as_mut() => outcome,
-        // Wrapped so the borrow `wait_for` hands back — a read guard — is
-        // dropped at the end of the statement, rather than living across the
-        // await below and making this task non-`Send`.
-        _ = async {
-            let _ = drain_rx.wait_for(|draining| *draining).await;
-        } => {
-            conn.as_mut().graceful_shutdown();
-            conn.await
-        }
+    let ctx = crate::h1_conn::ConnContext {
+        tx,
+        origin,
+        peer_host,
+        peer_port,
+        peer_certificate,
+        drain_rx,
+        header_read: timeouts.header_read,
+        body_limit,
+        limits: es_runtime_http::h1::Limits {
+            max_head_bytes: MAX_H1_BUFFER,
+            max_fields: MAX_HEADERS,
+            ..es_runtime_http::h1::Limits::default()
+        },
     };
-    // hyper reports a protocol error, an early EOF or a write failure here, and
-    // this is the only place it is ever visible: nothing above the connection
-    // has a channel to carry it. Discarding it is why a malformed-framing bug
-    // looks, from outside, exactly like a client that hung up.
-    if let Err(e) = outcome {
-        // Except a timeout, which is this server's own policy working (D43).
-        // The header-read deadline reaping an idle keep-alive connection is how
-        // a *healthy* connection ends once the client stops asking for
-        // anything; reporting it would put a line in the log for every
-        // well-behaved client, which is the noise that makes a debug filter
-        // unusable on a live server.
-        let by_policy = e.is_timeout();
-        if !by_policy {
-            tracing::debug!(target: "runtime::http", error = %e, "connection ended with an error");
-        }
-    }
+    crate::h1_conn::serve(io, prefix, ctx).await;
 }
 
 impl HttpServerProvider for SystemHttpServer {
@@ -1172,7 +820,7 @@ impl HttpServerProvider for SystemHttpServer {
         let in_flight = self.in_flight.clone();
         Box::pin(async move {
             let mut response = response;
-            let switching = response.status == StatusCode::SWITCHING_PROTOCOLS.as_u16();
+            let switching = response.status == 101;
             // Everything `respond` consumes, under one lock. The disconnect
             // watch goes too: it is entered for *every* request but otherwise
             // only taken by `request_disconnected`, which the guest reaches
@@ -1245,15 +893,7 @@ impl HttpServerProvider for SystemHttpServer {
                 code: ErrorCode::ConnectionReset,
                 message: format!("the connection was not upgraded: {e}"),
             };
-            match on {
-                Upgrade::Hyper(on) => {
-                    let upgraded = on.await.map_err(|e| not_upgraded(&e))?;
-                    // hyper speaks tokio's IO traits and the seam speaks
-                    // futures-io; `compat` is the bridge between them (D55).
-                    Ok(Box::new(TokioIo::new(upgraded).compat()) as UpgradedIo)
-                }
-                Upgrade::Raw(rx) => rx.await.map_err(|e| not_upgraded(&e)),
-            }
+            on.await.map_err(|e| not_upgraded(&e))
         })
     }
 
@@ -1314,66 +954,6 @@ mod tests {
     use es_runtime_providers::HttpServerTls;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
-
-    fn answer(headers: &[(&str, &str)], head: bool) -> Response<OutBody> {
-        build_response(
-            HttpServerResponse {
-                status: 201,
-                headers: headers
-                    .iter()
-                    .map(|(n, v)| (n.to_string(), v.to_string()))
-                    .collect(),
-                body: HttpServerBody::Bytes(b"hi".to_vec()),
-                trailers: None,
-            },
-            head,
-        )
-    }
-
-    #[test]
-    fn a_response_keeps_its_headers_in_order_with_repeats() {
-        let resp = answer(
-            &[
-                ("x-a", "1"),
-                ("set-cookie", "a=1"),
-                ("set-cookie", "b=2"),
-                ("X-B", "2"),
-            ],
-            false,
-        );
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let cookies: Vec<_> = resp.headers().get_all("set-cookie").iter().collect();
-        assert_eq!(cookies, ["a=1", "b=2"]);
-        assert_eq!(resp.headers()["x-a"], "1");
-        assert_eq!(resp.headers()["x-b"], "2");
-    }
-
-    #[test]
-    fn framing_headers_from_the_guest_are_not_sent_as_given() {
-        // Matched in any case: the body decides framing, not the guest.
-        let resp = answer(
-            &[("Transfer-Encoding", "chunked"), ("Content-Length", "99")],
-            false,
-        );
-        assert!(resp.headers().get("transfer-encoding").is_none());
-        assert!(resp.headers().get("content-length").is_none());
-        // A HEAD answer keeps a well-formed length, since it has no body to give one.
-        let head = answer(&[("content-length", "99")], true);
-        assert_eq!(head.headers()["content-length"], "99");
-    }
-
-    #[test]
-    fn a_header_hyper_would_refuse_makes_the_answer_a_500() {
-        for (name, value) in [("bad name", "v"), ("x-ok", "line\nbreak")] {
-            let resp = answer(&[("x-a", "1"), (name, value)], false);
-            assert_eq!(
-                resp.status(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "{name:?}: {value:?}"
-            );
-            assert!(resp.headers().get("x-a").is_none());
-        }
-    }
 
     /// An HTTP/2 client that opens with the connection preface (prior
     /// knowledge, h2c) — a mode no fetch client needs, so these server tests

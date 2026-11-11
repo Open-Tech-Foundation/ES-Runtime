@@ -184,7 +184,7 @@ that is what actually bounds a `ws` handshake — `ws` attaches to a `node:http`
 server. It answers `408` before closing, and its ~90s comes from a 60s
 `headersTimeout` polled on a 30s interval.
 
-Deno does not bound this at all, on the same hyper stack we use. Its `serve`
+Deno does not bound this at all. Its `serve`
 options carry `tcpBacklog` and `reusePort` but no connection cap, and Bun's
 carry `maxRequestBodySize` but likewise no cap; passing `maxConnections` to
 either is silently ignored, which is what the "no cap" result records. (We carry
@@ -246,8 +246,8 @@ takes the connection over.
 That crosses two provider seams, so it is joined in the ops layer rather than at
 either one: `HttpServerProvider::upgrade` surrenders the connection as a
 `futures-io` stream and `WebSocketProvider::adopt` takes it, and neither has to
-know the other exists. The ordering is the protocol's — hyper resolves the
-takeover only *after* the `101` is written, so the guest returns the response
+know the other exists. The ordering is the protocol's — the connection hands
+the socket over only *after* the `101` is written, so the guest returns the response
 first and the socket's id arrives second, which is why the connection is built
 over a promise.
 

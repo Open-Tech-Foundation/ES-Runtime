@@ -25,13 +25,16 @@ namespace) is unstable and may change between minor releases until the API freez
   stream or the connection; and the HTTP/2 connection state machine for both
   roles — streams, flow control both ways, settings, message validation
   (§8), and bounds on Rapid Reset (CVE-2023-44487), CONTINUATION, PING,
-  SETTINGS and empty-frame floods and oversized header lists. Not yet used by
-  the server or the client.
+  SETTINGS and empty-frame floods and oversized header lists, which now
+  serves `runtime:http`'s HTTP/2.
 
 ### Changed
 
-- **`runtime:http` serves HTTP/1.1 with its own connection code** (DECISIONS
-  D217) instead of hyper's; HTTP/2 still runs on hyper. Measured on the
+- **`runtime:http` serves HTTP/1.1 and HTTP/2 with its own connection code**
+  (DECISIONS D217) instead of hyper's. HTTP/2 passes h2spec (146 of 146 over
+  TLS; `scripts/h2spec.sh`), bounds Rapid Reset until the handler has let go
+  of a reset stream, and ties flow control to the handler at both ends; one
+  connection with 50 streams serves +28% req/s, 50 connections +16%. Measured on the
   hello-world server: user CPU per request 10.75 → 9.9 µs, +10% req/s, +12%
   through Hono, and +15% with 15 unread request headers; a faster head parser
   and a per-connection cache of the validated `Host` take a further ~0.8 µs
@@ -61,6 +64,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- An HTTP/2 request body whose connection was lost mid-upload ended, to the
+  handler, as if it were complete; it now fails, as on HTTP/1.1.
 - A `fetch` response body that breaks off mid-way now rejects with a
   `TypeError`, as the Fetch standard specifies, rather than a plain `Error`.
 - Microtasks queued by a timer callback now run before the next due timer

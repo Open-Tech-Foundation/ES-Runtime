@@ -8,8 +8,8 @@ description: Understand isolate handoff, client disconnects, graceful shutdown, 
 JavaScript runs on one thread, and connections do not. Everything above the
 socket is shaped by that.
 
-The connection's task parses a request — with ES-Runtime's own HTTP/1.1 code,
-or hyper on HTTP/2 — then hands the runtime a triple — the request, a one-shot channel to send the
+The connection's task parses a request — with ES-Runtime's own HTTP/1.1 or
+HTTP/2 code — then hands the runtime a triple — the request, a one-shot channel to send the
 response back on, and a half that reports whether the peer is still there — and
 awaits the response. The isolate drains that channel, runs the handler, and
 answers by id. The connection keeps feeding the request body while it waits.

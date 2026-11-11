@@ -38,7 +38,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use crate::body_deadline::{BodyDeadline, BodyLimit};
 use crate::prefixed::Prefixed;
-use crate::system_http::{Pending, PendingUpgrade, Upgrade, valid_authority};
+use crate::system_http::{Pending, PendingUpgrade, valid_authority};
 
 /// How many decoded body chunks may wait between the connection and the
 /// guest's stream. The guest pulls; the connection reads only as it does.
@@ -138,13 +138,7 @@ where
         let (upgrade_tx, upgrade) = match websocket {
             Some(accept) => {
                 let (utx, urx) = oneshot::channel();
-                (
-                    Some(utx),
-                    Some(PendingUpgrade {
-                        on: Upgrade::Raw(urx),
-                        accept,
-                    }),
-                )
+                (Some(utx), Some(PendingUpgrade { on: urx, accept }))
             }
             None => (None, None),
         };
@@ -589,7 +583,7 @@ async fn write_error<W: AsyncWrite + Unpin>(wr: &mut W, status: u16) -> std::io:
 }
 
 /// Today's IMF-fixdate, formatted at most once a second per thread.
-fn date() -> [u8; IMF_FIXDATE_LEN] {
+pub(crate) fn date() -> [u8; IMF_FIXDATE_LEN] {
     thread_local! {
         static CACHE: std::cell::Cell<(u64, [u8; IMF_FIXDATE_LEN])> =
             const { std::cell::Cell::new((u64::MAX, [0; IMF_FIXDATE_LEN])) };

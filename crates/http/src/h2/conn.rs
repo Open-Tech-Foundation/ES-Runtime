@@ -1107,6 +1107,11 @@ impl Connection {
         self.streams.remove(&stream);
     }
 
+    /// Sends a PING (a keep-alive probe); its ACK arrives as ordinary input.
+    pub fn ping(&mut self, data: [u8; 8]) {
+        encode_ping(&mut self.out, false, data);
+    }
+
     /// Begins a graceful shutdown: GOAWAY with the last stream seen; streams
     /// above it are refused, those below finish.
     pub fn go_away(&mut self, code: ErrorCode) {

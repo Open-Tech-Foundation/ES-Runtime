@@ -27,7 +27,7 @@ interval. Deno does not bound it at all, nor an idle keep-alive connection.
 
 The HTTP/2 rows are read off the wire from each server's `SETTINGS` frame, which
 is what it tells every client its limits are. Node and Bun advertise unlimited
-concurrent streams; the runtimes that cap are the two on hyper.
+concurrent streams; Deno and ES-Runtime cap them.
 
 None of this makes one runtime better than another — Node's 5s keep-alive is
 more aggressive than ours, and its 88s header bound is looser. It is here so

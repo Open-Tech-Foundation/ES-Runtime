@@ -107,13 +107,24 @@ override to escape it.
 
 ## Which code serves which version
 
-HTTP/1.1 is served by ES-Runtime's own parser and connection loop; HTTP/2, for
-now, by hyper. The HTTP/1.1 code reads each connection into one buffer, parses a
+Both versions are ES-Runtime's own. The HTTP/1.1 code reads each connection into one buffer, parses a
 head in place without copying it, and converts its headers only if the handler
 reads them. It is strict where parsers have come to disagree — CRLF line endings
 only, no folded lines, one `Host`, never both `Content-Length` and
 `Transfer-Encoding` — and is checked against llhttp's request cases and by
 fuzzing. Why, and what was rejected: [DECISIONS D217](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+HTTP/2 is a connection state machine that owns no socket, driven by one task
+per connection. Its flow control is tied to the handler at both ends: a request
+body's window is given back only as the handler reads it, so an upload is never
+more than a window ahead of it, and a streamed response is pulled from the
+handler only as the client's window lets it out. It bounds the attacks HTTP/2
+is known for — Rapid Reset (CVE-2023-44487), CONTINUATION and PING floods,
+oversized header lists — and is checked by h2spec (`scripts/h2spec.sh`) and by
+fuzzing. Rapid Reset is counted where it costs: a stream the client resets
+stays on the connection's budget until its handler has let go of it, so
+cancelling requests that finish never runs out, and resetting requests faster
+than the handler drops them ends the connection with `ENHANCE_YOUR_CALM`.
 
 What the switch from hyper measured, as user CPU per request on one core
 (`bench/cpu-per-request.sh`, interleaved runs):
