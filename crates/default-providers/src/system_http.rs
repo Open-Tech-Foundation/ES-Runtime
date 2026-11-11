@@ -38,9 +38,9 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerRequest,
-    HttpServerResponse, HttpTimeouts, PeerCertificate, ProviderError, SecureContext, SocketInfo,
-    UpgradedIo,
+    BoxFuture, HttpRequestHeaders, HttpServeOptions, HttpServerBody, HttpServerProvider,
+    HttpServerRequest, HttpServerResponse, HttpTimeouts, PeerCertificate, ProviderError,
+    SecureContext, SocketInfo, UpgradedIo,
 };
 use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -313,12 +313,16 @@ fn to_server_request(
     // is the listener's, and a client cannot talk this into claiming https:.
     let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
     let url = request_url(&req, scheme, authority)?;
-    let headers = req
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-    let incoming = req.into_body();
+    let (parts, incoming) = req.into_parts();
+    // Converted only if the guest reads them (D216): hyper's parsed map moves
+    // into the closure, and most handlers never ask.
+    let header_map = parts.headers;
+    let headers = HttpRequestHeaders::deferred(move || {
+        header_map
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect()
+    });
     let body = if incoming.is_end_stream() {
         HttpServerBody::Empty
     } else {
@@ -2125,12 +2129,12 @@ mod http2_tests {
         let (rid, req) = reqs.into_iter().next().expect("one request");
         assert_eq!(req.method, "PATCH");
         assert!(req.url.ends_with("/thing?q=1"), "{}", req.url);
+        let headers = req.headers.into_pairs();
         assert!(
-            req.headers
+            headers
                 .iter()
                 .any(|(k, v)| k == "x-request-note" && v == "from-client"),
-            "{:?}",
-            req.headers
+            "{headers:?}"
         );
         http.respond(
             rid,

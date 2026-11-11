@@ -337,18 +337,66 @@ function watchDisconnect(requestId) {
 //
 // `peerCertificate` is the client certificate the server verified (D201), or
 // null when it does not require one.
-function connectionInfo(host, port, peerCertificate) {
-  return {
-    remoteAddr: host ? { transport: "tcp", hostname: host, port } : null,
-    peerCertificate: peerCertificate ?? null,
-  };
+//
+// Both are read from the host on first access and kept (D216): most handlers
+// never look, and the host releases them once the response is sent. A class
+// with prototype getters rather than an object literal with getters: V8 builds
+// the literal on a slow path, ~400 ns against ~10 for an instance, once per
+// request.
+class ConnectionInfo {
+  #requestId;
+  #head;
+  #peer = null;
+  #remoteAddr;
+  constructor(requestId, head) {
+    this.#requestId = requestId;
+    this.#head = head;
+  }
+  #read() {
+    if (this.#peer === null) {
+      checkHead(this.#head);
+      this.#peer = ops.http_request_peer(this.#requestId);
+    }
+    return this.#peer;
+  }
+  get remoteAddr() {
+    if (this.#remoteAddr === undefined) {
+      const [host, port] = this.#read();
+      this.#remoteAddr = host ? { transport: "tcp", hostname: host, port } : null;
+    }
+    return this.#remoteAddr;
+  }
+  get peerCertificate() {
+    return this.#read()[2] ?? null;
+  }
+  toJSON() {
+    return { remoteAddr: this.remoteAddr, peerCertificate: this.peerCertificate };
+  }
+}
+
+const HEAD_RELEASED =
+  "request headers and peer are released once the response is sent; read them before the handler returns";
+
+// Throws when the response was handed over, so nothing is left to read. Said
+// here rather than by the host: by then a buffered request's id is released,
+// and the host can only call it foreign — which it is not.
+function checkHead(head) {
+  if (head.released) throw new TypeError(HEAD_RELEASED);
+}
+
+// The request's headers as [name, value] pairs, from the host (D216).
+function requestHeaders(requestId) {
+  const flat = ops.http_request_headers(requestId);
+  const pairs = [];
+  for (let i = 0; i + 1 < flat.length; i += 2) pairs.push([flat[i], flat[i + 1]]);
+  return pairs;
 }
 
 // Runs one request through the handler and writes the response back. Never
 // throws: a handler error or a non-Response return becomes a 500. `entry` is the
 // structured tuple from http_next_request: [requestId, method, url, hasBody,
-// headers, peerHost, peerPort] (headers as [name, value] pairs) — no
-// per-request JSON parse.
+// headers] — `headers` is the pairs when something already read them (a
+// trusted `traceparent`), otherwise null and fetched on first use.
 // Names what a handler returned, for the 500's report. Deliberately a shape,
 // not the value: a handler's return can hold anything, including secrets.
 function describeReturn(v) {
@@ -370,10 +418,13 @@ function describeReturn(v) {
 // entropy drawn for nobody. `runtime:http` deliberately does not *import*
 // `runtime:context` — that would switch the hook on for every server in the
 // runtime (DECISIONS.md D88).
-function inRequestScope(headers, trustTraceHeaders, method, url, run) {
+function inRequestScope(entry, trustTraceHeaders, method, url, run) {
   if (!globalThis.__ctx_enabled()) return run();
   const inner = () => inRequestSpan(method, url, run);
-  const trace = inboundTrace(headers, trustTraceHeaders);
+  // Only a trusted `traceparent` needs the headers now; they are kept in the
+  // entry so the handler's request does not fetch them a second time.
+  if (trustTraceHeaders) entry[4] = requestHeaders(entry[0]);
+  const trace = inboundTrace(entry[4], trustTraceHeaders);
   const scope = __internal.context.scope;
   // The program imported `runtime:context`, so it owns the mapping's shape —
   // `currentTask().kind` and the per-context values both come from there.
@@ -526,10 +577,9 @@ async function handleRequest(entry, handler, onError) {
   const method = entry[1];
   const url = entry[2];
   const hasBody = entry[3];
-  const headers = entry[4];
-  const peerHost = entry[5];
-  const peerPort = entry[6];
-  const peerCertificate = entry[7];
+  // Set the moment the response goes to the host, which drops the head then.
+  const head = { released: false };
+  const headers = entry[4] ?? (() => (checkHead(head), requestHeaders(requestId)));
   let response;
   let request;
   let cookies = null;
@@ -563,7 +613,7 @@ async function handleRequest(entry, handler, onError) {
       requestId,
       ServerRequest,
     );
-    response = await handler(request, connectionInfo(peerHost, peerPort, peerCertificate));
+    response = await handler(request, new ConnectionInfo(requestId, head));
     cookies = requestCookieMaps.get(request) ?? null;
     if (!(response instanceof Response)) {
       // A handler that returns something else has a bug, and coercing it with
@@ -627,6 +677,7 @@ async function handleRequest(entry, handler, onError) {
   // so the request lives until the pump ends. This mirrors where the host
   // releases the id, and the two must agree or one of them is wrong.
   if (stream === null) answered.done = true;
+  head.released = true;
   const args = [requestId, parts.status, out, streamId, trailerArg];
   // HTTP/1.1 sends only the trailer fields named in a `Trailer` header, so add
   // one when the names are known and the handler did not declare them itself.
@@ -757,22 +808,13 @@ class Server {
           const method = flat[i++];
           const url = flat[i++];
           const hasBody = flat[i++];
-          const peerHost = flat[i++];
-          const peerPort = flat[i++];
-          const peerCertificate = flat[i++];
-          const numHeaders = flat[i++];
-          
-          const headers = [];
-          for (let j = 0; j < numHeaders; j++) {
-            headers.push([flat[i++], flat[i++]]);
-          }
-          
+
           // Handle each concurrently, each in its own async-context scope so
           // that `currentTask().traceId` — and anything the program's own
           // contexts put there — belongs to this request and not to the accept
           // loop that dispatched it.
-          const entry = [requestId, method, url, hasBody, headers, peerHost, peerPort, peerCertificate];
-          inRequestScope(headers, trustTraceHeaders, method, url, () =>
+          const entry = [requestId, method, url, hasBody, null];
+          inRequestScope(entry, trustTraceHeaders, method, url, () =>
             handleRequest(entry, handler, onError),
           );
         }

@@ -7955,7 +7955,7 @@ mod tests {
         es_runtime_providers::HttpServerRequest {
             method: "GET".to_string(),
             url: "http://127.0.0.1:8443/who".to_string(),
-            headers: vec![],
+            headers: Vec::new().into(),
             body: es_runtime_providers::HttpServerBody::Empty,
             remote_address: remote_address.to_string(),
             remote_port,

@@ -2533,6 +2533,12 @@ const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim()
 On HTTP/2 every request multiplexed onto one connection reports the same peer,
 because they are one connection.
 
+**Read them before the handler returns.** The request's headers, `info.remoteAddr`
+and `info.peerCertificate` are fetched from the host the first time they are
+read, and the host releases them when the response is sent (D216). A value read
+before then stays readable; a *first* read after it — from a timer or a promise
+that outlives the response — throws a `TypeError`.
+
 `info.peerCertificate` is the client certificate the server verified when it
 was started with `requestCert: true` and `ca` (D201), and `null` otherwise:
 `{ subject: { CN?, O?, OU?, C?, ST?, L? }, subjectaltname, fingerprint256, raw,

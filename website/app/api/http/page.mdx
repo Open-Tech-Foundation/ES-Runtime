@@ -137,6 +137,11 @@ is not an identity until something says which hop to trust. It is delivered
 untouched, so a deployment that knows can resolve it itself. On HTTP/2 every
 stream of one connection reports the same peer.
 
+The request's headers, `remoteAddr` and `peerCertificate` are fetched from the
+host the first time they are read, and released when the response is sent. A
+value read before then stays readable; a **first** read after it — from a timer
+or a promise that outlives the response — throws a `TypeError`.
+
 ## Client certificates
 
 `requestCert: true` makes every connection present a client certificate that

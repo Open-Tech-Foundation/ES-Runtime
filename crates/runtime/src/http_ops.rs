@@ -27,6 +27,13 @@
 //! `http_response_body_close`. Push/close are id-scoped, so ungated like
 //! `http_respond`.
 //!
+//! **Request heads** (D216): `http_next_request` hands over only what routing
+//! needs — id, method, URL, whether there is a body. The headers and the peer
+//! stay here, keyed by request id, until the guest asks (`http_request_headers`,
+//! `http_request_peer`, both sync) or the response is handed to `http_respond`,
+//! which drops them. A first read after that is a `TypeError`: a released id is
+//! never reissued (D50), so it can only mean the guest read too late.
+//!
 //! A request body the handler never drained is dropped once its response can no
 //! longer echo it: on a buffered `http_respond` immediately, or at
 //! `http_response_body_close` for a streamed response (a streaming handler may
@@ -40,8 +47,9 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ByteStream, FileSystem, HttpServeOptions, HttpServerBody, HttpServerProvider,
-    HttpServerResponse, HttpServerTls, HttpTimeouts, ProviderError, SocketInfo,
+    ByteStream, FileSystem, HttpRequestHeaders, HttpServeOptions, HttpServerBody,
+    HttpServerProvider, HttpServerResponse, HttpServerTls, HttpTimeouts, PeerCertificate,
+    ProviderError, SocketInfo,
 };
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
@@ -55,6 +63,21 @@ use crate::handles::Handles;
 const RESPONSE_BODY_BUFFER: usize = 8;
 
 type BodyItem = std::result::Result<Vec<u8>, ProviderError>;
+
+/// What a request carried beyond what routing needs, held until the guest reads
+/// it or the response is handed over (D216).
+struct RequestHead {
+    /// Converted on the first read, then kept as pairs.
+    headers: Option<HttpRequestHeaders>,
+    pairs: Option<Vec<(String, String)>>,
+    remote_address: String,
+    remote_port: u16,
+    peer_certificate: Option<Arc<PeerCertificate>>,
+}
+
+/// Why a head read failed when the id is the agent's own but its head is gone.
+const HEAD_RELEASED: &str = "request headers and peer are released once the response is sent; \
+     read them before the handler returns";
 type Trailers = Vec<(String, String)>;
 
 /// Trailer name/value pairs from a flat `[name, value, …]` JS array.
@@ -77,6 +100,8 @@ pub(crate) fn install(
     // Inbound request-body streams, keyed by request id: `http_next_request`
     // inserts, `http_body_read` pulls chunks, response completion drops leftovers.
     let req_bodies: Rc<RefCell<HashMap<u64, ByteStream>>> = Rc::new(RefCell::new(HashMap::new()));
+    // Request heads, keyed by request id (D216; see module docs).
+    let req_heads: Rc<RefCell<HashMap<u64, RequestHead>>> = Rc::new(RefCell::new(HashMap::new()));
 
     // Streaming response bodies, keyed by body-stream id.
     // `http_response_body_new` creates the channel (storing both ends);
@@ -212,11 +237,13 @@ pub(crate) fn install(
 
     let h = http.clone();
     let bodies_for_next = req_bodies.clone();
+    let heads_for_next = req_heads.clone();
     let owned_servers = servers.clone();
     let owned_requests = requests.clone();
     engine.register_op(OpDecl::r#async("http_next_request", move |args| {
         let h = h.clone();
         let bodies = bodies_for_next.clone();
+        let heads = heads_for_next.clone();
         let owned_servers = owned_servers.clone();
         let owned_requests = owned_requests.clone();
         let id = arg_u64(&args, 0);
@@ -230,38 +257,75 @@ pub(crate) fn install(
                 return Ok(Value::Null); // server closed
             }
             // A flat array to avoid recursive v8::Array allocations.
-            // Format: [requestId, method, url, hasBody, peerHost, peerPort,
-            // peerCertificate, numHeaders, name1, val1, ...]
-            let mut flat = Vec::new();
+            // Format: [requestId, method, url, hasBody, ...] — what routing
+            // needs. The rest stays in `heads` until it is read (D216).
+            let mut flat = Vec::with_capacity(reqs.len() * 4);
+            let mut heads = heads.borrow_mut();
             for (rid, req) in reqs {
                 let has_body = !req.body.is_empty();
                 if has_body {
                     bodies.borrow_mut().insert(rid, into_stream(req.body));
                 }
+                heads.insert(
+                    rid,
+                    RequestHead {
+                        headers: Some(req.headers),
+                        pairs: None,
+                        remote_address: req.remote_address,
+                        remote_port: req.remote_port,
+                        peer_certificate: req.peer_certificate,
+                    },
+                );
                 flat.push(Value::Number(owned_requests.own(rid) as f64));
                 flat.push(Value::String(req.method));
                 flat.push(Value::String(req.url));
                 flat.push(Value::Bool(has_body));
-                // The socket peer, for the handler's second argument. Empty
-                // when the provider has no peer to report, which the prelude
-                // turns into a null `remoteAddr` rather than an address-shaped
-                // object full of blanks.
-                flat.push(Value::String(req.remote_address));
-                flat.push(Value::Number(req.remote_port as f64));
-                // The verified client certificate (D201), or null.
-                flat.push(
-                    req.peer_certificate
-                        .as_deref()
-                        .map_or(Value::Null, crate::net_ops::peer_certificate_value),
-                );
-                flat.push(Value::Number(req.headers.len() as f64));
-                for (n, v) in req.headers {
-                    flat.push(Value::String(n));
-                    flat.push(Value::String(v));
-                }
             }
             Ok(Value::Array(flat))
         })
+    }))?;
+
+    // ---- http_request_headers / http_request_peer (sync, D216) ---------------
+    // The headers as a flat [name, value, …] list, converted on the first read
+    // and kept for any later one.
+    let heads = req_heads.clone();
+    let owned = requests.clone();
+    engine.register_op(OpDecl::sync("http_request_headers", move |args| {
+        let rid = owned.check(arg_u64(&args, 0))?;
+        let mut heads = heads.borrow_mut();
+        let head = heads
+            .get_mut(&rid)
+            .ok_or_else(|| OpError::type_error(HEAD_RELEASED))?;
+        if head.pairs.is_none() {
+            head.pairs = Some(head.headers.take().unwrap_or_default().into_pairs());
+        }
+        let pairs = head.pairs.as_deref().unwrap_or_default();
+        let mut flat = Vec::with_capacity(pairs.len() * 2);
+        for (name, value) in pairs {
+            flat.push(Value::String(name.clone()));
+            flat.push(Value::String(value.clone()));
+        }
+        Ok(Value::Array(flat))
+    }))?;
+    // [host, port, certificate | null]. An empty host means the provider has no
+    // peer to report, which the prelude turns into a null `remoteAddr` rather
+    // than an address-shaped object full of blanks.
+    let heads = req_heads.clone();
+    let owned = requests.clone();
+    engine.register_op(OpDecl::sync("http_request_peer", move |args| {
+        let rid = owned.check(arg_u64(&args, 0))?;
+        let heads = heads.borrow();
+        let head = heads
+            .get(&rid)
+            .ok_or_else(|| OpError::type_error(HEAD_RELEASED))?;
+        Ok(Value::Array(vec![
+            Value::String(head.remote_address.clone()),
+            Value::Number(f64::from(head.remote_port)),
+            // The verified client certificate (D201), or null.
+            head.peer_certificate
+                .as_deref()
+                .map_or(Value::Null, crate::net_ops::peer_certificate_value),
+        ]))
     }))?;
 
     let bodies_for_read = req_bodies.clone();
@@ -330,6 +394,7 @@ pub(crate) fn install(
         let h = http.clone();
         let fs = fs.clone();
         let req_bodies = req_bodies.clone();
+        let req_heads = req_heads.clone();
         let resp_receivers = resp_receivers.clone();
         let resp_rids = resp_rids.clone();
         let resp_trailers = resp_trailers.clone();
@@ -356,6 +421,9 @@ pub(crate) fn install(
                 Ok(rid) => rid,
                 Err(e) => return Box::pin(std::future::ready(Err(e))),
             };
+            // The response is handed over, so the head goes with it (D216),
+            // streamed or not: a later first read is too late either way.
+            req_heads.borrow_mut().remove(&rid);
 
             let (buffered, file_path) = match (file_body, it.next()) {
                 (true, Some(Value::String(path))) => (None, Some(path)),

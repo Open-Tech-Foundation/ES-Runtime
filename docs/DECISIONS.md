@@ -4476,7 +4476,7 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 
 **Consequences:** a new project's manifest can name an older major than `npm install <pkg>` would install, until the maintainer retags. The version parser is ours (three numbers and a prerelease check), not a semver crate.
 
-### D216 — A served request stays in the host until it is answered; JS reads its headers on demand, and answers synchronously · *Proposed (2026-11-11)* · *amends D31, D50's request handoff*
+### D216 — A served request stays in the host until it is answered; JS reads its headers on demand, and answers synchronously · *Accepted (2026-11-11)* · *amends D31, D50's request handoff*
 
 **Context:** esrun serves the hello-world server at ~50k req/s; Deno and Bun serve ~92k and ~82k on the same box. `bench/cpu-per-request.sh` splits the cost: per request, esrun spends **11.9 µs** of user time and 7.9 µs in the kernel, Deno 4.05 + 6.75, Bun 4.65 + 7.40. The kernel share is the same for all three (one `recvfrom` and one `writev` per request; ~29 requests per `epoll_wait`, so the batched accept works). The gap is entirely our own code, and Deno uses the same hyper we do.
 
@@ -4488,7 +4488,7 @@ A user-time profile (`perf record -e cycles:u -g`, frame-pointer `profiling` bui
 
 Deno (`ext/http/http_next.rs`, `00_serve.ts`) keeps the request in a host record and reads method, URL, headers and peer address by op only when JS asks; the response is set by synchronous fast ops (`op_http_set_response_body_text` and friends). The record is released when the response is handed over, and a header read after that throws `TypeError: Request closed`.
 
-**Decision (maintainer sign-off pending):**
+**Decision (maintainer, 2026-11-11):**
 - **The request stays in the host.** The provider hands over hyper's parsed head (`http::request::Parts`) rather than copied strings; the host keeps it per request id until the response is handed over (D50's ownership rules unchanged).
 - **The handoff carries what routing needs, and nothing else.** Per request: id, method, URL, whether there is a body. Headers, the peer address and the client certificate are read by op on first access and cached in the JS object, so a second read costs nothing.
 - **Headers are released with the response.** A header, peer-address or certificate read that first happens after the response was handed over throws `TypeError` naming the reason ("request headers are released once the response is sent; read them before returning"), as Deno does. Anything read before that stays readable.
@@ -4501,5 +4501,11 @@ Deno (`ext/http/http_next.rs`, `00_serve.ts`) keeps the request in a host record
 - **Releasing the record when the `Request` is collected** (`FinalizationRegistry`). Host memory would be held until a GC happens to run, the same reason D18's URL cache rejected handles.
 - **Keeping unread headers after the response** in case a detached continuation reads them. It holds every request's headers for as long as a reference might exist, to serve a read that is almost always a bug.
 - **Turning timeouts off, or a multi-threaded server.** The first trades D43's defence for throughput; the second contradicts D4.
+
+**Outcome (2026-11-11, first step):** the request head is held and read on demand. Interleaved against the previous build on `bench/cpu-per-request.sh`: user time per request 12.7 → 11.3 µs on the hello-world server, 13.0 → 12.0 through Hono (+4–6% req/s). Two findings changed the plan:
+- **An object literal with getters costs ~400 ns to create in V8**, against ~10 ns for a class instance with prototype getters. The first version of the lazy `info` used one and erased the whole saving; it is a class, with `toJSON()` so it still serializes with both fields.
+- **A late read is reported by the JS side, not the host.** A buffered request's id is released when its response is sent (D50), so the host can only call a later read *foreign*, which is untrue and alarming. The handler's wrapper knows when it handed the response over and throws the `TypeError` itself; the host's own refusal remains for an id the agent never had.
+
+The synchronous answer is **not done yet**: the respond op is already fire-and-forget and settles on its first poll, so what is left is one promise per response, ~1.5% of user time on the profile. The ≤ 7 µs target is not met; what remains is spread thinly (no function above 3.5% self time) across hyper's dispatch, the connection wrapper, tokio and the handler's JS, and is the next step.
 
 **Consequences:** a handler that reads a header in a continuation after it has returned its response now gets a `TypeError` instead of the value; reading before returning, including in middleware that runs after `await next()`, is unaffected. The provider trait's request type changes shape (`HttpServerRequest.headers`), which every embedder's HTTP provider implements. The op-boundary work (typed ops, V8 fast calls) is a separate decision: on this profile op calls are ~11% of user time, less than the copies this entry removes.

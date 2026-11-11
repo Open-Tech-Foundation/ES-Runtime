@@ -619,7 +619,10 @@
     }
     #ensureHeaders() {
       if (this.#headers === null) {
-        this.#headers = new Headers(this.#rawHeaders ?? undefined);
+        const raw = this.#rawHeaders;
+        // A thunk that throws (the headers were already released) leaves both
+        // fields as they were, so every later read throws the same way.
+        this.#headers = new Headers((typeof raw === "function" ? raw() : raw) ?? undefined);
         this.#rawHeaders = null;
       }
     }
@@ -1105,6 +1108,9 @@
   // read it off an object a handler was given.
   const serverRequestIds = new WeakMap();
   Object.defineProperty(globalThis, "__serverRequest", {
+    // `init.headers` may be a function here, and only here: the host keeps a
+    // served request's headers until they are read (D216), so the function
+    // fetches them on the first read of `request.headers`.
     value: (url, init, signalThunk, requestId, RequestClass = Request) => {
       const request = new RequestClass(url, {
         ...init,

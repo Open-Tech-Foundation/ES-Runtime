@@ -2211,6 +2211,63 @@ impl HttpServerBody {
     }
 }
 
+/// A request's header fields, as name/value pairs in arrival order.
+///
+/// A provider may hand them over already converted
+/// ([`from_pairs`](Self::from_pairs)) or as a conversion to run later
+/// ([`deferred`](Self::deferred)). The runtime runs it only when the guest
+/// first reads the request's headers, so a handler that reads none never pays
+/// for copying them (DECISIONS D216).
+pub struct HttpRequestHeaders(RequestHeaders);
+
+enum RequestHeaders {
+    Pairs(Vec<(String, String)>),
+    Deferred(Box<dyn FnOnce() -> Vec<(String, String)> + Send>),
+}
+
+impl HttpRequestHeaders {
+    /// Headers already converted to pairs.
+    pub fn from_pairs(pairs: Vec<(String, String)>) -> Self {
+        HttpRequestHeaders(RequestHeaders::Pairs(pairs))
+    }
+
+    /// Headers converted by `convert` when they are first asked for.
+    pub fn deferred(convert: impl FnOnce() -> Vec<(String, String)> + Send + 'static) -> Self {
+        HttpRequestHeaders(RequestHeaders::Deferred(Box::new(convert)))
+    }
+
+    /// The pairs, converting them first if that was deferred.
+    pub fn into_pairs(self) -> Vec<(String, String)> {
+        match self.0 {
+            RequestHeaders::Pairs(pairs) => pairs,
+            RequestHeaders::Deferred(convert) => convert(),
+        }
+    }
+}
+
+impl Default for HttpRequestHeaders {
+    fn default() -> Self {
+        HttpRequestHeaders::from_pairs(Vec::new())
+    }
+}
+
+impl From<Vec<(String, String)>> for HttpRequestHeaders {
+    fn from(pairs: Vec<(String, String)>) -> Self {
+        HttpRequestHeaders::from_pairs(pairs)
+    }
+}
+
+impl std::fmt::Debug for HttpRequestHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            RequestHeaders::Pairs(pairs) => {
+                f.debug_tuple("HttpRequestHeaders").field(pairs).finish()
+            }
+            RequestHeaders::Deferred(_) => f.write_str("HttpRequestHeaders(<deferred>)"),
+        }
+    }
+}
+
 /// An inbound HTTP request delivered to an [`HttpServerProvider`] consumer.
 ///
 /// The body arrives as an [`HttpServerBody`] — a provider should hand a
@@ -2224,8 +2281,8 @@ pub struct HttpServerRequest {
     pub method: String,
     /// The absolute request URL.
     pub url: String,
-    /// Request header name/value pairs, in order.
-    pub headers: Vec<(String, String)>,
+    /// Request header name/value pairs, in order, converted on first read.
+    pub headers: HttpRequestHeaders,
     /// The request body.
     pub body: HttpServerBody,
     /// The peer this request arrived from — the address of the other end of the
@@ -2828,6 +2885,37 @@ pub trait EmbeddedDb: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_headers_convert_only_when_asked() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let headers = super::HttpRequestHeaders::deferred(move || {
+            flag.store(true, Ordering::SeqCst);
+            vec![("host".into(), "a.test".into())]
+        });
+        assert!(!ran.load(Ordering::SeqCst), "converted before it was read");
+        assert_eq!(
+            headers.into_pairs(),
+            [("host".to_string(), "a.test".to_string())]
+        );
+        assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn request_headers_from_pairs_keep_their_order() {
+        let pairs = vec![
+            ("b".to_string(), "1".to_string()),
+            ("a".to_string(), "2".to_string()),
+        ];
+        assert_eq!(
+            super::HttpRequestHeaders::from(pairs.clone()).into_pairs(),
+            pairs
+        );
+        assert!(super::HttpRequestHeaders::default().into_pairs().is_empty());
+    }
+
     use super::*;
 
     // A trivial in-test implementation proves the traits are object-safe and

@@ -23,6 +23,17 @@ namespace) is unstable and may change between minor releases until the API freez
 - Every host op call is about 10% cheaper: the op's name was copied on each call
   for a diagnostics span even when nothing was subscribed. It is now copied only
   when a span is recorded.
+- **`runtime:http` reads a request's headers and peer on demand** (DECISIONS
+  D216): they stay in the host until the handler first reads them, so a handler
+  that reads none pays nothing for them — about 10% less CPU per request on a
+  hello-world server and 8% through Hono. The host releases them when the
+  response is sent: a value read before then stays readable, while a *first*
+  read of `request.headers`, `info.remoteAddr` or `info.peerCertificate` after
+  it throws a `TypeError`. `info` is now an object with getters on its
+  prototype; `JSON.stringify(info)` still gives both fields.
+- **Embedders:** `HttpServerRequest.headers` is now an `HttpRequestHeaders`
+  (`es-runtime-providers`), built with `from_pairs(..)` / `.into()` from the
+  old `Vec<(String, String)>`, or with `deferred(..)` to convert only when read.
 - `crypto.randomUUID()` is about 4× faster: one draw from the entropy source
   serves 128 UUIDs, as in Node, instead of one op call and one `getrandom`
   syscall per UUID. The pool is filled on first use, never in the startup
