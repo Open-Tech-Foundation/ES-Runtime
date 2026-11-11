@@ -848,10 +848,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_proxy_is_named_without_its_credentials() {
-        // Bound but never listening, and held for the test: a connect is
-        // refused, and no test running beside this one can be handed the port
-        // (a port bound and dropped can be, and then this "unreachable" proxy
-        // is somebody else's test proxy).
+        // Bound but never listening, and held for the test, so no test running
+        // beside this one can be handed the port (a port bound and dropped can
+        // be, and then this "unreachable" proxy is somebody else's test proxy).
+        // What the connect gets is the OS's answer: Linux refuses it, and the
+        // macOS runner reports a timeout. Either is a proxy that cannot be
+        // reached, which is what this test is about.
         let reserved = tokio::net::TcpSocket::new_v4().unwrap();
         reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let port = reserved.local_addr().unwrap().port();
@@ -859,7 +861,15 @@ mod tests {
         let Err(error) = server.tunnel(&plain_tls(), "example.org", 443).await else {
             panic!("an unreachable proxy tunnelled");
         };
-        assert_eq!(error.code, ErrorCode::ConnectionRefused);
+        assert!(
+            matches!(
+                error.code,
+                ErrorCode::ConnectionRefused | ErrorCode::TimedOut
+            ),
+            "{:?}: {}",
+            error.code,
+            error.message
+        );
         assert!(
             error.message.contains(&format!("127.0.0.1:{port}")),
             "{}",
