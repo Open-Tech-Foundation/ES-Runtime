@@ -166,6 +166,9 @@ struct Stream {
     pending: bool,
     /// A `1xx` arrived (client): the final response is still to come.
     interim: bool,
+    /// The request was `HEAD` (client): its response has no content,
+    /// whatever `content-length` it states (RFC 9110 §9.3.2).
+    head: bool,
 }
 
 /// A field block being assembled across CONTINUATION frames.
@@ -195,6 +198,8 @@ pub struct Connection {
     peer_max_frame_size: u32,
     peer_initial_window: i64,
     peer_max_streams: u32,
+    /// The peer's first SETTINGS has arrived: its limits are known.
+    settings_received: bool,
     // Flow control on the connection itself.
     send_window: i64,
     recv_window: i64,
@@ -244,6 +249,7 @@ impl Connection {
             peer_max_frame_size: DEFAULT_MAX_FRAME_SIZE,
             peer_initial_window: DEFAULT_WINDOW,
             peer_max_streams: u32::MAX,
+            settings_received: false,
             send_window: DEFAULT_WINDOW,
             recv_window: DEFAULT_WINDOW,
             recv_released: 0,
@@ -514,6 +520,7 @@ impl Connection {
                 | Setting::EnableConnectProtocol(_) => {}
             }
         }
+        self.settings_received = true;
         encode_settings_ack(&mut self.out);
         Ok(())
     }
@@ -676,6 +683,7 @@ impl Connection {
             data_received: 0,
             pending: true,
             interim: false,
+            head: false,
         };
         if too_large {
             // §8.2.3 suggests 431; the stream stays ours to answer.
@@ -738,6 +746,13 @@ impl Connection {
         }
         let length = content_length(stream, &fields)?;
         let s = self.streams.get_mut(&stream).expect("checked");
+        // A response with no content may still state the length a GET or a
+        // 200 would have had (RFC 9110 §8.6): it frames nothing here.
+        let length = if s.head || status == 204 || status == 304 {
+            None
+        } else {
+            length
+        };
         s.headers_received = true;
         s.interim = interim;
         if !interim {
@@ -936,6 +951,8 @@ impl Connection {
                 "the server's stream limit is reached",
             ));
         }
+        let fields: Vec<(&[u8], &[u8])> = fields.into_iter().collect();
+        let head = fields.iter().any(|&(n, v)| n == b":method" && v == b"HEAD");
         let stream = self.next_local_stream;
         self.next_local_stream += 2;
         self.streams.insert(
@@ -951,6 +968,7 @@ impl Connection {
                 data_received: 0,
                 pending: true,
                 interim: false,
+                head,
             },
         );
         let mut block = Vec::new();
@@ -1105,6 +1123,19 @@ impl Connection {
     pub fn reset(&mut self, stream: u32, code: ErrorCode) {
         encode_rst_stream(&mut self.out, stream, code);
         self.streams.remove(&stream);
+    }
+
+    /// Whether the peer's first SETTINGS has arrived. A client waits for it
+    /// before it counts on a connection's capacity.
+    #[must_use]
+    pub fn peer_settings_received(&self) -> bool {
+        self.settings_received
+    }
+
+    /// The streams the peer allows open at once (`u32::MAX` until it says).
+    #[must_use]
+    pub fn peer_max_concurrent_streams(&self) -> u32 {
+        self.peer_max_streams
     }
 
     /// Sends a PING (a keep-alive probe); its ACK arrives as ordinary input.

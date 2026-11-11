@@ -1,7 +1,16 @@
-//! The HTTP client's transport (DECISIONS D217, phase 2): the connection
-//! pool, and HTTP/1.1 spoken with `es-runtime-http`'s client codec. A
-//! connection whose TLS handshake chose `h2` is handed to hyper's HTTP/2
-//! client until phase 3.
+//! The HTTP client's transport (DECISIONS D217): the connection pool, which
+//! picks the protocol and the connection for each request, and HTTP/1.1
+//! spoken with `es-runtime-http`'s client codec. HTTP/2 is
+//! [`crate::h2_client`].
+//!
+//! The protocol is the server's choice, by ALPN, and the pool remembers it per
+//! origin. A request to an origin that is HTTP/2 — or not yet known — waits
+//! for a connect already in flight to it rather than starting its own, and
+//! shares that connection if it negotiated `h2`; only an origin known to be
+//! HTTP/1.1, where concurrency *is* more connections, connects in parallel at
+//! once. An HTTP/2 connection is used while it has a stream free under the
+//! server's `SETTINGS_MAX_CONCURRENT_STREAMS`; when every one is full, the
+//! next request opens another.
 //!
 //! What [`HttpClient`](crate::http_client::HttpClient) decides — redirects,
 //! decoding, the headers it adds — stays there; this module only carries one
@@ -34,9 +43,10 @@ use hyper::body::Frame;
 use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::{Method, Response, StatusCode, Version};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
-use crate::http_client::{Body, Conn, RequestBody};
+use crate::h2_client::{H2Conn, Reservation};
+use crate::http_client::{Body, Conn};
 
 /// The error type a response body reports.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -75,10 +85,59 @@ struct Idle {
     since: Instant,
 }
 
+/// What an origin's server chose, once a connection to it has said.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Learned {
+    H1,
+    H2,
+}
+
 #[derive(Default)]
 struct PoolInner {
     h1: HashMap<Origin, Vec<Idle>>,
-    h2: HashMap<Origin, hyper::client::conn::http2::SendRequest<RequestBody>>,
+    h2: HashMap<Origin, Vec<H2Conn>>,
+    learned: HashMap<Origin, Learned>,
+    /// A connect in flight per origin: its id, and a watch that ends when it
+    /// does. Requests that would share its outcome wait on it.
+    connecting: HashMap<Origin, (u64, watch::Receiver<()>)>,
+    next_ticket: u64,
+}
+
+/// What a request that needs a new connection does.
+enum Connect {
+    /// Connect; the ticket tells others waiting on this origin when it ends.
+    Go(Ticket),
+    /// Wait for the connect in flight, then look again.
+    Wait(watch::Receiver<()>),
+}
+
+/// The right to connect to an origin others may be waiting on. Dropped —
+/// connected, failed or abandoned — it wakes them.
+struct Ticket {
+    pool: Pool,
+    origin: Origin,
+    id: u64,
+    _done: Option<watch::Sender<()>>,
+}
+
+impl Ticket {
+    fn learned(&self, protocol: Learned) {
+        let mut inner = self.pool.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.learned.insert(self.origin.clone(), protocol);
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        let mut inner = self.pool.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner
+            .connecting
+            .get(&self.origin)
+            .is_some_and(|(id, _)| *id == self.id)
+        {
+            inner.connecting.remove(&self.origin);
+        }
+    }
 }
 
 /// The pool, shared by every clone of a client.
@@ -111,21 +170,44 @@ impl Pool {
         }
     }
 
-    fn h2(&self, origin: &Origin) -> Option<hyper::client::conn::http2::SendRequest<RequestBody>> {
+    /// A free stream on an HTTP/2 connection to `origin`, if one has room.
+    /// Closed connections are forgotten on the way.
+    fn reserve_h2(&self, origin: &Origin) -> Option<Reservation> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match inner.h2.get(origin) {
-            Some(sender) if !sender.is_closed() => Some(sender.clone()),
-            Some(_) => {
-                inner.h2.remove(origin);
-                None
-            }
-            None => None,
-        }
+        let conns = inner.h2.get_mut(origin)?;
+        conns.retain(|c| !c.is_closed());
+        conns.iter().find_map(H2Conn::try_reserve)
     }
 
-    fn put_h2(&self, origin: Origin, sender: hyper::client::conn::http2::SendRequest<RequestBody>) {
+    fn put_h2(&self, origin: Origin, conn: H2Conn) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.h2.insert(origin, sender);
+        inner.h2.entry(origin).or_default().push(conn);
+    }
+
+    /// Whether this request connects now or waits for a connect in flight.
+    /// Only a secure origin can turn out to be HTTP/2, so only there is a
+    /// connect worth sharing; and one known to be HTTP/1.1 never waits.
+    fn begin_connect(&self, origin: &Origin) -> Connect {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let may_share = origin.secure && inner.learned.get(origin) != Some(&Learned::H1);
+        if may_share && let Some((_, done)) = inner.connecting.get(origin) {
+            return Connect::Wait(done.clone());
+        }
+        inner.next_ticket += 1;
+        let id = inner.next_ticket;
+        let done = if may_share {
+            let (tx, rx) = watch::channel(());
+            inner.connecting.insert(origin.clone(), (id, rx));
+            Some(tx)
+        } else {
+            None
+        };
+        Connect::Go(Ticket {
+            pool: self.clone(),
+            origin: origin.clone(),
+            id,
+            _done: done,
+        })
     }
 }
 
@@ -175,8 +257,11 @@ pub(crate) struct Exchange<'a> {
     pub(crate) headers: &'a HeaderMap,
 }
 
-/// Sends a request over HTTP/1.1 on a pooled or new connection, retrying once
-/// when a reused connection turns out to be gone.
+/// Sends a request to `origin` on whichever connection the pool picks — a
+/// free HTTP/2 stream, an idle HTTP/1.1 connection, or a new connection —
+/// retrying once when that is known to be safe: on HTTP/2 when the server did
+/// not process the request (RFC 9113 §8.7), on a reused HTTP/1.1 connection
+/// when it closed before any response and the method is idempotent.
 pub(crate) async fn send<F, Fut>(
     pool: &Pool,
     origin: &Origin,
@@ -188,35 +273,92 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<Conn, ProviderError>>,
 {
-    if let Some(sender) = pool.h2(origin) {
-        return send_h2(sender, &exchange, body).await;
-    }
     let mut body = body;
-    for attempt in 0..2 {
-        let (conn, reused) = match pool.take_h1(origin) {
-            Some(conn) if attempt == 0 => (conn, true),
-            _ => (connect().await?, false),
+    let mut retried = false;
+    loop {
+        // What is sent again if this attempt may be retried.
+        let replay = replay(&body);
+        let outcome = if let Some(stream) = pool.reserve_h2(origin) {
+            stream
+                .send(&exchange, origin.secure, body)
+                .await
+                .map_err(|f| (f.error, f.retry))
+        } else if let Some(conn) = pool.take_h1(origin) {
+            exchange_h1(pool, origin, conn, &exchange, body)
+                .await
+                .map_err(|f| {
+                    let retry = f.before_response && idempotent(exchange.method);
+                    (f.error, retry)
+                })
+        } else {
+            match pool.begin_connect(origin) {
+                Connect::Wait(mut done) => {
+                    // Ends when the connect in flight does; then look again.
+                    let _ = done.changed().await;
+                    continue;
+                }
+                Connect::Go(ticket) => {
+                    let conn = connect().await?;
+                    if conn.is_h2() {
+                        let h2 = H2Conn::start(conn).await?;
+                        ticket.learned(Learned::H2);
+                        // This request's stream is taken before the others
+                        // waiting are woken, so they see what is left.
+                        let stream = h2.try_reserve();
+                        pool.put_h2(origin.clone(), h2);
+                        drop(ticket);
+                        match stream {
+                            Some(stream) => stream
+                                .send(&exchange, origin.secure, body)
+                                .await
+                                .map_err(|f| (f.error, f.retry)),
+                            // Going away before any stream (a server
+                            // restarting sends GOAWAY with its SETTINGS), or
+                            // allowing none: nothing was sent, so once more
+                            // on a fresh connection.
+                            None => Err((
+                                ProviderError::Coded {
+                                    code: ErrorCode::ConnectionReset,
+                                    message: "request failed: the server took no request on \
+                                              its connection"
+                                        .to_string(),
+                                },
+                                true,
+                            )),
+                        }
+                    } else {
+                        ticket.learned(Learned::H1);
+                        drop(ticket);
+                        // A fresh connection: a failure on it is not the
+                        // stale-connection case, and is not retried.
+                        exchange_h1(pool, origin, conn, &exchange, body)
+                            .await
+                            .map_err(|f| (f.error, false))
+                    }
+                }
+            }
         };
-        if conn.is_h2() {
-            let sender = handshake_h2(conn).await?;
-            pool.put_h2(origin.clone(), sender.clone());
-            return send_h2(sender, &exchange, body).await;
-        }
-        let replay = match &body {
-            Body::Empty => Some(Body::Empty),
-            Body::Bytes(b) => Some(Body::Bytes(b.clone())),
-            Body::Stream(_) => None,
-        };
-        match exchange_h1(pool, origin, conn, &exchange, body).await {
+        match outcome {
             Ok(response) => return Ok(response),
-            Err(f) if reused && f.before_response && idempotent(exchange.method) => match replay {
-                Some(again) => body = again,
-                None => return Err(f.error),
+            Err((error, true)) if !retried => match replay {
+                Some(again) => {
+                    retried = true;
+                    body = again;
+                }
+                None => return Err(error),
             },
-            Err(f) => return Err(f.error),
+            Err((error, _)) => return Err(error),
         }
     }
-    unreachable!("the second attempt always uses a fresh connection and returns")
+}
+
+/// A copy of `body` to send again, unless it is a stream (read once).
+fn replay(body: &Body) -> Option<Body> {
+    match body {
+        Body::Empty => Some(Body::Empty),
+        Body::Bytes(b) => Some(Body::Bytes(b.clone())),
+        Body::Stream(_) => None,
+    }
 }
 
 /// RFC 9110 §9.2.2: a request that may be repeated with the same effect.
@@ -225,56 +367,6 @@ fn idempotent(method: &Method) -> bool {
         *method,
         Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE | Method::PUT | Method::DELETE
     )
-}
-
-async fn handshake_h2(
-    conn: Conn,
-) -> Result<hyper::client::conn::http2::SendRequest<RequestBody>, ProviderError> {
-    let (sender, connection) =
-        hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-            .timer(hyper_util::rt::TokioTimer::new())
-            .handshake(hyper_util::rt::TokioIo::new(conn))
-            .await
-            .map_err(|e| crate::http_client::classify_hyper(&e))?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    Ok(sender)
-}
-
-async fn send_h2(
-    mut sender: hyper::client::conn::http2::SendRequest<RequestBody>,
-    exchange: &Exchange<'_>,
-    body: Body,
-) -> Result<Response<ResponseStream>, ProviderError> {
-    let uri: hyper::Uri = format!(
-        "{}://{}{}",
-        "https",
-        exchange.host,
-        if exchange.target.starts_with('/') {
-            exchange.target
-        } else {
-            "/"
-        }
-    )
-    .parse()
-    .map_err(|_| ProviderError::Other("the URL cannot be requested".to_string()))?;
-    let mut request = hyper::Request::builder()
-        .method(exchange.method.clone())
-        .uri(uri)
-        .version(Version::HTTP_2)
-        .body(crate::http_client::request_body(body))
-        .map_err(|e| ProviderError::Other(format!("request: {e}")))?;
-    *request.headers_mut() = exchange.headers.clone();
-    sender
-        .ready()
-        .await
-        .map_err(|e| crate::http_client::classify_hyper(&e))?;
-    let response = sender
-        .send_request(request)
-        .await
-        .map_err(|e| crate::http_client::classify_hyper(&e))?;
-    Ok(response.map(|b| b.map_err(|e| Box::new(e) as BoxError).boxed_unsync()))
 }
 
 /// The framing a request body goes out with. A method whose request usually

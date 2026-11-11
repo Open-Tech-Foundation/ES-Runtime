@@ -48,6 +48,15 @@ namespace) is unstable and may change between minor releases until the API freez
   idempotent method. DNS, TCP and Happy Eyeballs are now the runtime's own too
   (the system resolver, as before, and the same 300 ms family fallback), so
   hyper-util's client pool and connector no longer ship.
+- **`fetch` speaks HTTP/2 with the same code as the server** (DECISIONS D217,
+  phase 3) instead of hyper's, and with it hyper's HTTP/2, `hyper-util` and
+  the `h2` crate leave the shipped binary (seven crates). Concurrent first
+  requests to an HTTPS origin now wait for the one connection in flight and
+  share it when it negotiates HTTP/2 — a burst of 40 made 40 connections, now
+  one — and the server's `SETTINGS_MAX_CONCURRENT_STREAMS` is kept, a further
+  connection opening once every one is full. A request the server never
+  processed (`REFUSED_STREAM`, or above a GOAWAY's last stream) is sent once
+  more on a fresh connection, whatever its method (RFC 9113 §8.7).
 - The `WebSocket` client's opening handshake is the runtime's own (RFC 6455
   §4.1, on the same HTTP/1.1 codec): the `101` must carry `Upgrade: websocket`,
   `Connection: upgrade`, the accept value for the key sent, and only a

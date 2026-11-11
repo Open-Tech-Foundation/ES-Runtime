@@ -15,10 +15,19 @@ For signatures, see the [Web APIs reference](/docs/globals).
 
 ## Whose code carries the request
 
-`fetch` runs on the runtime's own HTTP client. HTTP/1.1 and the connection pool
-are ES-Runtime's own — the same parser and framing code as the server, checked
-against llhttp's response cases and by fuzzing — and HTTP/2, for now, is
-hyper's, chosen by ALPN. Names resolve through the system resolver, so the
+`fetch` runs on the runtime's own HTTP client, with the same HTTP/1.1 and
+HTTP/2 code as the server — checked against llhttp's response cases, h2spec
+and by fuzzing. HTTP/2 is chosen by ALPN: an `https:` connection offers `h2`
+first, and the server decides. The pool remembers each origin's answer.
+Concurrent requests to an origin that is HTTP/2, or not yet known, wait for
+the one connection in flight and share it; an origin known to be HTTP/1.1
+connects in parallel, because there more connections *is* the concurrency. An
+HTTP/2 connection carries no more streams at once than the server's
+`SETTINGS_MAX_CONCURRENT_STREAMS`, and another opens once each is full. A
+request the server never processed — refused, or above the last stream a
+GOAWAY covered — is sent once more on a fresh connection, whatever its
+method; any other failure is retried only on a reused HTTP/1.1 connection,
+for an idempotent method. Plain `http:` is HTTP/1.1 only. Names resolve through the system resolver, so the
 hosts file applies, and with addresses of both families the second is raced
 against the first after 300 ms (Happy Eyeballs). TLS is rustls over the [process trust store](/docs/internals/tls).
 What the client decides rather than parses — redirects, content codings,

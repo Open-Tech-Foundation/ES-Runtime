@@ -19,9 +19,8 @@ use bytes::Bytes;
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{ByteStream, ProviderError};
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::{BodyExt, Empty, Full, StreamBody};
-use hyper::body::{Body as _, Frame};
+
+use hyper::body::Body as _;
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
 use hyper::{Method, StatusCode};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -60,9 +59,6 @@ const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
 /// The most a decoder hands over at once, so a highly compressible body is
 /// expanded a bounded piece at a time rather than all at once.
 const DECODED_CHUNK: usize = 64 * 1024;
-
-/// A request body as the client sends it.
-pub type RequestBody = UnsyncBoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
 /// What a request carries, before the client adds its own headers.
 pub enum Body {
@@ -494,25 +490,6 @@ fn header_map(pairs: &[(String, String)]) -> Result<HeaderMap, ProviderError> {
     Ok(map)
 }
 
-/// One hop's request: the caller's headers plus the client's defaults.
-/// A request body as hyper's HTTP/2 client takes it.
-pub(crate) fn request_body(body: Body) -> RequestBody {
-    match body {
-        Body::Empty => Empty::new().map_err(|never| match never {}).boxed_unsync(),
-        Body::Bytes(bytes) => Full::new(bytes)
-            .map_err(|never| match never {})
-            .boxed_unsync(),
-        Body::Stream(stream) => {
-            let frames = stream.map(|chunk| {
-                chunk
-                    .map(|bytes| Frame::data(Bytes::from(bytes)))
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            });
-            StreamBody::new(frames).boxed_unsync()
-        }
-    }
-}
-
 /// The request's headers with the ones this client adds.
 fn request_headers(headers: &HeaderMap, decompress: bool) -> HeaderMap {
     let mut out = headers.clone();
@@ -707,78 +684,6 @@ impl From<ProxyError> for ConnectError {
 /// the proxy is spoken to over HTTP/1.1, whatever the target negotiates.
 fn proxy_tls(trust: &TrustStore) -> TlsConnector {
     TlsConnector::from(Arc::new(trust.client_config(&[])))
-}
-
-/// Classifies a send failure with a stable guest-facing code where one can be
-/// derived (SPEC §6 Phase 13). Never includes the URL: its credentials and
-/// query are the program's secrets, and the message is for logs (D141).
-pub(crate) fn classify_hyper(e: &hyper::Error) -> ProviderError {
-    classify(e)
-}
-
-fn classify(e: &(dyn std::error::Error + 'static)) -> ProviderError {
-    let message = format!("request failed: {}", chain(e));
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
-    // The server closed the connection before its response was complete. A
-    // sentence and a code (D206), not the client library's chain of wrappers.
-    while let Some(err) = source {
-        if err
-            .downcast_ref::<hyper::Error>()
-            .is_some_and(hyper::Error::is_incomplete_message)
-        {
-            return ProviderError::Coded {
-                code: ErrorCode::ConnectionReset,
-                message: "the connection closed before the response completed".to_string(),
-            };
-        }
-        source = err.source();
-    }
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
-    let mut io_fallback = None;
-    while let Some(err) = source {
-        if let Some(connect) = err.downcast_ref::<ConnectError>() {
-            return ProviderError::Coded {
-                code: connect.code,
-                message,
-            };
-        }
-        if let Some(io) = err.downcast_ref::<std::io::Error>()
-            && io.kind() != std::io::ErrorKind::Other
-        {
-            let code = ErrorCode::from_io_kind(io.kind());
-            if code != ErrorCode::Io {
-                return ProviderError::Coded { code, message };
-            }
-            io_fallback = Some(code);
-        }
-        source = err.source();
-    }
-    let lower = message.to_lowercase();
-    let code = if lower.contains("reset") || lower.contains("broken pipe") {
-        Some(ErrorCode::ConnectionReset)
-    } else {
-        io_fallback
-    };
-    match code {
-        Some(code) => ProviderError::Coded { code, message },
-        None => ProviderError::Other(message),
-    }
-}
-
-/// `e` and its sources, joined, skipping a source whose text its parent
-/// already repeats.
-fn chain(e: &(dyn std::error::Error + 'static)) -> String {
-    let mut text = e.to_string();
-    let mut source = e.source();
-    while let Some(err) = source {
-        let next = err.to_string();
-        if !text.contains(&next) {
-            text.push_str(": ");
-            text.push_str(&next);
-        }
-        source = err.source();
-    }
-    text
 }
 
 /// DNS and TCP through [`crate::tcp_connect`], TLS through the trust store,

@@ -11,7 +11,7 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
-# Our own HTTP/1.1 (D217); hyper still serves HTTP/2 until phase 3.
+# Our own HTTP/1.1 and HTTP/2 (D217), server and client.
 es-runtime-http.workspace = true
 es-runtime.workspace = true
 dunce.workspace = true
@@ -21,11 +21,10 @@ getrandom.workspace = true
 globset.workspace = true
 walkdir.workspace = true
 hyper.workspace = true
-hyper-util.workspace = true
 async-compression.workspace = true
 http-body-util.workspace = true
-# The compat bridge between hyper's tokio IO and the futures-io the upgrade
-# seam speaks (D55).
+# The compat bridge between tokio IO and the futures-io the upgrade seam
+# speaks (D55).
 tokio-util = { workspace = true, features = ["compat", "io"] }
 tokio-rustls.workspace = true
 # `Proxy-Authorization: Basic` for an outbound proxy's credentials (D205).
@@ -42,7 +41,7 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal", "process"] }
 # Socket options that must be set between `socket()` and `bind()` — `SO_REUSEPORT`
 # for a TCP listener, and the reuse/TTL/multicast set for a UDP socket. Already
-# in the tree (tokio, hyper-util), so no new crate in the graph (D7).
+# in the tree (tokio), so no new crate in the graph (D7).
 socket2 = { workspace = true }
 tracing.workspace = true
 turso_core.workspace = true
@@ -72,11 +71,12 @@ windows-sys = { version = "0.61.2", features = [
 rustix = { workspace = true, features = ["fs", "process", "termios"] }
 
 [dev-dependencies]
-# The `hyper` and `hyper-h1` rows of `examples/http_floor.rs`: hyper's own
-# HTTP/1.1 server and its version-detecting builder, kept as the measured
-# baseline and never shipped.
-hyper = { workspace = true, features = ["http1"] }
-hyper-util = { workspace = true, features = ["server-auto", "http1", "http2"] }
+# Never shipped: the `hyper` and `hyper-h1` rows of `examples/http_floor.rs`
+# (hyper's own HTTP/1.1 server and its version-detecting builder, the measured
+# baseline), and the HTTP/2 client the server tests drive ours with — an
+# independent implementation.
+hyper = { workspace = true, features = ["http1", "http2", "server", "client"] }
+hyper-util = { workspace = true, features = ["tokio", "server-auto", "http1", "http2"] }
 # Test-only: the async test harness and a current-thread runtime. `test-util`
 # is the paused clock the body-deadline tests run on — the alternative is
 # sleeping through a 30s grace in real time, once per case.

@@ -33,6 +33,7 @@ mod entropy;
 mod esm_resolve;
 mod h1_client;
 mod h1_conn;
+mod h2_client;
 mod h2_conn;
 mod host_allowlist;
 pub mod http_client;
