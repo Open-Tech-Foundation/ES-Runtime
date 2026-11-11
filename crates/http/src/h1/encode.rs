@@ -9,7 +9,7 @@
 use crate::date::IMF_FIXDATE_LEN;
 use crate::fields::{is_field_value, is_token};
 
-/// How a response's body is framed.
+/// How a message's body is framed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framing {
     /// `Content-Length: n`, then exactly n bytes.
@@ -31,6 +31,10 @@ pub enum EncodeError {
     InvalidFieldName,
     /// A field value with a control character (CR, LF, NUL, …).
     InvalidFieldValue,
+    /// A request method that is not a token.
+    InvalidMethod,
+    /// A request-target with whitespace, controls or non-ASCII bytes.
+    InvalidTarget,
 }
 
 impl std::fmt::Display for EncodeError {
@@ -39,6 +43,8 @@ impl std::fmt::Display for EncodeError {
             EncodeError::InvalidStatus => "invalid status code",
             EncodeError::InvalidFieldName => "invalid header name",
             EncodeError::InvalidFieldValue => "invalid header value",
+            EncodeError::InvalidMethod => "invalid request method",
+            EncodeError::InvalidTarget => "invalid request-target",
         })
     }
 }
@@ -149,6 +155,92 @@ impl ChunkHeader {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
+}
+
+/// Appends a request head to `out`: request line, `Host`, `fields` and the
+/// framing field. `Content-Length`, `Transfer-Encoding` and `Host` in `fields`
+/// are dropped — the framing is `framing`'s and the host is `host`. On error
+/// nothing is appended.
+///
+/// # Errors
+///
+/// An [`EncodeError`] for a method that is not a token, a target with
+/// anything but visible ASCII, a host that is not an authority, or an invalid
+/// field name or value.
+pub fn encode_request_head<'a>(
+    out: &mut Vec<u8>,
+    method: &[u8],
+    target: &[u8],
+    host: &[u8],
+    fields: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
+    framing: Framing,
+) -> Result<(), EncodeError> {
+    if !is_token(method) {
+        return Err(EncodeError::InvalidMethod);
+    }
+    if target.is_empty() || !target.iter().all(|&b| (0x21..=0x7e).contains(&b)) {
+        return Err(EncodeError::InvalidTarget);
+    }
+    if !host.iter().all(|&b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b'%'
+                    | b':'
+                    | b'['
+                    | b']'
+            )
+    }) {
+        return Err(EncodeError::InvalidFieldValue);
+    }
+    let mark = out.len();
+    out.extend_from_slice(method);
+    out.push(b' ');
+    out.extend_from_slice(target);
+    out.extend_from_slice(b" HTTP/1.1\r\n");
+    push_field(out, b"host", host);
+    for (name, value) in fields {
+        if !is_token(name) {
+            out.truncate(mark);
+            return Err(EncodeError::InvalidFieldName);
+        }
+        if !is_field_value(value) {
+            out.truncate(mark);
+            return Err(EncodeError::InvalidFieldValue);
+        }
+        if name.eq_ignore_ascii_case(b"content-length")
+            || name.eq_ignore_ascii_case(b"transfer-encoding")
+            || name.eq_ignore_ascii_case(b"host")
+        {
+            continue;
+        }
+        push_field(out, name, value);
+    }
+    match framing {
+        Framing::Length(n) => {
+            out.extend_from_slice(b"content-length: ");
+            push_decimal(out, n);
+            out.extend_from_slice(b"\r\n");
+        }
+        Framing::Chunked => out.extend_from_slice(b"transfer-encoding: chunked\r\n"),
+        Framing::NoBody => {}
+    }
+    out.extend_from_slice(b"\r\n");
+    Ok(())
 }
 
 /// Appends the last chunk and the trailer section ending a chunked body.

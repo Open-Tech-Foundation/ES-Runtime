@@ -16,7 +16,8 @@
 #![allow(clippy::print_stderr)]
 
 use es_runtime_http::h1::{
-    Body, Chunk, ChunkedDecoder, Limits, Parsed, RequestError, parse_request,
+    Body, Chunk, ChunkedDecoder, Limits, Parsed, ParsedResponse, RequestError, ResponseBody,
+    parse_request, parse_response,
 };
 
 /// Why we may refuse what llhttp accepts. Every entry is a rule D217 chose.
@@ -51,6 +52,9 @@ struct Case {
     input: Vec<u8>,
     llhttp_error: Option<String>,
     llhttp_messages: usize,
+    /// llhttp's `skipBody` — the parser was told the body is absent, as for a
+    /// response to `HEAD`.
+    skip_body: bool,
 }
 
 fn unescape(block: &str) -> Vec<u8> {
@@ -121,8 +125,8 @@ fn unescape(block: &str) -> Vec<u8> {
     out
 }
 
-fn load() -> Vec<Case> {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus/llhttp/request");
+fn load(kind: &str) -> Vec<Case> {
+    let dir = format!("{}/tests/corpus/llhttp/{kind}", env!("CARGO_MANIFEST_DIR"));
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -143,7 +147,8 @@ fn load() -> Vec<Case> {
                 continue;
             }
             let meta = line.replace(' ', "");
-            let strict = meta.contains("\"type\":\"request\"");
+            let strict = meta.contains(&format!("\"type\":\"{kind}\""));
+            let skip_body = meta.contains("\"skipBody\":true");
             // The next ```http block, then the next ```log block.
             let mut http = String::new();
             let mut log = String::new();
@@ -185,6 +190,7 @@ fn load() -> Vec<Case> {
                 input: unescape(&http),
                 llhttp_error,
                 llhttp_messages,
+                skip_body,
             });
         }
     }
@@ -252,9 +258,124 @@ fn error_text(e: &RequestError) -> String {
     e.to_string()
 }
 
+/// Our verdict on a response stream: Err(reason) if refused, else how many
+/// messages completed. A body that runs until close never completes here —
+/// llhttp's `response` cases, like this, never see the close.
+fn ours_response(input: &[u8], skip_body: bool) -> Result<usize, String> {
+    let limits = Limits::default();
+    let mut fields = Vec::new();
+    let mut at = 0;
+    let mut messages = 0;
+    loop {
+        let rest = &input[at..];
+        if rest.is_empty() {
+            return Ok(messages);
+        }
+        let head = match parse_response(rest, &limits, &mut fields, skip_body) {
+            Ok(ParsedResponse::Complete(head)) => head,
+            Ok(ParsedResponse::Partial) => return Ok(messages),
+            Err(e) => return Err(e.to_string()),
+        };
+        at += head.len;
+        match head.body {
+            ResponseBody::Empty => {}
+            ResponseBody::UntilClose => return Ok(messages),
+            ResponseBody::Length(n) => {
+                if ((input.len() - at) as u64) < n {
+                    return Ok(messages);
+                }
+                at += n as usize;
+            }
+            ResponseBody::Chunked => {
+                let mut d = ChunkedDecoder::new(limits);
+                loop {
+                    match d.decode(&input[at..]) {
+                        Ok((used, Chunk::Data(_))) => at += used,
+                        Ok((used, Chunk::End)) => {
+                            at += used;
+                            break;
+                        }
+                        Ok((_, Chunk::NeedMore)) => return Ok(messages),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
+            }
+        }
+        messages += 1;
+        if head.status == 101 {
+            return Ok(messages); // the connection speaks something else now
+        }
+        if !head.keep_alive {
+            if at < input.len() {
+                return Err("data after the connection was to close is not read".into());
+            }
+            return Ok(messages);
+        }
+    }
+}
+
+/// Why we may refuse a response llhttp accepts. Each is a D217 rule.
+const RESPONSE_DELIBERATELY_STRICTER: &[&str] = &[
+    // HTTP/1.1 only, from servers as from clients.
+    "the server answered with an HTTP version other than 1.1",
+    "malformed response: invalid status line",
+];
+
+fn compare(cases: &[Case], allowed: &[&str], run: impl Fn(&Case) -> Result<usize, String>) {
+    assert!(
+        cases.len() > 50,
+        "corpus not found or not parsed: {} cases",
+        cases.len()
+    );
+    let mut more_lenient = Vec::new();
+    let mut unexplained = Vec::new();
+    let mut stricter = 0;
+    let mut agreed = 0;
+    for case in cases {
+        let verdict = run(case);
+        match (&case.llhttp_error, &verdict) {
+            (Some(_), Err(_)) => agreed += 1,
+            (None, Ok(n)) if *n == case.llhttp_messages => agreed += 1,
+            (Some(theirs), Ok(_)) => more_lenient.push(format!(
+                "{}: {} — llhttp: {theirs}; we accepted\n    {:?}",
+                case.file,
+                case.name,
+                String::from_utf8_lossy(&case.input)
+            )),
+            (None, Err(why)) if allowed.contains(&why.as_str()) => stricter += 1,
+            (None, other) => unexplained.push(format!(
+                "{}: {} — llhttp completed {} message(s); we: {other:?}\n    {:?}",
+                case.file,
+                case.name,
+                case.llhttp_messages,
+                String::from_utf8_lossy(&case.input)
+            )),
+        }
+    }
+    eprintln!(
+        "llhttp corpus: {} cases — {agreed} agree, {stricter} deliberately stricter, {} more lenient, {} unexplained",
+        cases.len(),
+        more_lenient.len(),
+        unexplained.len()
+    );
+    assert!(
+        more_lenient.is_empty() && unexplained.is_empty(),
+        "\nMORE LENIENT THAN LLHTTP (must be none):\n{}\n\nUNEXPLAINED REFUSALS:\n{}\n",
+        more_lenient.join("\n"),
+        unexplained.join("\n")
+    );
+}
+
+#[test]
+fn llhttp_strict_response_cases_agree_or_differ_only_deliberately() {
+    compare(&load("response"), RESPONSE_DELIBERATELY_STRICTER, |case| {
+        ours_response(&case.input, case.skip_body)
+    });
+}
+
 #[test]
 fn llhttp_strict_request_cases_agree_or_differ_only_deliberately() {
-    let cases = load();
+    let cases = load("request");
     assert!(
         cases.len() > 100,
         "corpus not found or not parsed: {} cases",

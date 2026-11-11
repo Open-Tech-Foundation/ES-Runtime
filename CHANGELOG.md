@@ -16,7 +16,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - `es-runtime-http` (DECISIONS D217): the start of ES-Runtime's own HTTP
   stack — a sans-I/O HTTP/1.1 request parser, chunked-body decoder and response
   encoder with no dependencies, strict by design (CRLF only, HTTP/1.1 only,
-  request-smuggling cases refused).
+  request-smuggling cases refused), and its client half: a request encoder and
+  a response parser framed by RFC 9112 §6.3, checked against llhttp's response
+  cases.
 
 ### Changed
 

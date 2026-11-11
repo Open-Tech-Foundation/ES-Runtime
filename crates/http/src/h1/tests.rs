@@ -629,7 +629,7 @@ fn chunk_extensions_follow_their_grammar() {
         b" ;a",
         b"\t;a=\"q \\\"x\\\" y\"",
         b";a=\"\"",
-        b";a=b ",
+        b";a=\"x\" ;b",
     ] {
         let mut body = b"1".to_vec();
         body.extend_from_slice(ext);
@@ -648,6 +648,12 @@ fn chunk_extensions_follow_their_grammar() {
         b";a b",
         b";a=\"x\x01\"",
         b";a,b",
+        // Whitespace is only allowed before a `;` (or around `=`): never at
+        // the end of the line.
+        b" ",
+        b";a ",
+        b";a=b ",
+        b";a=\"x\" ",
     ] {
         let mut body = b"1".to_vec();
         body.extend_from_slice(ext);
@@ -657,5 +663,183 @@ fn chunk_extensions_follow_their_grammar() {
             "{:?}",
             String::from_utf8_lossy(ext)
         );
+    }
+}
+
+// ---- the client's half: responses and requests ----------------------------
+
+fn response(raw: &[u8], to_head: bool) -> Result<ResponseHead, ResponseError> {
+    let mut fields = Vec::new();
+    match parse_response(raw, &Limits::default(), &mut fields, to_head)? {
+        ParsedResponse::Complete(head) => Ok(head),
+        ParsedResponse::Partial => panic!("partial: {:?}", String::from_utf8_lossy(raw)),
+    }
+}
+
+#[test]
+fn response_framing_follows_rfc_9112_section_6_3() {
+    let body = |raw: &[u8], head| response(raw, head).unwrap().body;
+    assert_eq!(
+        body(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n", false),
+        ResponseBody::Length(5)
+    );
+    // A HEAD response, 1xx, 204 and 304 have no body whatever they say.
+    assert_eq!(
+        body(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n", true),
+        ResponseBody::Empty
+    );
+    for s in ["100 Continue", "204 No Content", "304 Not Modified"] {
+        let raw = format!("HTTP/1.1 {s}\r\nContent-Length: 5\r\n\r\n");
+        assert_eq!(body(raw.as_bytes(), false), ResponseBody::Empty, "{s}");
+    }
+    assert_eq!(
+        body(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
+            false
+        ),
+        ResponseBody::Chunked
+    );
+    // No length: the body ends when the connection does, which is never reused.
+    let open = response(b"HTTP/1.1 200 OK\r\n\r\n", false).unwrap();
+    assert_eq!(
+        (open.body, open.keep_alive),
+        (ResponseBody::UntilClose, false)
+    );
+    let gzip = response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n", false).unwrap();
+    assert_eq!(
+        (gzip.body, gzip.keep_alive),
+        (ResponseBody::UntilClose, false)
+    );
+    // Both framings: the coding wins and the connection is not reused.
+    let both = response(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n",
+        false,
+    )
+    .unwrap();
+    assert_eq!((both.body, both.keep_alive), (ResponseBody::Chunked, false));
+}
+
+#[test]
+fn status_lines_are_http_1_1_with_a_three_digit_code() {
+    let head = response(
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+        false,
+    )
+    .unwrap();
+    assert_eq!(head.status, 404);
+    // A server that sends no reason phrase often drops its space too.
+    assert_eq!(
+        response(b"HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n", false)
+            .unwrap()
+            .status,
+        200
+    );
+    assert!(
+        response(b"HTTP/1.1 101 Switching Protocols\r\n\r\n", false).is_ok_and(|h| !h.is_interim())
+    );
+    assert!(response(b"HTTP/1.1 103 Early Hints\r\n\r\n", false).is_ok_and(|h| h.is_interim()));
+    assert_eq!(
+        response(b"HTTP/1.0 200 OK\r\n\r\n", false),
+        Err(ResponseError::VersionNotSupported)
+    );
+    for raw in [
+        &b"HTTP/1.1 20 OK\r\n\r\n"[..],
+        b"HTTP/1.1 2000 OK\r\n\r\n",
+        b"HTTP/1.1 099 x\r\n\r\n",
+        b"HTTP/1.1 200 O\x01K\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nX: a\r\n b\r\n\r\n",
+        b"HTTP/1.1 200 OK\nX: a\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n",
+    ] {
+        assert!(
+            matches!(response(raw, false), Err(ResponseError::Malformed(_))),
+            "{:?}",
+            String::from_utf8_lossy(raw)
+        );
+    }
+}
+
+#[test]
+fn every_prefix_of_a_good_response_head_is_partial() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n";
+    let mut fields = Vec::new();
+    for n in 0..raw.len() {
+        assert_eq!(
+            parse_response(&raw[..n], &Limits::default(), &mut fields, false),
+            Ok(ParsedResponse::Partial),
+            "prefix {n}"
+        );
+    }
+}
+
+#[test]
+fn a_request_head_is_encoded_with_its_host_and_framing() {
+    let mut out = Vec::new();
+    encode_request_head(
+        &mut out,
+        b"POST",
+        b"/upload?x=1",
+        b"example.test:8080",
+        [
+            (&b"content-type"[..], &b"text/plain"[..]),
+            (b"Host", b"evil"),
+            (b"content-length", b"9"),
+        ],
+        Framing::Length(4),
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out.clone()).unwrap(),
+        "POST /upload?x=1 HTTP/1.1\r\nhost: example.test:8080\r\ncontent-type: text/plain\r\ncontent-length: 4\r\n\r\n"
+    );
+    // What we write, our own server parses back the same way.
+    let mut fields = Vec::new();
+    let Ok(Parsed::Complete(head)) = parse_request(&out, &Limits::default(), &mut fields) else {
+        panic!("our own request did not parse");
+    };
+    assert_eq!(head.body, Body::Length(4));
+    assert_eq!(head.host.of(&out), b"example.test:8080");
+}
+
+#[test]
+fn the_request_encoder_refuses_what_would_split_a_request() {
+    let mut out = b"kept".to_vec();
+    for (method, target, host, value, err) in [
+        (
+            &b"G T"[..],
+            &b"/"[..],
+            &b"h"[..],
+            &b"v"[..],
+            EncodeError::InvalidMethod,
+        ),
+        (b"GET", b"/a b", b"h", b"v", EncodeError::InvalidTarget),
+        (b"GET", b"/\r\nX: y", b"h", b"v", EncodeError::InvalidTarget),
+        (
+            b"GET",
+            b"/",
+            b"h\r\nx",
+            b"v",
+            EncodeError::InvalidFieldValue,
+        ),
+        (
+            b"GET",
+            b"/",
+            b"h",
+            b"a\r\nb",
+            EncodeError::InvalidFieldValue,
+        ),
+    ] {
+        assert_eq!(
+            encode_request_head(
+                &mut out,
+                method,
+                target,
+                host,
+                [(&b"x"[..], value)],
+                Framing::NoBody
+            ),
+            Err(err)
+        );
+        assert_eq!(out, b"kept");
     }
 }

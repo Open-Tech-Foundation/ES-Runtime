@@ -1033,6 +1033,7 @@ dependencies = [
  "dunce",
  "es-runtime",
  "es-runtime-common",
+ "es-runtime-http",
  "es-runtime-providers",
  "futures-core",
  "futures-util",

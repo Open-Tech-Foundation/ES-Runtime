@@ -167,3 +167,9 @@ name = "http_h1_chunked"
 path = "fuzz_targets/http_h1_chunked.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "http_h1_response"
+path = "fuzz_targets/http_h1_response.rs"
+test = false
+doc = false

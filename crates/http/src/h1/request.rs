@@ -298,8 +298,19 @@ fn check_incomplete_head(
     };
     let line_end = start + line_len;
     parse_request_line(buf, start, line_end, limits)?;
-    // Whole field lines so far; the last line may still be arriving.
-    let after = line_end + 2;
+    check_incomplete_fields(buf, line_end + 2, limits, fields)
+}
+
+/// The field lines of an incomplete head, from `after` (just past its start
+/// line): every whole line is checked as it will be when the head completes,
+/// and the line still arriving is refused if its fold, name or value is
+/// already wrong. Shared by request and response heads.
+pub(crate) fn check_incomplete_fields(
+    buf: &[u8],
+    after: usize,
+    limits: &Limits,
+    fields: &mut Vec<Field>,
+) -> Result<(), RequestError> {
     let last_crlf = buf[after..].windows(2).rposition(|w| w == b"\r\n");
     let whole_end = last_crlf.map_or(after, |i| after + i + 2);
     fields.clear();
@@ -372,7 +383,10 @@ fn check_request_line_prefix(line: &[u8], limits: &Limits) -> Result<(), Request
 
 /// Every `Content-Length` must be one plain number, and repeats must agree
 /// (RFC 9110 §8.6).
-fn check_content_lengths(buf: &[u8], fields: &[Field]) -> Result<Option<u64>, RequestError> {
+pub(crate) fn check_content_lengths(
+    buf: &[u8],
+    fields: &[Field],
+) -> Result<Option<u64>, RequestError> {
     let mut length = None;
     for field in fields.iter().filter(|f| named(buf, f, b"content-length")) {
         let value = field.value.of(buf);
@@ -429,7 +443,7 @@ pub(crate) fn check_complete_line_endings(buf: &[u8]) -> Result<(), RequestError
 }
 
 /// The offset of the first CRLFCRLF in `buf`.
-fn find_head_end(buf: &[u8]) -> Option<usize> {
+pub(crate) fn find_head_end(buf: &[u8]) -> Option<usize> {
     let mut from = 0;
     while let Some(i) = buf[from..].iter().position(|&b| b == b'\n') {
         let lf = from + i;
@@ -442,14 +456,14 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
     None
 }
 
-fn find_crlf(buf: &[u8]) -> Option<usize> {
+pub(crate) fn find_crlf(buf: &[u8]) -> Option<usize> {
     let lf = buf.iter().position(|&b| b == b'\n')?;
     (lf > 0 && buf[lf - 1] == b'\r').then(|| lf - 1)
 }
 
 /// Where the first line of `buf` ends — the offset of its CR — refusing a
 /// line ended by a bare LF. `None` when no LF has arrived yet.
-fn line_end_at(buf: &[u8]) -> Result<Option<usize>, RequestError> {
+pub(crate) fn line_end_at(buf: &[u8]) -> Result<Option<usize>, RequestError> {
     match buf.iter().position(|&b| b == b'\n') {
         None => Ok(None),
         Some(lf) if lf > 0 && buf[lf - 1] == b'\r' => Ok(Some(lf - 1)),
@@ -460,7 +474,7 @@ fn line_end_at(buf: &[u8]) -> Result<Option<usize>, RequestError> {
 /// Every LF must follow a CR and every CR must precede an LF. `complete` says
 /// whether `buf` ends on a line boundary; when it does not, a trailing CR may
 /// still be waiting for its LF.
-fn check_line_endings(buf: &[u8], complete: bool) -> Result<(), RequestError> {
+pub(crate) fn check_line_endings(buf: &[u8], complete: bool) -> Result<(), RequestError> {
     for (i, &b) in buf.iter().enumerate() {
         match b {
             b'\n' if i == 0 || buf[i - 1] != b'\r' => return Err(bad("bare LF")),

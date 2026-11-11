@@ -77,13 +77,16 @@ enum State {
 /// `*( BWS ";" BWS name [ BWS "=" BWS ( token / quoted-string ) ] )`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ext {
-    /// Whitespace after the size or after a value; `;` or the CR next.
+    /// Whitespace after the size or after a value: only more of it or `;` may
+    /// follow — the grammar has no trailing whitespace (`BWS ";"`).
     BeforeSemicolon,
+    /// Just after a quoted value: `;`, the CR, or whitespace before a `;`.
+    AfterQuoted,
     /// After `;`: whitespace, then a name.
     BeforeName,
     /// In a name.
     Name,
-    /// Whitespace after a name: `=`, `;` or the CR next.
+    /// Whitespace after a name: `=` or `;` next (not the CR).
     AfterName,
     /// After `=`: whitespace, then a token or a quoted string.
     BeforeValue,
@@ -105,7 +108,7 @@ fn is_qdtext(b: u8) -> bool {
 fn ext_step(at: Ext, b: u8) -> Result<Option<Ext>, ()> {
     let ws = b == b' ' || b == b'\t';
     Ok(Some(match at {
-        Ext::Quoted if b == b'"' => Ext::BeforeSemicolon,
+        Ext::Quoted if b == b'"' => Ext::AfterQuoted,
         Ext::Quoted if b == b'\\' => Ext::QuotedEscape,
         Ext::Quoted if is_qdtext(b) => Ext::Quoted,
         Ext::QuotedEscape if is_field_value_byte(b) => Ext::Quoted,
@@ -119,8 +122,13 @@ fn ext_step(at: Ext, b: u8) -> Result<Option<Ext>, ()> {
         Ext::Token if is_tchar(b) => Ext::Token,
         Ext::Name | Ext::AfterName if b == b'=' => Ext::BeforeValue,
         Ext::Name | Ext::AfterName if ws => Ext::AfterName,
-        Ext::Token | Ext::BeforeSemicolon if ws => Ext::BeforeSemicolon,
-        Ext::Name | Ext::AfterName | Ext::Token | Ext::BeforeSemicolon => match b {
+        Ext::Token | Ext::AfterQuoted | Ext::BeforeSemicolon if ws => Ext::BeforeSemicolon,
+        // After whitespace, only `;` may end it.
+        Ext::AfterName | Ext::BeforeSemicolon => match b {
+            b';' => Ext::BeforeName,
+            _ => return Err(()),
+        },
+        Ext::Name | Ext::Token | Ext::AfterQuoted => match b {
             b';' => Ext::BeforeName,
             b'\r' => return Ok(None),
             _ => return Err(()),
