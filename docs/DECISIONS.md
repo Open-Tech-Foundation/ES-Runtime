@@ -4516,13 +4516,13 @@ The synchronous answer is **not done, on measurement**: the respond op is alread
 
 **Consequences:** a handler that reads a header in a continuation after it has returned its response now gets a `TypeError` instead of the value; reading before returning, including in middleware that runs after `await next()`, is unaffected. The provider trait's request type changes shape (`HttpServerRequest.headers`), which every embedder's HTTP provider implements. The op-boundary work (typed ops, V8 fast calls) is a separate decision: on this profile op calls are ~11% of user time, less than the copies this entry removes.
 
-### D217 — One HTTP stack of our own: HTTP/1.1, HTTP/2 and HTTP/3, sans-I/O cores shared by server and client · *Proposed (2026-11-12)* · *supersedes D198's choice of hyper; amends D42, D43*
+### D217 — One HTTP stack of our own: HTTP/1.1, HTTP/2 and HTTP/3, sans-I/O cores shared by server and client · *Accepted (2026-11-12)* · *supersedes D198's choice of hyper; amends D42, D43*
 
 **Context:** measured on the NVMe worktree (`bench/cpu-per-request.sh`, rows from `crates/default-providers/examples/http_floor.rs`), user CPU per request on a hello-world server: bare hyper HTTP/1 3.7 µs, hyper behind hyper-util's version detection 4.25, our provider answered from Rust 7.95, full esrun 10.9; Deno 4.75 and Bun 4.85 for their *whole* stacks, JS included. hyper alone costs what the other two runtimes spend on everything. Neither of them serves HTTP/1.1 through hyper: Deno routes plain-TCP HTTP/1.1 to its own `deno_http_h1` (`serve_http11_raw`; hyper only for HTTP/2 after a preface check), and Bun, written in Rust since 1.4, still carries its uWebSockets fork (`packages/bun-uws`). Receiving 15 unread headers costs esrun 13.7 µs against Deno's 6.0, and the profile puts that in hyper's `HeaderMap`.
 
 The maintainer's direction (2026-11-12): our own parser, checked against reliable test corpora; the client built on the same code; one common interface that routes to HTTP/1.1, HTTP/2 and HTTP/3 modules; tokio as the only I/O dependency; modern protocols only.
 
-**Decision (maintainer sign-off pending):**
+**Decision (maintainer, 2026-11-12):**
 - **One crate, `es-runtime-http`, of sans-I/O protocol cores.** Each protocol is a state machine fed bytes and asked for bytes, with no sockets, timers or tasks inside it, so the same core serves both roles, runs in tests and fuzzers without a runtime, and is driven identically by the server and the client. Modules:
   - `fields` — the header model every version shares: flat name/value storage, Fetch/RFC 9110 field validation (token names, field values without NUL/CR/LF), limits, and the pseudo-header mapping HTTP/2 and HTTP/3 use. One validator, so a value refused on one version is refused on all.
   - `h1` — HTTP/1.1 (RFC 9112): our own tokenizer (no `httparse`), head validation, `Content-Length` and chunked framing with trailers, response and request encoding. **HTTP/1.1 only**: an HTTP/1.0 request is answered `505` and closed; a client refuses an HTTP/1.0 response.

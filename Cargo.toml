@@ -4,6 +4,9 @@
 #
 #   common → {bson, json} → engine → providers → runtime → default-providers → cli-common → {runtime-cli, dev-cli}
 #
+# `http` (D217) depends on nothing and is used by default-providers: sans-I/O
+# protocol cores, so it sits outside the chain like `bson` and `json`.
+#
 # Each crate may depend only on crates to its left. The `v8` crate appears *only*
 # in `engine`; real I/O appears *only* in `default-providers`. Phase 1 introduces
 # `common` and `engine`; the remaining crates are added in their own phases
@@ -14,6 +17,7 @@ members = [
     "crates/common",
     "crates/bson",
     "crates/json",
+    "crates/http",
     "crates/engine",
     "crates/providers",
     "crates/runtime",

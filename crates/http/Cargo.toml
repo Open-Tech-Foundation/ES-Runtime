@@ -1,0 +1,14 @@
+[package]
+name = "es-runtime-http"
+description = "ES-Runtime's HTTP protocol cores (DECISIONS D217): sans-I/O state machines for HTTP/1.1, shared by the server and the client. No I/O, no dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

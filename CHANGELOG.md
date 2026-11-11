@@ -11,6 +11,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `es-runtime-http` (DECISIONS D217): the start of ES-Runtime's own HTTP
+  stack — a sans-I/O HTTP/1.1 request parser, chunked-body decoder and response
+  encoder with no dependencies, strict by design (CRLF only, HTTP/1.1 only,
+  request-smuggling cases refused). Not yet used by the server.
+
 ### Fixed
 
 - Microtasks queued by a timer callback now run before the next due timer
