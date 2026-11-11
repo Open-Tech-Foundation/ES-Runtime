@@ -10,6 +10,8 @@ package written entirely in JavaScript over `fetch`. See the root
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
 ### Added
 
 - The `@opentf/esrun-s3` package (DECISIONS D211): an S3 client in JavaScript

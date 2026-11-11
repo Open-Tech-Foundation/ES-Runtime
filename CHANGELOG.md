@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-11
+
 ### Added
 
 - **`fetch(url, { decompress: false })`** (DECISIONS D210), Bun's init member:
