@@ -191,3 +191,19 @@ fn a_worker_lets_its_own_timer_go_and_its_parent_lets_the_worker_go() {
         started.elapsed()
     );
 }
+
+/// Each timer callback is its own task: what it queues as a microtask runs
+/// before the next due timer does, as in Node, Deno, Bun and browsers.
+#[test]
+fn a_timer_callbacks_microtasks_run_before_the_next_timer() {
+    let (out, _) = run(
+        "microtask-order",
+        r#"
+        const log = [];
+        setTimeout(() => { log.push("t1"); Promise.resolve().then(() => log.push("micro")); }, 0);
+        setTimeout(() => log.push("t2"), 0);
+        setTimeout(() => console.log(log.join(",")), 5);
+        "#,
+    );
+    assert_eq!(out, ["t1,micro,t2"]);
+}

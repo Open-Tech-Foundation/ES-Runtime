@@ -11,6 +11,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- Microtasks queued by a timer callback now run before the next due timer
+  fires, as in browsers, Node, Deno and Bun. Two `setTimeout(fn, 0)` callbacks
+  due in the same turn ran back to back, so the second saw state the first
+  callback's promise reactions had not yet written.
+
 ## [0.47.0] - 2026-11-11
 
 ### Added

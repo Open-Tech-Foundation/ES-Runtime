@@ -1427,11 +1427,15 @@ impl Runtime {
         // Schedule timers created since the last drain (e.g. during `eval`).
         self.drain_new_timers(now_ms);
 
-        // 1. Fire due timers, re-arming still-active repeating ones.
+        // 1. Fire due timers, re-arming still-active repeating ones. Each
+        // callback is its own task (HTML's timer initialization steps), so the
+        // microtasks it queued run before the next timer does — a promise
+        // reaction in one callback is never observed late by the one after it.
         let mut timers_fired = 0;
         for due in self.timers.take_due(now_ms) {
             if self.engine.fire_timer(due.id) {
                 timers_fired += 1;
+                self.engine.run_microtasks();
                 if due.repeat && self.engine.timer_is_active(due.id) {
                     self.timers.schedule(due.id, now_ms, due.interval_ms, true);
                 }
@@ -3265,6 +3269,26 @@ mod tests {
         assert_eq!(outcome.next_timer_deadline_ms, None);
         assert!(!outcome.has_pending_work);
         assert!(!rt.has_pending_work());
+    }
+
+    #[test]
+    fn a_timer_callbacks_microtasks_run_before_the_next_timer() {
+        // Two timers due in the same tick are two tasks: the first callback's
+        // promise reaction runs before the second callback starts.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.log = []; \
+             setTimeout(() => { log.push('t1'); Promise.resolve().then(() => log.push('micro')); }, 0); \
+             setTimeout(() => { log.push('t2'); queueMicrotask(() => log.push('micro2')); }, 0); \
+             setTimeout(() => log.push('t3'), 0);",
+        )
+        .unwrap();
+        assert_eq!(rt.tick(0).timers_fired, 3);
+        assert_eq!(
+            rt.eval("log.join(',')").unwrap(),
+            Value::String("t1,micro,t2,micro2,t3".into())
+        );
     }
 
     #[test]
