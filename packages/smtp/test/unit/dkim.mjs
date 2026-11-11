@@ -275,18 +275,31 @@ await refuses(
   "an EC key, which DKIM has no algorithm for",
 );
 {
-  const short = await crypto.subtle.generateKey(
+  // A key under 1024 bits cannot be generated any more (the runtime refuses it,
+  // on import too), so a fixed one stands in: refused either way.
+  const short512 =
+    "-----BEGIN PRIVATE KEY-----\n" +
+    "MIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEA17NxqY2hhQyH8Ttd\n" +
+    "cfXSMEq/dbsfbkxuysIV3Ufz0J8A+Pu3O7SLJ+AomjkGgguB0jfzJsvgg80h+7tk\n" +
+    "l6qzuQIDAQABAkBMxptbbYUjVW2ByM6fBI93DvQNFLjASsZYtzKPG9BF3ds9TYin\n" +
+    "ORxlTonv0rV11ZM66zXc3wleSX3cldzhlRadAiEA9w4U557JKasUyuDJLbovhtGz\n" +
+    "KjotMJg4muaRUIVWc0sCIQDfgr75cGjr1lXWqIpKwUNnD8SuJVYy12OJSaWiVsQO\n" +
+    "iwIgXriobTGlAPPWEf7jQ0P6St+FqPALOXFzanhySIQG5EcCIQDEoErNOZyzzGzb\n" +
+    "WI3AUeCv6+lEokgAlgdUoVt7QwVbHQIhAPKRBqeqaGZPa0fxLDleEamIBfDXn7pK\n" +
+    "EAHtlqIVUQLP\n" +
+    "-----END PRIVATE KEY-----\n";
+  await refuses(() => importKey(short512), "an RSA key under 1024 bits");
+  const pair = await crypto.subtle.generateKey(
     {
       name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 512,
+      modulusLength: 2048,
       publicExponent: new Uint8Array([1, 0, 1]),
       hash: "SHA-256",
     },
     false,
     ["sign", "verify"],
   );
-  await refuses(() => importKey(short.privateKey), "an RSA key under 1024 bits");
-  await refuses(() => importKey(short.publicKey), "a public key");
+  await refuses(() => importKey(pair.publicKey), "a public key");
   const hmac = await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   await refuses(() => importKey(hmac), "an HMAC key");
   const sha1 = await crypto.subtle.generateKey(
