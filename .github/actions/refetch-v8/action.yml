@@ -1,0 +1,37 @@
+name: Re-fetch V8 when the cache dropped it
+description: >-
+  Makes cargo run the v8 crate's build script again when a restored build cache
+  holds v8's fingerprints but not the prebuilt static library they point at.
+
+# Swatinem/rust-cache keeps only `build`, `.fingerprint` and `deps` in each
+# profile directory when it saves (cleanProfileTarget in src/cleanup.ts), so
+# `<profile>/gn_out` — where the v8 build script puts the 178 MB prebuilt
+# `librusty_v8.a` (`rusty_v8.lib` on Windows) — never survives a save, while
+# the script's fingerprint does. A later run that has to recompile the v8 crate
+# then skips the script as up to date, finds no library on its link path, and
+# fails with "could not find native static library `rusty_v8`". Removing v8's
+# build output and fingerprints when the library is missing makes cargo run the
+# script, which downloads it again. A run whose cache still has it pays nothing.
+
+inputs:
+  targets:
+    description: Cargo target directories to check, separated by spaces.
+    default: target
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        for root in ${{ inputs.targets }}; do
+          [ -d "$root" ] || continue
+          # <root>/<profile>/build/v8-*, or <root>/<triple>/<profile>/build/v8-*.
+          find "$root" -maxdepth 4 -type d -path '*/build/v8-*' -prune |
+            while read -r dir; do dirname "$(dirname "$dir")"; done | sort -u |
+            while read -r profile; do
+              if ! ls "$profile"/gn_out/obj/*rusty_v8* >/dev/null 2>&1; then
+                echo "V8's static library is missing from $profile/gn_out; cargo will fetch it again"
+                rm -rf "$profile"/build/v8-* "$profile"/.fingerprint/v8-*
+              fi
+            done
+        done

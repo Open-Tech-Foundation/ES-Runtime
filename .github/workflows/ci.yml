@@ -50,15 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-        with:
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       - uses: ./.github/actions/setup-tsr
       - run: tsr clippy
 
@@ -92,14 +86,9 @@ jobs:
           # Saved when the tests fail too: the build is still good, and a job
           # that never saves rebuilds the whole tree on every run.
           cache-on-failure: true
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       - uses: ./.github/actions/setup-tsr
       - if: matrix.suite != 'esdev' || runner.os != 'Linux'
         run: tsr test:${{ matrix.suite }}
@@ -127,14 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-        with:
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       - uses: ./.github/actions/setup-tsr
       - run: tsr miri

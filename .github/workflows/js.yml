@@ -139,15 +139,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
-        with:
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
       - uses: ./.github/actions/setup-tsr
@@ -197,10 +191,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
@@ -263,10 +256,10 @@ jobs:
           cache: pnpm
       - if: steps.kernel.outputs.runs == 'true'
         uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - if: steps.kernel.outputs.runs == 'true'
+        uses: ./.github/actions/refetch-v8
       - if: steps.kernel.outputs.runs == 'true'
         uses: ./.github/actions/setup-tsr
       - if: steps.kernel.outputs.runs == 'true'
@@ -355,15 +348,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
-        with:
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
       - uses: ./.github/actions/setup-tsr
@@ -460,15 +447,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
-        with:
-          # `librusty_v8.a` is a 178 MB prebuilt the `v8` build script fetches,
-          # and it lands beside the directories rust-cache caches by default
-          # rather than inside them — so without this every job downloads it
-          # again. The script skips the fetch when the `.sum` file next to the
-          # archive still names the same URL, which restoring this gives it.
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
       - uses: ./.github/actions/setup-tsr
@@ -550,10 +531,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: |
-            target/debug/gn_out
-            target/release/gn_out
+      # rust-cache drops V8's prebuilt library but keeps its build state;
+      # the action explains, and makes cargo fetch the library again.
+      - uses: ./.github/actions/refetch-v8
       - uses: ./.github/actions/setup-tsr
       - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun

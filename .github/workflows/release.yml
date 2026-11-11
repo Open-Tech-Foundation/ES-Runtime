@@ -1,4 +1,4 @@
-# Generated from release.toml by `release` · sha256:b0f01ef921aa0feac07397ef1b04adadbbf47291c40d84bbdabb4bd7ff65c360
+# Generated from release.toml by `release` · sha256:572f70718b390f86ba6591735541adfa95f0b040e6a9010772b54163b929c928
 name: Release
 
 on:
@@ -140,8 +140,8 @@ jobs:
           }
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-directories: "target/${{ matrix.triple }}/release/gn_out"
           shared-key: "release-${{ matrix.triple }}"
+      - uses: ./.github/actions/refetch-v8
       - name: Build es-runtime-cli
         run: release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
@@ -223,8 +223,8 @@ jobs:
           }
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-directories: "target/${{ matrix.triple }}/release/gn_out"
           shared-key: "release-${{ matrix.triple }}"
+      - uses: ./.github/actions/refetch-v8
       - name: Build es-runtime-dev-cli
         run: release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
         env:
