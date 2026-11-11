@@ -4475,3 +4475,31 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 - **Refusing to scaffold.** The project is still writable with a stable release, and the person creating it did not choose the prerelease.
 
 **Consequences:** a new project's manifest can name an older major than `npm install <pkg>` would install, until the maintainer retags. The version parser is ours (three numbers and a prerelease check), not a semver crate.
+
+### D216 — A served request stays in the host until it is answered; JS reads its headers on demand, and answers synchronously · *Proposed (2026-11-11)* · *amends D31, D50's request handoff*
+
+**Context:** esrun serves the hello-world server at ~50k req/s; Deno and Bun serve ~92k and ~82k on the same box. `bench/cpu-per-request.sh` splits the cost: per request, esrun spends **11.9 µs** of user time and 7.9 µs in the kernel, Deno 4.05 + 6.75, Bun 4.65 + 7.40. The kernel share is the same for all three (one `recvfrom` and one `writev` per request; ~29 requests per `epoll_wait`, so the batched accept works). The gap is entirely our own code, and Deno uses the same hyper we do.
+
+A user-time profile (`perf record -e cycles:u -g`, frame-pointer `profiling` build) puts ~43% of it in the connection task and ~35% in the JS tick (~24% the handler's microtasks, ~11% op calls). No single hotspot; the largest named costs are copies of request data nobody asked for:
+- `to_server_request` turns the method, the URL, the peer address and **every header name and value** into a fresh `String` (~8% of user time, with `format!`).
+- `http_next_request` moves those into `Value::String`s, and `value_to_js` makes a V8 string of each (~9% with `js_string`), plus the mallocs and frees they cost (~8%).
+- The JS side already reads headers lazily (D31's `Headers` are built on first access), so for a handler that never reads a header — Hono's hello route, most routes — all of it is waste.
+- `http_respond` is an *async* op even for a buffered body: a promise, a boxed future and a pending-list entry per response, re-polled by every tick until it settles.
+
+Deno (`ext/http/http_next.rs`, `00_serve.ts`) keeps the request in a host record and reads method, URL, headers and peer address by op only when JS asks; the response is set by synchronous fast ops (`op_http_set_response_body_text` and friends). The record is released when the response is handed over, and a header read after that throws `TypeError: Request closed`.
+
+**Decision (maintainer sign-off pending):**
+- **The request stays in the host.** The provider hands over hyper's parsed head (`http::request::Parts`) rather than copied strings; the host keeps it per request id until the response is handed over (D50's ownership rules unchanged).
+- **The handoff carries what routing needs, and nothing else.** Per request: id, method, URL, whether there is a body. Headers, the peer address and the client certificate are read by op on first access and cached in the JS object, so a second read costs nothing.
+- **Headers are released with the response.** A header, peer-address or certificate read that first happens after the response was handed over throws `TypeError` naming the reason ("request headers are released once the response is sent; read them before returning"), as Deno does. Anything read before that stays readable.
+- **A buffered response is answered by a synchronous op.** String, bytes and empty bodies go back without a promise. Files and streams keep their async ops.
+- **The connection wrapper is measured, not trusted.** Each layer between hyper and the socket (`FirstByteTimeout`, the `tracing` instrument, hyper-util's version-detect `Rewind`) gets its share measured on this profile; one that costs more than it should is made cheaper. D43's timeouts stay on by default — removing a security default is not a performance fix.
+- **Target:** ≤ 7 µs user time per request on `bench/cpu-per-request.sh` (~70k req/s), re-measured after each step.
+
+**Rejected:**
+- **Eager headers made cheaper** (V8 strings straight from header bytes, standard names interned). It saves a part of the copying and still pays per header for every handler that reads none; the lazy record saves all of it. Interning is still worth having for the read, when it happens.
+- **Releasing the record when the `Request` is collected** (`FinalizationRegistry`). Host memory would be held until a GC happens to run, the same reason D18's URL cache rejected handles.
+- **Keeping unread headers after the response** in case a detached continuation reads them. It holds every request's headers for as long as a reference might exist, to serve a read that is almost always a bug.
+- **Turning timeouts off, or a multi-threaded server.** The first trades D43's defence for throughput; the second contradicts D4.
+
+**Consequences:** a handler that reads a header in a continuation after it has returned its response now gets a `TypeError` instead of the value; reading before returning, including in middleware that runs after `await next()`, is unaffected. The provider trait's request type changes shape (`HttpServerRequest.headers`), which every embedder's HTTP provider implements. The op-boundary work (typed ops, V8 fast calls) is a separate decision: on this profile op calls are ~11% of user time, less than the copies this entry removes.
