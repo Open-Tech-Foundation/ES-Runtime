@@ -13,6 +13,7 @@
 #         SERVER=scripts/hono.js bench/cpu-per-request.sh
 #         REQUEST_HEADERS=15 BENCH_READ_HEADER=x-h7 bench/cpu-per-request.sh
 #         BENCH_RESPONSE_HEADERS=10 bench/cpu-per-request.sh
+#         RUNTIMES="hyper hyper-h1 provider esrun" bench/cpu-per-request.sh
 #
 # REQUEST_HEADERS=<n> sends n extra request headers (x-h1 … x-hn).
 # helloserver.js reads BENCH_READ_HEADER and BENCH_RESPONSE_HEADERS from the
@@ -40,6 +41,13 @@ CMD[esrun]="$ESRUN --allow-all"
 CMD[deno]="deno run -A --quiet"
 CMD[bun]="bun"
 CMD[node]="node"
+# The layers under esrun's server, with no JavaScript (rows only when asked
+# for): bare hyper, HTTP/1-only hyper, and esrun's provider answered from Rust.
+# Build: cargo build --release -p es-runtime-default-providers --example http_floor
+FLOOR="${FLOOR:-$(cd .. && pwd)/target/release/examples/http_floor}"
+CMD[hyper]="$FLOOR hyper"
+CMD[hyper-h1]="$FLOOR hyper-h1"
+CMD[provider]="$FLOOR provider"
 RUNTIMES="${RUNTIMES:-esrun deno bun node}"
 
 TICK="$(getconf CLK_TCK)"
@@ -47,7 +55,7 @@ HEADERS=(-H "Accept-Encoding: identity")
 for i in $(seq 1 "${REQUEST_HEADERS:-0}"); do HEADERS+=(-H "x-h$i: value-number-$i"); done
 cpu_ticks() { awk '{print $14, $15}' "/proc/$1/stat"; }
 
-printf '%-6s %10s %12s %12s %12s\n' runtime req/s "user µs/req" "sys µs/req" "total"
+printf '%-8s %10s %12s %12s %12s\n' runtime req/s "user µs/req" "sys µs/req" "total"
 for rt in $RUNTIMES; do
   cmd="${CMD[$rt]}"
   bin="${cmd%% *}"
@@ -72,6 +80,6 @@ for rt in $RUNTIMES; do
   read -r u2 s2 < <(cpu_ticks "$pid")
   kill "$pid"; wait "$pid" 2>/dev/null || true
   awk -v rt="$rt" -v rps="$rps" -v u=$((u2 - u1)) -v s=$((s2 - s1)) -v t="$TICK" -v n="$REQUESTS" \
-    'BEGIN { us = 1e6 / t / n; printf "%-6s %10d %12.2f %12.2f %12.2f\n", rt, rps, u*us, s*us, (u+s)*us }'
+    'BEGIN { us = 1e6 / t / n; printf "%-8s %10d %12.2f %12.2f %12.2f\n", rt, rps, u*us, s*us, (u+s)*us }'
   PORT=$((PORT + 1))
 done
