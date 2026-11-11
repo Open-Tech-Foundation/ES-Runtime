@@ -26,6 +26,8 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-11
+
 ### Added
 
 - **A `plugins` entry may be several plugins** (DECISIONS D214). An export, or
