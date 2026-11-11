@@ -913,6 +913,33 @@ MySQL's default `max_connections` (151) already fits one 100-connection pool
 at a time. The seed is `bench_num` again, 10,000 rows with `id` as the primary
 key; the query reads the first hundred.
 
+### CPU per request, user and kernel
+
+`bench/cpu-per-request.sh` serves the hello-world server on one pinned CPU,
+sends a fixed number of requests, and divides the server's user and kernel CPU
+time (from `/proc/<pid>/stat`) by that count. Kernel time — syscalls and the TCP
+stack — is much the same for every runtime serving the same bytes, so the user
+column is where a runtime's own code shows: its HTTP stack, its JS boundary and
+the handler.
+
+```sh
+cargo build --release -p es-runtime-cli
+bench/cpu-per-request.sh
+RUNTIMES="esrun deno" SERVER=scripts/hono.js bench/cpu-per-request.sh
+```
+
+### Cost per call
+
+`bench/op-cost.js` prints nanoseconds per call for Web APIs whose cost is mostly
+the crossing between JS and the host (`performance.now`, `new URL`, `atob`,
+`randomUUID`, …). It runs unmodified on every runtime; run it under each.
+
+For a profile with function names, build `cargo build --profile profiling -p
+es-runtime-cli` (release settings, unstripped). Call graphs through Rust code
+need frame pointers as well: `CARGO_TARGET_DIR=target/fp RUSTFLAGS="-C
+force-frame-pointers=yes" cargo build --profile profiling -p es-runtime-cli`,
+then `perf record -g`.
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures each runtime's hello-world server over HTTP/1.1 and
