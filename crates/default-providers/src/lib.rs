@@ -31,6 +31,7 @@ mod dns;
 mod driver;
 mod entropy;
 mod esm_resolve;
+mod h1_client;
 mod h1_conn;
 mod host_allowlist;
 pub mod http_client;

@@ -31,7 +31,7 @@ use es_runtime_providers::{
     HttpRequestHeaders, HttpServerBody, HttpServerRequest, HttpServerResponse, PeerCertificate,
     ProviderError, UpgradedIo,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -480,32 +480,25 @@ async fn respond<W: AsyncWrite + Unpin>(
                 }
             }
             body => {
-                wr.write_all(&out).await?;
                 let mut stream: es_runtime_providers::ByteStream = match body {
                     HttpServerBody::Stream(s) => s,
                     HttpServerBody::Bytes(b) => Box::pin(futures_util::stream::iter([Ok(b)])),
                     HttpServerBody::Empty => Box::pin(futures_util::stream::empty()),
                 };
-                while let Some(item) = stream.next().await {
-                    let Ok(chunk) = item else {
-                        // A failed body ends the response mid-stream; a client
-                        // sees the truncation, not a well-formed lie.
-                        return Ok(Answered::Close);
-                    };
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    wr.write_all(chunk_header(chunk.len()).as_bytes()).await?;
-                    wr.write_all(&chunk).await?;
-                    wr.write_all(CHUNK_END).await?;
-                }
+                // The head goes out with the first chunks.
+                let Ok(mut end) = write_chunks(wr, &mut stream, out).await? else {
+                    // A failed body ends the response mid-stream; a client
+                    // sees the truncation, not a well-formed lie.
+                    return Ok(Answered::Close);
+                };
                 let trailers = match trailers {
                     Some(fut) => fut.await,
                     None => Vec::new(),
                 };
-                let mut end = Vec::new();
+                let mark = end.len();
                 let pairs = trailers.iter().map(|(n, v)| (n.as_bytes(), v.as_bytes()));
                 if encode_last_chunk(&mut end, pairs).is_err() {
+                    end.truncate(mark);
                     let _ = encode_last_chunk(&mut end, std::iter::empty());
                 }
                 wr.write_all(&end).await?;
@@ -518,6 +511,53 @@ async fn respond<W: AsyncWrite + Unpin>(
     } else {
         Answered::Close
     })
+}
+
+/// The most framed body bytes gathered before they are written.
+const GATHER: usize = 64 * 1024;
+
+/// Writes `stream` as chunks after `pending` (a head, or nothing), gathering
+/// every chunk already available into one write and writing whenever the
+/// stream would have to wait — one syscall for a body produced at once, and no
+/// delay for one produced slowly. Returns what is still unwritten when the
+/// stream ends, for the caller to finish with the last chunk; `Err(())` when
+/// the stream failed.
+pub(crate) async fn write_chunks<W: AsyncWrite + Unpin>(
+    wr: &mut W,
+    stream: &mut es_runtime_providers::ByteStream,
+    mut pending: Vec<u8>,
+) -> std::io::Result<Result<Vec<u8>, ()>> {
+    loop {
+        let item = match stream.next().now_or_never() {
+            Some(item) => item,
+            None => {
+                if !pending.is_empty() {
+                    wr.write_all(&pending).await?;
+                    pending.clear();
+                }
+                stream.next().await
+            }
+        };
+        match item {
+            None => return Ok(Ok(pending)),
+            Some(Err(_)) => {
+                if !pending.is_empty() {
+                    wr.write_all(&pending).await?;
+                }
+                return Ok(Err(()));
+            }
+            Some(Ok(chunk)) if chunk.is_empty() => {}
+            Some(Ok(chunk)) => {
+                pending.extend_from_slice(chunk_header(chunk.len()).as_bytes());
+                pending.extend_from_slice(&chunk);
+                pending.extend_from_slice(CHUNK_END);
+                if pending.len() >= GATHER {
+                    wr.write_all(&pending).await?;
+                    pending.clear();
+                }
+            }
+        }
+    }
 }
 
 /// A well-formed `Content-Length` a handler gave a HEAD response, which has no

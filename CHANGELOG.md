@@ -28,6 +28,13 @@ namespace) is unstable and may change between minor releases until the API freez
   through Hono, and +15% with 15 unread request headers; a faster head parser
   and a per-connection cache of the validated `Host` take a further ~0.8 µs
   off each request.
+- **`fetch` speaks HTTP/1.1 with the same code as the server** (DECISIONS
+  D217, phase 2), with its own connection pool; HTTP/2 over ALPN is still
+  hyper's. Measured: `fetch` 38.8 → 33.2 ms, a streamed upload 35.5 → 34.3 ms,
+  and 100 concurrent fetches 96.5 → 94.0 ms on the benchmark rows, with less
+  memory. A server answering HTTP/1.0 is refused. A request that fails on a
+  reused connection before its response began is retried once, only for an
+  idempotent method.
 - **HTTP/1.1 only, strictly.** An HTTP/1.0 request is now answered `505` (it
   was served). A request with a bare LF or CR, a folded header line, whitespace
   before a colon, no `Host` or two, or framing two parsers could read two ways

@@ -2,12 +2,13 @@
 //! binary makes — `fetch`, the telemetry exporter, `upgrade`, `esdev create`'s
 //! registry lookups — goes through [`HttpClient`].
 //!
-//! The wire is borrowed and the policy is owned. HTTP/1.1 and HTTP/2 framing
-//! are hyper's, the connection pool is hyper-util's `client-legacy`, and DNS,
-//! TCP and Happy Eyeballs are hyper-util's `HttpConnector`. TLS is tokio-rustls
-//! over the process trust store (D197). What is written here is what a client
-//! decides rather than parses: which redirects to follow and what to strip on
-//! the way, which content-codings to decode, and how long a connection may take.
+//! The policy is here and the wire is in [`crate::h1_client`]: HTTP/1.1 and
+//! the connection pool are ES-Runtime's own (D217), HTTP/2 is hyper's until
+//! D217's phase 3, and DNS, TCP and Happy Eyeballs are still hyper-util's
+//! `HttpConnector`. TLS is tokio-rustls over the process trust store (D197).
+//! What is written here is what a client decides rather than parses: which
+//! redirects to follow and what to strip on the way, which content-codings to
+//! decode, and how long a connection may take.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -20,18 +21,18 @@ use es_runtime_providers::{ByteStream, ProviderError};
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
-use hyper::body::{Body as _, Frame, Incoming};
+use hyper::body::{Body as _, Frame};
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, Request, StatusCode, Uri};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper::{Method, StatusCode, Uri};
+use hyper_util::client::legacy::connect::HttpConnector;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use url::Url;
 
+use crate::h1_client::{Exchange, Origin, Pool, ResponseStream};
 use crate::proxy::{BoxWire, Proxies, ProxyError};
 use crate::{HostAllowlist, TrustStore};
 
@@ -56,9 +57,6 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// TCP keepalive on pooled connections, so a peer that vanished without a FIN
 /// is noticed instead of leaving a dead socket to be handed to a later request.
 const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
-
-/// How long an idle pooled connection is kept.
-const POOL_IDLE: Duration = Duration::from_secs(90);
 
 /// The most a decoder hands over at once, so a highly compressible body is
 /// expanded a bounded piece at a time rather than all at once.
@@ -164,7 +162,8 @@ impl Inbound {
 /// The outbound HTTP client. Cheap to clone: the pool is shared.
 #[derive(Clone)]
 pub struct HttpClient {
-    client: Client<Connector, RequestBody>,
+    connector: Connector,
+    pool: Pool,
     /// What [`with_proxy`](Self::with_proxy) rebuilds the pool from.
     config: Arc<tokio_rustls::rustls::ClientConfig>,
     proxy_tls: TlsConnector,
@@ -245,12 +244,9 @@ impl HttpClient {
             proxies: proxies.clone(),
             proxy_tls: proxy_tls.clone(),
         };
-        let client = Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(POOL_IDLE)
-            .pool_timer(TokioTimer::new())
-            .build(connector);
         HttpClient {
-            client,
+            connector,
+            pool: Pool::default(),
             config,
             proxy_tls,
             timeout,
@@ -314,10 +310,13 @@ impl HttpClient {
                 None => std::borrow::Cow::Borrowed(&headers),
             };
             let response = self
-                .client
-                .request(build(&method, &url, &hop_headers, this_body, decompress)?)
-                .await
-                .map_err(classify)?;
+                .exchange(
+                    &method,
+                    &url,
+                    request_headers(&hop_headers, decompress),
+                    this_body,
+                )
+                .await?;
             let status = response.status();
             let location = response.headers().get(header::LOCATION).cloned();
             let follow = redirects == Redirects::Follow && is_redirect(status);
@@ -384,6 +383,82 @@ const CROSS_ORIGIN_HEADERS: [HeaderName; 5] = [
     header::WWW_AUTHENTICATE,
 ];
 
+impl HttpClient {
+    /// One request to `url`'s origin, on a pooled or new connection.
+    async fn exchange(
+        &self,
+        method: &Method,
+        url: &Url,
+        headers: HeaderMap,
+        body: Body,
+    ) -> Result<hyper::Response<ResponseStream>, ProviderError> {
+        let secure = url.scheme() == "https";
+        let host = url
+            .host_str()
+            .ok_or_else(|| ProviderError::Other("the URL has no host".to_string()))?;
+        let port = url
+            .port_or_known_default()
+            .unwrap_or(if secure { 443 } else { 80 });
+        let bare_host = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
+        // A plain `http:` request through a proxy is forwarded: the proxy is
+        // sent the absolute URL. Anything else is sent in origin form.
+        let forwarded = !secure
+            && self
+                .proxies
+                .as_ref()
+                .is_some_and(|p| p.for_target("http", &bare_host, port).is_some());
+        let mut target_url = url.clone();
+        target_url.set_fragment(None);
+        let origin_form = match target_url.query() {
+            Some(q) => format!("{}?{q}", target_url.path()),
+            None => target_url.path().to_string(),
+        };
+        let target = if forwarded {
+            target_url.as_str().to_string()
+        } else {
+            origin_form
+        };
+        let authority = match url.port() {
+            Some(p) => format!("{host}:{p}"),
+            None => host.to_string(),
+        };
+        let origin = Origin {
+            secure,
+            host: bare_host.clone(),
+            port,
+        };
+        let connector = self.connector.clone();
+        crate::h1_client::send(
+            &self.pool,
+            &origin,
+            Exchange {
+                method,
+                target: &target,
+                host: &authority,
+                headers: &headers,
+            },
+            body,
+            || {
+                let connector = connector.clone();
+                let host = bare_host.clone();
+                async move {
+                    connector
+                        .connect(secure, host, port)
+                        .await
+                        .map_err(|e| ProviderError::Coded {
+                            code: e.code,
+                            message: format!("request failed: {}", e.message),
+                        })
+                }
+            },
+        )
+        .await
+    }
+}
+
 fn is_redirect(status: StatusCode) -> bool {
     matches!(
         status,
@@ -432,39 +507,27 @@ fn header_map(pairs: &[(String, String)]) -> Result<HeaderMap, ProviderError> {
 }
 
 /// One hop's request: the caller's headers plus the client's defaults.
-fn build(
-    method: &Method,
-    url: &Url,
-    headers: &HeaderMap,
-    body: Body,
-    decompress: bool,
-) -> Result<Request<RequestBody>, ProviderError> {
-    let mut target = url.clone();
-    target.set_fragment(None);
-    let uri: Uri = target
-        .as_str()
-        .parse()
-        .map_err(|_| ProviderError::Other("the URL cannot be requested".to_string()))?;
-    let mut request = Request::builder()
-        .method(method.clone())
-        .uri(uri)
-        .body(match body {
-            Body::Empty => Empty::new().map_err(|never| match never {}).boxed_unsync(),
-            Body::Bytes(bytes) => Full::new(bytes)
-                .map_err(|never| match never {})
-                .boxed_unsync(),
-            Body::Stream(stream) => {
-                let frames = stream.map(|chunk| {
-                    chunk
-                        .map(|bytes| Frame::data(Bytes::from(bytes)))
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                });
-                StreamBody::new(frames).boxed_unsync()
-            }
-        })
-        .map_err(|e| ProviderError::Other(format!("request: {e}")))?;
-    let out = request.headers_mut();
-    out.clone_from(headers);
+/// A request body as hyper's HTTP/2 client takes it.
+pub(crate) fn request_body(body: Body) -> RequestBody {
+    match body {
+        Body::Empty => Empty::new().map_err(|never| match never {}).boxed_unsync(),
+        Body::Bytes(bytes) => Full::new(bytes)
+            .map_err(|never| match never {})
+            .boxed_unsync(),
+        Body::Stream(stream) => {
+            let frames = stream.map(|chunk| {
+                chunk
+                    .map(|bytes| Frame::data(Bytes::from(bytes)))
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            });
+            StreamBody::new(frames).boxed_unsync()
+        }
+    }
+}
+
+/// The request's headers with the ones this client adds.
+fn request_headers(headers: &HeaderMap, decompress: bool) -> HeaderMap {
+    let mut out = headers.clone();
     if !out.contains_key(header::USER_AGENT) {
         out.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
     }
@@ -486,7 +549,7 @@ fn build(
     // section only to a client that asked for one (RFC 9110 §10.1.4), and
     // `trailers` is the one value HTTP/2 allows (RFC 9113 §8.2.2).
     out.insert(header::TE, HeaderValue::from_static("trailers"));
-    Ok(request)
+    out
 }
 
 /// The content-codings this client decodes.
@@ -523,7 +586,7 @@ fn inbound(
     method: &Method,
     url: Url,
     redirected: bool,
-    response: hyper::Response<Incoming>,
+    response: hyper::Response<ResponseStream>,
     decompress: bool,
 ) -> Inbound {
     let (parts, incoming) = response.into_parts();
@@ -554,7 +617,7 @@ fn inbound(
 /// arrives. The sender is dropped when the body ends, so the receiver settles
 /// either way.
 fn frames(
-    mut incoming: Incoming,
+    mut incoming: ResponseStream,
     trailer_tx: tokio::sync::oneshot::Sender<Vec<(String, String)>>,
 ) -> impl Stream<Item = std::io::Result<Bytes>> + Send + Unpin + 'static {
     let mut trailer_tx = Some(trailer_tx);
@@ -661,9 +724,13 @@ fn proxy_tls(trust: &TrustStore) -> TlsConnector {
 /// Classifies a send failure with a stable guest-facing code where one can be
 /// derived (SPEC §6 Phase 13). Never includes the URL: its credentials and
 /// query are the program's secrets, and the message is for logs (D141).
-fn classify(e: hyper_util::client::legacy::Error) -> ProviderError {
-    let message = format!("request failed: {}", chain(&e));
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+pub(crate) fn classify_hyper(e: &hyper::Error) -> ProviderError {
+    classify(e)
+}
+
+fn classify(e: &(dyn std::error::Error + 'static)) -> ProviderError {
+    let message = format!("request failed: {}", chain(e));
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
     // The server closed the connection before its response was complete. A
     // sentence and a code (D206), not the client library's chain of wrappers.
     while let Some(err) = source {
@@ -678,7 +745,7 @@ fn classify(e: hyper_util::client::legacy::Error) -> ProviderError {
         }
         source = err.source();
     }
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
     let mut io_fallback = None;
     while let Some(err) = source {
         if let Some(connect) = err.downcast_ref::<ConnectError>() {
@@ -737,94 +804,74 @@ struct Connector {
     proxy_tls: TlsConnector,
 }
 
-impl tower_service::Service<Uri> for Connector {
-    type Response = Conn;
-    type Error = ConnectError;
-    type Future = Pin<Box<dyn std::future::Future<Output = Result<Conn, ConnectError>> + Send>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        tower_service::Service::<Uri>::poll_ready(&mut self.http, cx).map_err(|e| ConnectError {
-            code: ErrorCode::Dns,
-            message: chain(&e),
-        })
-    }
-
-    fn call(&mut self, uri: Uri) -> Self::Future {
+impl Connector {
+    /// A connection to `host:port`, TLS when `secure`, through the proxy when
+    /// one applies — DNS, TCP and TLS within the one deadline.
+    async fn connect(&self, secure: bool, host: String, port: u16) -> Result<Conn, ConnectError> {
         let mut http = self.http.clone();
         let tls = self.tls.clone();
-        let timeout = self.timeout;
         let proxies = self.proxies.clone();
         let proxy_tls = self.proxy_tls.clone();
-        Box::pin(async move {
-            let connect = async move {
-                let secure = match uri.scheme_str() {
-                    Some("https") => true,
-                    Some("http") => false,
-                    // `send` refuses any other scheme before a connection is asked for.
-                    _ => {
-                        return Err(ConnectError {
-                            code: ErrorCode::Io,
-                            message: "only http: and https: URLs can be fetched".to_string(),
-                        });
-                    }
-                };
-                let host = uri
-                    .host()
-                    .unwrap_or_default()
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string();
-                let port = uri.port_u16().unwrap_or(if secure { 443 } else { 80 });
-                let via = proxies
-                    .as_ref()
-                    .and_then(|p| p.for_target(if secure { "https" } else { "http" }, &host, port));
-                if let Some(server) = via {
-                    if !secure {
-                        // Forwarded: hyper sends the request in absolute form
-                        // to a connection marked as proxied.
-                        let wire = server.connect(&proxy_tls).await?;
-                        return Ok(Conn::Proxied(Box::new(TokioIo::new(wire)), false, true));
-                    }
-                    let wire = server.tunnel(&proxy_tls, &host, port).await?;
-                    let name = ServerName::try_from(host).map_err(|_| ConnectError {
-                        code: ErrorCode::Tls,
-                        message: "the host is not a name TLS can verify".to_string(),
-                    })?;
-                    let stream = tls.connect(name, wire).await.map_err(|e| ConnectError {
-                        code: ErrorCode::Tls,
-                        message: format!("TLS: {e}"),
-                    })?;
-                    let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
-                    let wire: BoxWire = Box::new(stream);
-                    return Ok(Conn::Proxied(Box::new(TokioIo::new(wire)), h2, false));
-                }
-                let tcp = tower_service::Service::call(&mut http, uri)
-                    .await
-                    .map_err(|e| tcp_error(&e))?;
+        let connect = async move {
+            let via = proxies
+                .as_ref()
+                .and_then(|p| p.for_target(if secure { "https" } else { "http" }, &host, port));
+            if let Some(server) = via {
                 if !secure {
-                    return Ok(Conn::Plain(tcp));
+                    // Forwarded: the request goes to the proxy in absolute form.
+                    let wire = server.connect(&proxy_tls).await?;
+                    return Ok(Conn::Proxied(Box::new(wire), false));
                 }
+                let wire = server.tunnel(&proxy_tls, &host, port).await?;
                 let name = ServerName::try_from(host).map_err(|_| ConnectError {
                     code: ErrorCode::Tls,
                     message: "the host is not a name TLS can verify".to_string(),
                 })?;
-                let stream =
-                    tls.connect(name, tcp.into_inner())
-                        .await
-                        .map_err(|e| ConnectError {
-                            code: ErrorCode::Tls,
-                            message: format!("TLS: {e}"),
-                        })?;
+                let stream = tls.connect(name, wire).await.map_err(|e| ConnectError {
+                    code: ErrorCode::Tls,
+                    message: format!("TLS: {e}"),
+                })?;
                 let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
-                Ok(Conn::Tls(Box::new(TokioIo::new(stream)), h2))
+                let wire: BoxWire = Box::new(stream);
+                return Ok(Conn::Proxied(Box::new(wire), h2));
+            }
+            // An IPv6 literal is bracketed in a URI and bare everywhere else.
+            let uri_host = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host.clone()
             };
-            tokio::time::timeout(timeout, connect)
+            let uri: Uri =
+                format!("http://{uri_host}:{port}")
+                    .parse()
+                    .map_err(|_| ConnectError {
+                        code: ErrorCode::Io,
+                        message: "the host cannot be connected to".to_string(),
+                    })?;
+            let tcp = tower_service::Service::call(&mut http, uri)
                 .await
-                .map_err(|_| ConnectError {
-                    code: ErrorCode::TimedOut,
-                    message: format!("no connection within {}s", timeout.as_secs()),
-                })?
-        })
+                .map_err(|e| tcp_error(&e))?
+                .into_inner();
+            if !secure {
+                return Ok(Conn::Plain(tcp));
+            }
+            let name = ServerName::try_from(host).map_err(|_| ConnectError {
+                code: ErrorCode::Tls,
+                message: "the host is not a name TLS can verify".to_string(),
+            })?;
+            let stream = tls.connect(name, tcp).await.map_err(|e| ConnectError {
+                code: ErrorCode::Tls,
+                message: format!("TLS: {e}"),
+            })?;
+            let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
+            Ok(Conn::Tls(Box::new(stream), h2))
+        };
+        tokio::time::timeout(self.timeout, connect)
+            .await
+            .map_err(|_| ConnectError {
+                code: ErrorCode::TimedOut,
+                message: format!("no connection within {}s", self.timeout.as_secs()),
+            })?
     }
 }
 
@@ -855,42 +902,39 @@ fn tcp_error(e: &(dyn std::error::Error + 'static)) -> ConnectError {
 }
 
 /// A connection, plain or TLS, direct or through a proxy.
-enum Conn {
-    Plain(TokioIo<TcpStream>),
+pub(crate) enum Conn {
+    Plain(TcpStream),
     /// The stream, and whether ALPN chose HTTP/2. Boxed: a TLS session is a
     /// kilobyte, and the pool holds many plain connections too.
-    Tls(Box<TokioIo<TlsStream<TcpStream>>>, bool),
-    /// Through the proxy (D205): the stream, whether ALPN chose HTTP/2, and
-    /// whether requests are forwarded (absolute form to the proxy) rather than
-    /// tunnelled.
-    Proxied(Box<TokioIo<BoxWire>>, bool, bool),
+    Tls(Box<TlsStream<TcpStream>>, bool),
+    /// Through the proxy (D205): the stream, and whether ALPN chose HTTP/2.
+    /// Whether a request on it is forwarded or tunnelled is the request's
+    /// scheme, decided in `exchange`.
+    Proxied(Box<BoxWire>, bool),
 }
 
-impl Connection for Conn {
-    fn connected(&self) -> Connected {
-        match self {
-            Conn::Tls(_, true) | Conn::Proxied(_, true, _) => Connected::new().negotiated_h2(),
-            Conn::Proxied(_, _, true) => Connected::new().proxy(true),
-            _ => Connected::new(),
-        }
+impl Conn {
+    /// Whether ALPN chose HTTP/2 for this connection.
+    pub(crate) fn is_h2(&self) -> bool {
+        matches!(self, Conn::Tls(_, true) | Conn::Proxied(_, true))
     }
 }
 
-impl hyper::rt::Read for Conn {
+impl AsyncRead for Conn {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: hyper::rt::ReadBufCursor<'_>,
+        buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_read(cx, buf),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_read(cx, buf),
-            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_read(cx, buf),
+            Conn::Proxied(io, _) => Pin::new(io.as_mut()).poll_read(cx, buf),
         }
     }
 }
 
-impl hyper::rt::Write for Conn {
+impl AsyncWrite for Conn {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -899,7 +943,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_write(cx, buf),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_write(cx, buf),
-            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_write(cx, buf),
+            Conn::Proxied(io, _) => Pin::new(io.as_mut()).poll_write(cx, buf),
         }
     }
 
@@ -907,7 +951,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_flush(cx),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_flush(cx),
-            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_flush(cx),
+            Conn::Proxied(io, _) => Pin::new(io.as_mut()).poll_flush(cx),
         }
     }
 
@@ -915,7 +959,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_shutdown(cx),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_shutdown(cx),
-            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_shutdown(cx),
+            Conn::Proxied(io, _) => Pin::new(io.as_mut()).poll_shutdown(cx),
         }
     }
 
@@ -923,7 +967,7 @@ impl hyper::rt::Write for Conn {
         match self {
             Conn::Plain(io) => io.is_write_vectored(),
             Conn::Tls(io, _) => io.is_write_vectored(),
-            Conn::Proxied(io, ..) => io.is_write_vectored(),
+            Conn::Proxied(io, _) => io.is_write_vectored(),
         }
     }
 
@@ -935,7 +979,7 @@ impl hyper::rt::Write for Conn {
         match self.get_mut() {
             Conn::Plain(io) => Pin::new(io).poll_write_vectored(cx, bufs),
             Conn::Tls(io, _) => Pin::new(io.as_mut()).poll_write_vectored(cx, bufs),
-            Conn::Proxied(io, ..) => Pin::new(io.as_mut()).poll_write_vectored(cx, bufs),
+            Conn::Proxied(io, _) => Pin::new(io.as_mut()).poll_write_vectored(cx, bufs),
         }
     }
 }
