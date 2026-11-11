@@ -11,6 +11,8 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
+# Our own HTTP/1.1 (D217); hyper still serves HTTP/2 until phase 3.
+es-runtime-http.workspace = true
 es-runtime.workspace = true
 dunce.workspace = true
 futures-core.workspace = true

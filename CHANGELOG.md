@@ -16,10 +16,27 @@ namespace) is unstable and may change between minor releases until the API freez
 - `es-runtime-http` (DECISIONS D217): the start of ES-Runtime's own HTTP
   stack — a sans-I/O HTTP/1.1 request parser, chunked-body decoder and response
   encoder with no dependencies, strict by design (CRLF only, HTTP/1.1 only,
-  request-smuggling cases refused). Not yet used by the server.
+  request-smuggling cases refused).
+
+### Changed
+
+- **`runtime:http` serves HTTP/1.1 with its own connection code** (DECISIONS
+  D217) instead of hyper's; HTTP/2 still runs on hyper. Measured on the
+  hello-world server: user CPU per request 10.75 → 9.9 µs, +10% req/s, +12%
+  through Hono, and +15% with 15 unread request headers.
+- **HTTP/1.1 only, strictly.** An HTTP/1.0 request is now answered `505` (it
+  was served). A request with a bare LF or CR, a folded header line, whitespace
+  before a colon, no `Host` or two, or framing two parsers could read two ways
+  is answered `400` and the connection closed; an `Expect` other than
+  `100-continue` is `417`, and a transfer coding other than `chunked` is `501`.
+  Behind nginx before 1.29.7, set `proxy_http_version 1.1;`.
+- **Embedders:** a request whose response is sent before its body was read
+  closes the connection, and says so with `Connection: close`.
 
 ### Fixed
 
+- A `fetch` response body that breaks off mid-way now rejects with a
+  `TypeError`, as the Fetch standard specifies, rather than a plain `Error`.
 - Microtasks queued by a timer callback now run before the next due timer
   fires, as in browsers, Node, Deno and Bun. Two `setTimeout(fn, 0)` callbacks
   due in the same turn ran back to back, so the second saw state the first

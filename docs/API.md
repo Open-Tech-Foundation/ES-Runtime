@@ -2503,6 +2503,27 @@ Beyond the reference library: `v1a` signatures, several keys, a `Headers` for
 `verify`, `tolerance`, key generation, and the specification's 24-byte minimum
 (the reference library refuses only an empty secret).
 
+#### Protocols
+
+HTTP/1.1 and HTTP/2 on every port: ALPN chooses on TLS, and the HTTP/2
+connection preface (h2c by prior knowledge) on cleartext. Nothing older is
+spoken — an HTTP/1.0 request is answered `505` and the connection closed.
+
+An HTTP/1.1 request the server will not frame is answered and the connection
+closed; the handler never sees it.
+
+| Answer | When |
+| --- | --- |
+| `400` | The head breaks HTTP/1.1's grammar: a bare LF or CR, a folded header line, whitespace before a colon, a missing or repeated `Host`, `Content-Length` together with `Transfer-Encoding`, `Content-Length` values that disagree, `chunked` not the last transfer coding, a malformed chunked body. |
+| `414` | A request-target longer than 65,534 bytes. |
+| `417` | An `Expect` other than `100-continue`. |
+| `431` | More than 100 header lines, or a head larger than the server's buffer. |
+| `501` | A transfer coding under `chunked` other than `chunked` itself (`gzip, chunked`). |
+| `505` | Any version but HTTP/1.1 (and HTTP/2, chosen as above). |
+
+Behind nginx before 1.29.7, set `proxy_http_version 1.1;` — older releases
+speak HTTP/1.0 to upstreams by default.
+
 #### The connection a request came from
 
 `info.remoteAddr` is the other end of the socket, in the shape `Deno.serve`

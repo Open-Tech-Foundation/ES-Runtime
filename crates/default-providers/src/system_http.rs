@@ -49,7 +49,6 @@ use hyper::body::{Body as _, Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use hyper_util::server::conn::auto;
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -58,7 +57,6 @@ use tracing::Instrument;
 use crate::accept_backoff::AcceptBackoff;
 use crate::body_deadline::{BodyDeadline, BodyLimit};
 use crate::checkout::Checkout;
-use crate::first_byte::FirstByteTimeout;
 use crate::peer_limit::PeerLimit;
 
 /// The most header fields one HTTP/1.1 request head may carry.
@@ -88,7 +86,7 @@ type OutBody = UnsyncBoxBody<Bytes, ProviderError>;
 /// dropping it without sending is what a dropped connection looks like. So
 /// `Ok(())` means delivered and `Err(_)` means the client went away — no
 /// polling, and nothing to clean up on either path.
-type Pending = (
+pub(crate) type Pending = (
     HttpServerRequest,
     oneshot::Sender<HttpServerResponse>,
     oneshot::Receiver<()>,
@@ -106,9 +104,18 @@ type Pending = (
 /// calls in an order neither controls: `upgrade` takes the handle, `respond`
 /// reads the key, and whichever runs first must not take the other's half with
 /// it.
-struct PendingUpgrade {
-    on: hyper::upgrade::OnUpgrade,
-    accept: String,
+pub(crate) struct PendingUpgrade {
+    pub(crate) on: Upgrade,
+    pub(crate) accept: String,
+}
+
+/// How the upgraded connection arrives once the `101` is written: from hyper
+/// (HTTP/2's path, until D217's phase 3) or from our HTTP/1.1 connection,
+/// which hands over the stream itself together with any bytes it had already
+/// read past the head.
+pub(crate) enum Upgrade {
+    Hyper(hyper::upgrade::OnUpgrade),
+    Raw(oneshot::Receiver<UpgradedIo>),
 }
 
 /// Per-server shutdown handle, kept in a side map that `next_request` never
@@ -183,7 +190,7 @@ pub struct SystemHttpServer {
     /// `next_requests`, taken by `upgrade`, and dropped by `respond` when the
     /// guest answers with something else — which is how declining an upgrade
     /// works, since there is nothing to decline explicitly.
-    upgrades: Arc<Mutex<HashMap<u64, hyper::upgrade::OnUpgrade>>>,
+    upgrades: Arc<Mutex<HashMap<u64, Upgrade>>>,
     /// The `Sec-WebSocket-Accept` each of those requests needs on its `101`.
     /// Separate from the handle above because `respond` and `upgrade` consume
     /// their halves in an order neither of them controls.
@@ -379,7 +386,7 @@ fn take_upgrade(req: &mut Request<Incoming>) -> Option<PendingUpgrade> {
     let key = header(hyper::header::SEC_WEBSOCKET_KEY)?;
     Some(PendingUpgrade {
         accept: tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()),
-        on: hyper::upgrade::on(req),
+        on: Upgrade::Hyper(hyper::upgrade::on(req)),
     })
 }
 
@@ -428,7 +435,7 @@ fn request_url(req: &Request<Incoming>, scheme: &str, fallback: &str) -> Option<
 /// both illegal in a `Host` field and a URL whose *hostname* is `real.host` and
 /// whose visible prefix is `evil.com` — a phishing string in every log line the
 /// application writes.
-fn valid_authority(authority: &str) -> Option<String> {
+pub(crate) fn valid_authority(authority: &str) -> Option<String> {
     let parsed = hyper::http::uri::Authority::try_from(authority).ok()?;
     let host = parsed.host();
     let rebuilt = match parsed.port_u16() {
@@ -582,6 +589,42 @@ async fn with_timeout<F: Future>(
     }
 }
 
+/// The HTTP/2 connection preface (RFC 9113 §3.4).
+const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+/// Reads until the start of the stream decides the protocol: the HTTP/2
+/// preface (`true`) or anything else (`false`). Returns the bytes read, which
+/// belong to whichever protocol is chosen. Reads no more than it must, so an
+/// HTTP/1.1 request is never delayed waiting for 24 bytes it may not have.
+async fn detect_h2<S: tokio::io::AsyncRead + Unpin>(
+    io: &mut S,
+) -> std::io::Result<(bool, Vec<u8>)> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::with_capacity(8192);
+    loop {
+        let n = io.read_buf(&mut buf).await?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        let seen = buf.len().min(H2_PREFACE.len());
+        if buf[..seen] != H2_PREFACE[..seen] {
+            return Ok((false, buf));
+        }
+        if buf.len() >= H2_PREFACE.len() {
+            return Ok((true, buf));
+        }
+    }
+}
+
+/// What a TLS handshake settled for the connection; empty on cleartext.
+#[derive(Default)]
+struct Negotiated {
+    /// The verified client certificate (D201), when the server requires one.
+    peer_certificate: Option<Arc<PeerCertificate>>,
+    /// The protocol ALPN chose, when the client offered any.
+    alpn: Option<Vec<u8>>,
+}
+
 /// Generic over the transport so a plain `TcpStream` and a TLS stream share one
 /// path: everything above the socket — the service, the response handoff, the
 /// graceful shutdown — is identical, and duplicating it per scheme is how the
@@ -591,7 +634,7 @@ async fn serve_connection<S>(
     tx: mpsc::Sender<Pending>,
     origin: Arc<str>,
     peer: SocketAddr,
-    peer_certificate: Option<Arc<PeerCertificate>>,
+    tls: Negotiated,
     mut drain_rx: watch::Receiver<bool>,
     timeouts: HttpTimeouts,
 ) where
@@ -606,6 +649,10 @@ async fn serve_connection<S>(
     // is a refcount bump.
     let peer_host: Arc<str> = Arc::from(peer.ip().to_string().as_str());
     let peer_port = peer.port();
+    let Negotiated {
+        peer_certificate,
+        alpn,
+    } = tls;
     // Read once per connection, applied per request: each body gets its own
     // fresh allowance, because each is a separate thing the peer either sends
     // or does not.
@@ -613,6 +660,12 @@ async fn serve_connection<S>(
         grace,
         min_rate: timeouts.body_min_rate,
     });
+    // The HTTP/1.1 path takes its own handles; the service below, HTTP/2's,
+    // takes the originals.
+    let tx_h1 = tx.clone();
+    let origin_h1 = origin.clone();
+    let peer_host_h1 = peer_host.clone();
+    let peer_certificate_h1 = peer_certificate.clone();
     let service = service_fn(move |req: Request<Incoming>| {
         let tx = tx.clone();
         let origin = origin.clone();
@@ -663,49 +716,66 @@ async fn serve_connection<S>(
         }
     });
 
-    // One builder for both versions: it reads the start of the stream and picks
-    // HTTP/2 when the connection preface is there, HTTP/1.1 otherwise. That is
-    // the whole of h2c support on a cleartext port, and over TLS it agrees with
-    // whatever ALPN already negotiated (an `h2` client sends the preface first).
-    let mut builder = auto::Builder::new(TokioExecutor::new());
-    // Every timeout below needs a timer, and hyper is emphatic about it in both
-    // directions: a *default* timeout with no timer is silently dropped (with a
-    // `warn!` nobody reads — which is how this server ran without hyper's own
-    // 30s header timeout), while an *explicitly configured* one panics. So the
-    // timer goes on both builders before anything else touches them.
-    builder.http1().timer(TokioTimer::new());
-    builder.http2().timer(TokioTimer::new());
-    // Passing `None` disables, which is exactly what `None` means here.
-    builder.http1().header_read_timeout(timeouts.header_read);
+    // The version is the client's choice, not the listener's (D42): ALPN on
+    // TLS, otherwise the HTTP/2 connection preface (h2c by prior knowledge).
+    // HTTP/1.1 is ours (D217); HTTP/2 stays on hyper until phase 3.
+    let (h2, prefix, io) = match alpn.as_deref() {
+        Some(b"h2") => (true, Vec::new(), io),
+        Some(_) => (false, Vec::new(), io),
+        None => {
+            let mut io = io;
+            // The detection read needs its own deadline: it happens before any
+            // protocol timer exists, and a peer that connects and says nothing
+            // would otherwise hold the task and descriptor (D43).
+            let Some(Ok((h2, prefix))) =
+                with_timeout(timeouts.handshake, detect_h2(&mut io), "first byte").await
+            else {
+                return;
+            };
+            (h2, prefix, io)
+        }
+    };
+    if !h2 {
+        let body_limit = timeouts.body_read.map(|grace| BodyLimit {
+            grace,
+            min_rate: timeouts.body_min_rate,
+        });
+        let ctx = crate::h1_conn::ConnContext {
+            tx: tx_h1,
+            origin: origin_h1,
+            peer_host: peer_host_h1,
+            peer_port,
+            peer_certificate: peer_certificate_h1,
+            drain_rx,
+            header_read: timeouts.header_read,
+            body_limit,
+            limits: es_runtime_http::h1::Limits {
+                max_head_bytes: MAX_H1_BUFFER,
+                max_fields: MAX_HEADERS,
+                ..es_runtime_http::h1::Limits::default()
+            },
+        };
+        crate::h1_conn::serve(io, prefix, ctx).await;
+        return;
+    }
+    let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
+    // A configured timeout with no timer panics in hyper, and a default one
+    // with no timer is silently dropped; the timer goes on first.
+    builder.timer(TokioTimer::new());
     if let Some(interval) = timeouts.h2_keep_alive {
         builder
-            .http2()
             .keep_alive_interval(interval)
             .keep_alive_timeout(interval);
     }
-    // Header limits, stated at hyper's own current values rather than left
-    // inherited. Nothing changes today; what changes is that a hyper release
-    // adjusting a default cannot quietly adjust ours. That is not theoretical —
-    // it is how this server ran without hyper's 30s header timeout, which was
-    // present, defaulted, and silently disabled for want of a timer.
-    builder.http1().max_headers(MAX_HEADERS);
-    builder.http1().max_buf_size(MAX_H1_BUFFER);
-    builder.http2().max_header_list_size(MAX_H2_HEADER_LIST);
+    builder.max_header_list_size(MAX_H2_HEADER_LIST);
     // Explicit rather than inherited: an HTTP/2 peer can open streams far faster
     // than a single-threaded isolate answers them, and every open stream holds a
-    // queued `Pending` plus its body channel. Capping concurrency bounds what one
-    // connection can make the server hold, and leaves the request channel's
-    // buffer for spreading across connections rather than one client filling it.
-    builder.http2().max_concurrent_streams(256);
-    // The version-detection read happens inside the connection future, before
-    // any hyper timer exists, so the deadline on it has to come from under the
-    // socket — see [`FirstByteTimeout`](crate::first_byte).
-    let io = FirstByteTimeout::new(io, timeouts.handshake);
-    // `with_upgrades`, not `serve_connection` alone: hyper resolves an
-    // `OnUpgrade` only on a connection polled this way, so without it a `101`
-    // goes out and the takeover never completes — the handshake succeeds and
-    // the socket then says nothing, forever (D55).
-    let conn = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
+    // queued `Pending` plus its body channel (D42's budget).
+    builder.max_concurrent_streams(256);
+    let conn = builder.serve_connection(
+        TokioIo::new(crate::prefixed::Prefixed::new(io, prefix)),
+        service,
+    );
     tokio::pin!(conn);
     // Race the connection against the drain signal. On shutdown,
     // `graceful_shutdown` stops reading new requests but still finishes the one
@@ -735,9 +805,7 @@ async fn serve_connection<S>(
         // anything; reporting it would put a line in the log for every
         // well-behaved client, which is the noise that makes a debug filter
         // unusable on a live server.
-        let by_policy = e
-            .downcast_ref::<hyper::Error>()
-            .is_some_and(hyper::Error::is_timeout);
+        let by_policy = e.is_timeout();
         if !by_policy {
             tracing::debug!(target: "runtime::http", error = %e, "connection ended with an error");
         }
@@ -927,12 +995,22 @@ impl HttpServerProvider for SystemHttpServer {
                                                 .map(|der| {
                                                     Arc::new(crate::trust::peer_certificate(der))
                                                 });
+                                            // ALPN chose the version, when the
+                                            // client offered one.
+                                            let alpn = stream
+                                                .get_ref()
+                                                .1
+                                                .alpn_protocol()
+                                                .map(<[u8]>::to_vec);
                                             serve_connection(
                                                 stream,
                                                 tx,
                                                 origin,
                                                 peer,
-                                                peer_certificate,
+                                                Negotiated {
+                                                    peer_certificate,
+                                                    alpn,
+                                                },
                                                 drain_rx,
                                                 timeouts,
                                             )
@@ -955,7 +1033,13 @@ impl HttpServerProvider for SystemHttpServer {
                                 }
                                 None => {
                                     serve_connection(
-                                        stream, tx, origin, peer, None, drain_rx, timeouts,
+                                        stream,
+                                        tx,
+                                        origin,
+                                        peer,
+                                        Negotiated::default(),
+                                        drain_rx,
+                                        timeouts,
                                     )
                                     .await;
                                 }
@@ -1128,13 +1212,19 @@ impl HttpServerProvider for SystemHttpServer {
             };
             // Resolves once the `101` is on the wire, which is why a caller
             // returns the response first and awaits this second.
-            let upgraded = on.await.map_err(|e| ProviderError::Coded {
+            let not_upgraded = |e: &dyn std::fmt::Display| ProviderError::Coded {
                 code: ErrorCode::ConnectionReset,
                 message: format!("the connection was not upgraded: {e}"),
-            })?;
-            // hyper speaks tokio's IO traits and the seam speaks futures-io;
-            // `compat` is the one-line bridge between them (D55).
-            Ok(Box::new(TokioIo::new(upgraded).compat()) as UpgradedIo)
+            };
+            match on {
+                Upgrade::Hyper(on) => {
+                    let upgraded = on.await.map_err(|e| not_upgraded(&e))?;
+                    // hyper speaks tokio's IO traits and the seam speaks
+                    // futures-io; `compat` is the bridge between them (D55).
+                    Ok(Box::new(TokioIo::new(upgraded).compat()) as UpgradedIo)
+                }
+                Upgrade::Raw(rx) => rx.await.map_err(|e| not_upgraded(&e)),
+            }
         })
     }
 
@@ -2798,6 +2888,168 @@ mod timeout_tests {
             !closed_within(&mut sock, SHORT * 5).await,
             "a silent connection must survive when the timeouts are disabled"
         );
+    }
+}
+
+/// The HTTP/1.1 connection of our own (D217): what it does that hyper did
+/// not, or does differently — HTTP/1.1 only, pipelining in order, `100
+/// Continue`, a chunked upload, and closing rather than guessing.
+#[cfg(test)]
+mod h1_tests {
+    use super::tests::bound;
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    async fn body_of(body: HttpServerBody) -> Vec<u8> {
+        match body {
+            HttpServerBody::Empty => Vec::new(),
+            HttpServerBody::Bytes(b) => b,
+            HttpServerBody::Stream(mut s) => {
+                let mut out = Vec::new();
+                while let Some(chunk) = s.next().await {
+                    out.extend_from_slice(&chunk.unwrap());
+                }
+                out
+            }
+        }
+    }
+
+    fn text(status: u16, body: &str) -> HttpServerResponse {
+        HttpServerResponse {
+            status,
+            headers: vec![("content-type".into(), "text/plain".into())],
+            body: HttpServerBody::Bytes(body.as_bytes().to_vec()),
+            trailers: None,
+        }
+    }
+
+    async fn raw(port: u16, bytes: &'static [u8]) -> String {
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(bytes).await.unwrap();
+        let mut got = Vec::new();
+        sock.read_to_end(&mut got).await.unwrap();
+        String::from_utf8_lossy(&got).into_owned()
+    }
+
+    #[tokio::test]
+    async fn http_1_0_is_answered_505_and_closed() {
+        let (http, id, port) = bound().await;
+        let got = raw(port, b"GET / HTTP/1.0\r\n\r\n").await;
+        assert!(
+            got.starts_with("HTTP/1.1 505 HTTP Version Not Supported\r\n"),
+            "{got}"
+        );
+        assert!(got.contains("connection: close\r\n"), "{got}");
+        http.close(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_malformed_head_is_400_and_never_reaches_the_guest() {
+        let (http, id, port) = bound().await;
+        let got = raw(port, b"GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n").await;
+        assert!(got.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{got}");
+        let smuggle = raw(
+            port,
+            b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n",
+        )
+        .await;
+        assert!(smuggle.starts_with("HTTP/1.1 400 "), "{smuggle}");
+        let none =
+            tokio::time::timeout(Duration::from_millis(100), http.next_requests(id, 8)).await;
+        assert!(none.is_err(), "a refused head must not reach the guest");
+        http.close(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pipelined_requests_are_answered_in_order() {
+        let (http, id, port) = bound().await;
+        let client = tokio::spawn(raw(
+            port,
+            b"GET /one HTTP/1.1\r\nHost: a\r\n\r\nGET /two HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n",
+        ));
+        for want in ["/one", "/two"] {
+            let (rid, req) = http.next_requests(id, 8).await.unwrap().remove(0);
+            assert!(req.url.ends_with(want), "{}", req.url);
+            http.respond(rid, text(200, &want[1..])).await.unwrap();
+        }
+        let got = client.await.unwrap();
+        let one = got.find("\r\n\r\none").expect("first answer");
+        let two = got.find("\r\n\r\ntwo").expect("second answer");
+        assert!(one < two, "{got}");
+        http.close(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn expect_continue_is_answered_before_the_body_is_sent() {
+        let (http, id, port) = bound().await;
+        let client = tokio::spawn(async move {
+            let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            sock.write_all(
+                b"PUT / HTTP/1.1\r\nHost: a\r\nExpect: 100-continue\r\nContent-Length: 5\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+            let mut interim = [0u8; 25];
+            sock.read_exact(&mut interim).await.unwrap();
+            assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
+            sock.write_all(b"hello").await.unwrap();
+            let mut got = Vec::new();
+            sock.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+        let (rid, req) = http.next_requests(id, 8).await.unwrap().remove(0);
+        let body = body_of(req.body).await;
+        http.respond(rid, text(200, &String::from_utf8(body).unwrap()))
+            .await
+            .unwrap();
+        let got = client.await.unwrap();
+        assert!(
+            got.starts_with("HTTP/1.1 200 OK") && got.ends_with("hello"),
+            "{got}"
+        );
+        http.close(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_chunked_upload_arrives_whole_with_its_framing_removed() {
+        let (http, id, port) = bound().await;
+        let client = tokio::spawn(raw(
+            port,
+            b"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5;x=y\r\nhello\r\n6\r\n world\r\n0\r\nX-Sum: 1\r\n\r\n",
+        ));
+        let (rid, req) = http.next_requests(id, 8).await.unwrap().remove(0);
+        assert_eq!(body_of(req.body).await, b"hello world");
+        http.respond(rid, text(200, "ok")).await.unwrap();
+        assert!(client.await.unwrap().starts_with("HTTP/1.1 200 OK"));
+        http.close(id).await.unwrap();
+    }
+
+    /// Answered before its body was read, a connection cannot carry another
+    /// request: the unread bytes would be taken for one. It says so and closes.
+    #[tokio::test]
+    async fn an_answer_before_the_body_is_read_closes_the_connection() {
+        let (http, id, port) = bound().await;
+        let client = tokio::spawn(raw(
+            port,
+            b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 200000\r\n\r\nGET /smuggled HTTP/1.1\r\nHost: a\r\n\r\n",
+        ));
+        let (rid, _req) = http.next_requests(id, 8).await.unwrap().remove(0);
+        http.respond(rid, text(413, "too big")).await.unwrap();
+        let got = client.await.unwrap();
+        assert!(
+            got.starts_with("HTTP/1.1 413 Content Too Large\r\n"),
+            "{got}"
+        );
+        assert!(got.contains("connection: close\r\n"), "{got}");
+        let none =
+            tokio::time::timeout(Duration::from_millis(100), http.next_requests(id, 8)).await;
+        assert!(
+            none.is_err(),
+            "bytes inside an unread body are not a request"
+        );
+        http.close(id).await.unwrap();
     }
 }
 

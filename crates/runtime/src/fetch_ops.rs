@@ -251,8 +251,16 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                     }
                     Some(Err(e)) => {
                         trailers.borrow_mut().remove(&id);
-                        Err(OpError::new(e.exception_class(), e.exception_message())
-                            .with_code_opt(e.code()))
+                        // A body that breaks off mid-way errors its stream with a
+                        // TypeError (Fetch, "fetch response handover"), as a
+                        // failure before the response does. The code still says
+                        // which failure it was.
+                        // A cancellation keeps its own class.
+                        let class = match e {
+                            ProviderError::Cancelled => e.exception_class(),
+                            _ => ExceptionClass::TypeError,
+                        };
+                        Err(OpError::new(class, e.exception_message()).with_code_opt(e.code()))
                     }
                     // End of stream; not reinserted. The trailers came after
                     // the last chunk, so they have arrived (or never will).
