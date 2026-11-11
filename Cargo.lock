@@ -1498,6 +1498,9 @@ dependencies = [
 [[package]]
 name = "es-runtime-http"
 version = "0.47.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "es-runtime-json"

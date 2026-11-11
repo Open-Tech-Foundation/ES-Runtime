@@ -74,3 +74,6 @@ crates/dev-cli/templates/*/pnpm-lock.yaml
 
 # The Valkey tests run against staged copies of the built packages.
 packages/valkey/test/.stage/
+
+# The whole hpack-test-case corpus, fetched by scripts/fetch-hpack-test-case.sh.
+crates/http/tests/corpus/hpack-test-case-full/

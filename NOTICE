@@ -25,6 +25,14 @@ The HTTP parser's tests read test cases from llhttp
 under the MIT license (https://github.com/nodejs/llhttp). Test data only; not
 part of any binary. Its LICENSE is kept beside it.
 
+The HPACK tests read header sequences from hpack-test-case
+(crates/http/tests/corpus/hpack-test-case), Copyright (c) 2013 HTTP/2 Japan
+Community, licensed under the MIT license
+(https://github.com/http2jp/hpack-test-case). Test data only; not part of any
+binary. Its LICENSE is kept beside it. HPACK's static table and Huffman code,
+and the RFC 7541 Appendix C test vectors, are generated from the text of
+RFC 7541 by scripts/gen-hpack-tables.py.
+
 Rust dependencies are distributed under OSI-approved permissive licenses
 (Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0); the set is
 enforced by cargo-deny (see deny.toml). See docs/LICENSING.md for details.

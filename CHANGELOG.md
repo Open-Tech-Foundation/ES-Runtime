@@ -18,7 +18,9 @@ namespace) is unstable and may change between minor releases until the API freez
   encoder with no dependencies, strict by design (CRLF only, HTTP/1.1 only,
   request-smuggling cases refused), and its client half: a request encoder and
   a response parser framed by RFC 9112 §6.3, checked against llhttp's response
-  cases.
+  cases; and HPACK, HTTP/2's header compression (RFC 7541), its tables generated
+  from the RFC's text, checked against the RFC's own examples and against
+  47,142 header blocks from 14 independent encoders (hpack-test-case).
 
 ### Changed
 

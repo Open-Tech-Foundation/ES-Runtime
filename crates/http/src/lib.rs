@@ -11,8 +11,10 @@
 //! - [`h1`]: HTTP/1.1 (RFC 9112) — request parsing, body framing, encoding.
 //!   HTTP/1.1 only: this is a modern-only runtime, and an HTTP/1.0 message is
 //!   refused rather than half-supported.
+//! - [`hpack`]: HTTP/2's header compression (RFC 7541).
 //! - [`date`]: the `Date` header's IMF-fixdate form.
 
 pub mod date;
 pub mod fields;
 pub mod h1;
+pub mod hpack;
