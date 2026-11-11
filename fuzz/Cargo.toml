@@ -27,6 +27,9 @@ features = ["fuzzing"]
 [dependencies.es-runtime-json]
 path = "../crates/json"
 
+[dependencies.es-runtime-http]
+path = "../crates/http"
+
 [dependencies.es-runtime-default-providers]
 path = "../crates/default-providers"
 features = ["fuzzing"]
@@ -152,3 +155,15 @@ path = "fuzz_targets/pdf.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "http_h1_request"
+path = "fuzz_targets/http_h1_request.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "http_h1_chunked"
+path = "fuzz_targets/http_h1_chunked.rs"
+test = false
+doc = false
