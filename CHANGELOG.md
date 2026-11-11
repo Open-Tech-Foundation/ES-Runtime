@@ -23,6 +23,10 @@ namespace) is unstable and may change between minor releases until the API freez
 - Every host op call is about 10% cheaper: the op's name was copied on each call
   for a diagnostics span even when nothing was subscribed. It is now copied only
   when a span is recorded.
+- `crypto.randomUUID()` is about 4× faster: one draw from the entropy source
+  serves 128 UUIDs, as in Node, instead of one op call and one `getrandom`
+  syscall per UUID. The pool is filled on first use, never in the startup
+  snapshot.
 
 ## [0.47.0] - 2026-11-11
 

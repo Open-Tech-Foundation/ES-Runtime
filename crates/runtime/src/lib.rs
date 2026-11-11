@@ -5836,6 +5836,55 @@ mod tests {
     }
 
     #[test]
+    fn random_uuids_stay_well_formed_and_distinct_across_pool_refills() {
+        // 300 UUIDs cross two refills of the 128-UUID entropy pool.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const re = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/; \
+             const seen = new Set(); \
+             for (let i = 0; i < 300; i++) { const u = crypto.randomUUID(); if (!re.test(u)) return false; seen.add(u); } \
+             return seen.size === 300; })()",
+        );
+    }
+
+    #[test]
+    fn a_restored_runtime_draws_uuids_from_its_own_entropy() {
+        // The pool must never be baked into the snapshot: every process restores
+        // the same snapshot, and would otherwise hand out the same UUIDs. Built
+        // with one entropy source and restored with another, the first UUID is
+        // made of the restoring runtime's bytes.
+        struct Constant;
+        impl Entropy for Constant {
+            fn fill(
+                &self,
+                dest: &mut [u8],
+            ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+                dest.fill(0xaa);
+                Ok(())
+            }
+        }
+        let _g = v8_guard();
+        let blob = Runtime::build_snapshot(&test_providers()).expect("build snapshot");
+        let providers = HostProviders::new(
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+            Arc::new(TestConsole::default()),
+            Arc::new(MockNet::stub()),
+            Arc::new(Constant),
+        )
+        .with_ports(Arc::new(TestPortHub::default()));
+        let mut rt = Runtime::with_snapshot(blob, providers).expect("restore");
+        assert_eq!(
+            rt.eval("crypto.randomUUID()").unwrap(),
+            Value::String("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".into())
+        );
+    }
+
+    #[test]
     fn subtle_digest_matches_known_sha256_vector() {
         let _g = v8_guard();
         let mut rt = runtime();

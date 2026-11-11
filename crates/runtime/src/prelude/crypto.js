@@ -44,16 +44,30 @@
 
   const HEX = [];
   for (let i = 0; i < 256; i++) HEX.push((i + 0x100).toString(16).slice(1));
+  // One draw from the entropy provider serves 128 UUIDs, as in Node (whose
+  // `randomUUID` caches the same amount): a draw is an op crossing and a
+  // `getrandom` syscall, which cost several times the UUID itself. The pool
+  // starts empty and is filled on first use, so the startup snapshot — shared
+  // by every process — never holds random bytes. Each byte is used once.
+  const UUID_POOL_BYTES = 16 * 128;
+  let uuidPool = null;
+  let uuidOffset = UUID_POOL_BYTES;
   function randomUUID() {
-    const b = ops.random_bytes(16);
-    b[6] = (b[6] & 0x0f) | 0x40; // version 4
-    b[8] = (b[8] & 0x3f) | 0x80; // variant
+    if (uuidOffset === UUID_POOL_BYTES) {
+      uuidPool = ops.random_bytes(UUID_POOL_BYTES);
+      uuidOffset = 0;
+    }
+    const b = uuidPool;
+    const o = uuidOffset;
+    uuidOffset += 16;
+    const v = (b[o + 6] & 0x0f) | 0x40; // version 4
+    const r = (b[o + 8] & 0x3f) | 0x80; // variant
     return (
-      HEX[b[0]] + HEX[b[1]] + HEX[b[2]] + HEX[b[3]] + "-" +
-      HEX[b[4]] + HEX[b[5]] + "-" +
-      HEX[b[6]] + HEX[b[7]] + "-" +
-      HEX[b[8]] + HEX[b[9]] + "-" +
-      HEX[b[10]] + HEX[b[11]] + HEX[b[12]] + HEX[b[13]] + HEX[b[14]] + HEX[b[15]]
+      HEX[b[o]] + HEX[b[o + 1]] + HEX[b[o + 2]] + HEX[b[o + 3]] + "-" +
+      HEX[b[o + 4]] + HEX[b[o + 5]] + "-" +
+      HEX[v] + HEX[b[o + 7]] + "-" +
+      HEX[r] + HEX[b[o + 9]] + "-" +
+      HEX[b[o + 10]] + HEX[b[o + 11]] + HEX[b[o + 12]] + HEX[b[o + 13]] + HEX[b[o + 14]] + HEX[b[o + 15]]
     );
   }
 
