@@ -11,7 +11,7 @@
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
-members = ["packages/postgres", "packages/mysql", "packages/mongodb", "packages/redis", "packages/valkey", "packages/smtp", "packages/rabbitmq", "packages/mqtt", "packages/nats", "packages/types", "packages/esdev-plugin-react", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
+members = ["packages/postgres", "packages/mysql", "packages/mongodb", "packages/redis", "packages/valkey", "packages/smtp", "packages/rabbitmq", "packages/mqtt", "packages/nats", "packages/s3", "packages/types", "packages/esdev-plugin-react", "crates/runtime/js", "crates/dev-cli/js", "website", "bench"]
 
 # --- the runtime (Rust) ------------------------------------------------------
 
@@ -115,7 +115,7 @@ run = "pnpm install --frozen-lockfile"
 # script, so the alternative is a no-op script that exists to be skipped, which
 # is a worse thing to leave in a published manifest.
 [tasks.build]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter esrun-serialization --filter esdev-dom-color --parallel run build"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-s3 --filter esrun-serialization --filter esdev-dom-color --parallel run build"
 
 # Not "*": `crates/runtime/js` has 25 standing type errors and has never been
 # typechecked standalone (its tsconfig sets `types: []` and drives the editor).
@@ -139,7 +139,7 @@ run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filte
 # declarations `@opentf/esrun-redis` builds, as a consumer of the published
 # package would be.
 [tasks.typecheck]
-run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-types --parallel exec esdev typecheck"
+run = "pnpm --filter @opentf/esrun-postgres --filter @opentf/esrun-mysql --filter @opentf/esrun-mongodb --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-s3 --filter @opentf/esrun-types --parallel exec esdev typecheck"
 
 [tasks.lint]
 run = "biome check"
@@ -160,7 +160,7 @@ run = "biome ci"
 # `@opentf/esrun-types` and `esrun-serialization` too, and a member with no
 # such file fails the task rather than being passed over.
 [tasks."test:protocol"]
-run = "pnpm --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --parallel exec bash ./test/unit/run.sh"
+run = "pnpm --filter @opentf/esrun-redis --filter @opentf/esrun-valkey --filter @opentf/esrun-smtp --filter @opentf/esrun-rabbitmq --filter @opentf/esrun-mqtt --filter @opentf/esrun-nats --filter @opentf/esrun-s3 --parallel exec bash ./test/unit/run.sh"
 
 # Run with our own `esdev`, not another JavaScript runtime — the same reasoning as `build` above. This
 # is the runtime's largest hand-written JS subsystem, and running it on the
@@ -314,6 +314,14 @@ dir = "packages/mqtt"
 [tasks."test:nats"]
 run = "./test/run.sh"
 dir = "packages/nats"
+
+# The full client suite — the signer against the AWS test suite, the client
+# against a fake S3, and an end-to-end run against a real S3-compatible server
+# (RustFS). Says so and skips the end-to-end part when `test/s3-server.sh` has
+# not set `S3_E2E_ENDPOINT`; CI gives it a job with a service container.
+[tasks."test:s3"]
+run = "./test/run.sh"
+dir = "packages/s3"
 
 # The Valkey package's suite: the unit tests, and a run against a real Valkey.
 # CI runs the Redis package's own suite against Valkey too, in the same job, since

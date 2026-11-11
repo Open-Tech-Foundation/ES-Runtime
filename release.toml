@@ -115,6 +115,14 @@ es-runtime-bson = []
     "**/test/**",
     "**/tests/**",
 ]
+"@opentf/esrun-s3" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 
 [[package]]
 name = "@opentf/esrun-mysql"
@@ -187,6 +195,15 @@ matrix = false
 command = "npm run build"
 artifacts = ""
 manifest = "packages/rabbitmq/package.json"
+
+[[package]]
+name = "@opentf/esrun-s3"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "npm run build"
+artifacts = ""
+manifest = "packages/s3/package.json"
 
 [[package]]
 name = "@opentf/esrun-smtp"

@@ -1,0 +1,170 @@
+---
+title: Object storage
+description: Read, write, list and share objects in AWS S3, Cloudflare R2, Google Cloud Storage and S3-compatible stores with @opentf/esrun-s3.
+---
+
+import { Callout } from "@opentf/afw-docs";
+
+# Object storage
+
+[`@opentf/esrun-s3`](https://www.npmjs.com/package/@opentf/esrun-s3) is an S3
+client written in JavaScript over `fetch`. Its API is Bun's `S3Client`, and it
+needs no grant beyond reaching the endpoint.
+
+```sh
+npm install @opentf/esrun-s3
+```
+
+```sh
+esrun --allow-net=s3.eu-west-1.amazonaws.com app.js
+```
+
+## Connect
+
+Pass the bucket, region and credentials:
+
+```js
+import { S3Client } from "@opentf/esrun-s3";
+
+const s3 = new S3Client({
+  bucket: "uploads",
+  region: "eu-west-1",
+  accessKeyId: "AKIA…",
+  secretAccessKey: "…",
+});
+```
+
+For another service, set `endpoint`:
+
+```js
+// Cloudflare R2
+const r2 = new S3Client({
+  endpoint: "https://<account-id>.r2.cloudflarestorage.com",
+  region: "auto",
+  bucket: "assets",
+  accessKeyId: "…",
+  secretAccessKey: "…",
+});
+```
+
+To configure from the environment, use `S3Client.fromEnv()`. It reads `S3_*`
+and then `AWS_*` names, and only the ones the run grants:
+
+```js
+const s3 = await S3Client.fromEnv();
+```
+
+```sh
+esrun --allow-net=s3.eu-west-1.amazonaws.com \
+  --allow-env=S3_BUCKET,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY app.js
+```
+
+<Callout type="info">
+  `new S3Client()` never reads the environment. A program configures its client
+  on purpose, or through `fromEnv()`.
+</Callout>
+
+## Read and write
+
+```js
+await s3.write("notes/today.md", "# Today\n");
+await s3.write("data/rows.json", JSON.stringify(rows));
+
+const notes = s3.file("notes/today.md");
+await notes.text();
+await notes.exists();
+await notes.stat();   // { size, lastModified, etag, type, metadata, … }
+await notes.delete();
+```
+
+`write` takes a string, bytes, a `Blob`, a `ReadableStream`, a `Response` or
+another `S3File`. Large bodies and streams are uploaded in parts, without being
+held in memory whole:
+
+```js
+const upload = await fetch("https://example.com/big.iso");
+await s3.write("mirror/big.iso", upload);
+```
+
+Read part of an object with `slice`, as with a `Blob`:
+
+```js
+const header = await s3.file("video.mp4").slice(0, 64 * 1024).bytes();
+```
+
+## Write many chunks
+
+Use a writer when the data arrives over time:
+
+```js
+const writer = s3.file("exports/users.ndjson").writer();
+for await (const user of users()) {
+  await writer.write(JSON.stringify(user) + "\n");
+}
+await writer.end();
+```
+
+`write` waits while parts are uploading, so a fast producer cannot outrun the
+network. If a part fails after its retries, the upload is aborted on the server.
+
+## Write only if
+
+Conditional writes make S3 a coordination point:
+
+```js
+// Create-only
+await s3.write("locks/nightly", "held", { ifNoneMatch: "*" });
+
+// Update only if unchanged since it was read
+const { etag } = await s3.stat("config.json");
+await s3.write("config.json", updated, { ifMatch: etag });
+```
+
+A lost race fails with `PreconditionFailed`.
+
+## List
+
+```js
+const page = await s3.list({ prefix: "photos/", delimiter: "/" });
+page.commonPrefixes;  // the "folders"
+page.contents;        // the objects at this level
+
+for await (const object of s3.listAll({ prefix: "logs/2026-11-" })) {
+  console.log(object.key, object.size);
+}
+```
+
+## Share a link
+
+A presigned URL grants one operation on one object until it expires, with no
+credentials:
+
+```js
+const download = await s3.presign("invoices/42.pdf", { expiresIn: 600 });
+
+const upload = await s3.file(`inbox/${id}.jpg`).presign({
+  method: "PUT",
+  type: "image/jpeg",
+  expiresIn: 300,
+});
+```
+
+## Handle errors
+
+```js
+import { S3Error } from "@opentf/esrun-s3";
+
+try {
+  return await s3.file(key).json();
+} catch (error) {
+  if (error instanceof S3Error && error.code === "NoSuchKey") return null;
+  throw error;
+}
+```
+
+`error.code` is S3's own name for the failure. Throttling and server errors are
+retried before you see them.
+
+The [package reference](https://www.npmjs.com/package/@opentf/esrun-s3) lists
+every option. How the client signs, retries and bounds memory is in
+[Internals: S3](/docs/internals/s3).

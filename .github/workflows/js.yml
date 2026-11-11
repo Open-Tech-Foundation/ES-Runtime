@@ -526,3 +526,42 @@ jobs:
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           VALKEY_URL: valkey://127.0.0.1:6379
+
+  # The S3 client: the signer against the AWS test suite, the client against a
+  # fake S3, and the end-to-end suite against RustFS. Started by its script
+  # rather than as a service container, so the job uses the same pinned image
+  # and generated secret a developer does — redirected into $GITHUB_ENV for the
+  # reason the Redis job gives: a server that never came up fails the step.
+  s3:
+    name: s3 client
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/s3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/debug/gn_out
+            target/release/gn_out
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr build
+      - run: tsr typecheck
+      - name: start the S3 server
+        run: ./test/s3-server.sh >> "$GITHUB_ENV"
+      - run: tsr test:s3
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun

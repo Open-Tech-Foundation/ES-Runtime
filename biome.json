@@ -13,7 +13,8 @@
       "crates/runtime/js/test/**",
       "!**/node_modules",
       "!**/dist",
-      "!**/*.d.ts"
+      "!**/*.d.ts",
+      "!packages/s3/test/fixtures/sigv4"
     ]
   },
   "formatter": {

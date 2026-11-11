@@ -37,6 +37,7 @@ const NAV = [
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "UDP", path: "/docs/guides/udp" },
       { title: "Sending email", path: "/docs/guides/email" },
+      { title: "Object storage", path: "/docs/guides/object-storage" },
       {
         title: "Messaging",
         items: [
@@ -177,6 +178,7 @@ const NAV = [
       { title: "RabbitMQ", path: "/docs/internals/rabbitmq" },
       { title: "MQTT", path: "/docs/internals/mqtt" },
       { title: "NATS", path: "/docs/internals/nats" },
+      { title: "S3", path: "/docs/internals/s3" },
       { title: "Paths", path: "/docs/internals/path" },
       { title: "Serialization", path: "/docs/internals/serialization" },
       { title: "WebCrypto", path: "/docs/internals/crypto" },

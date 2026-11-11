@@ -1,0 +1,113 @@
+---
+title: "Internals: S3"
+description: How the S3 client signs requests, why every body is buffered and hashed, what it refuses before sending, how it retries, and how it is tested.
+---
+
+# Internals: S3
+
+How [`@opentf/esrun-s3`](/docs/guides/object-storage) is put together, and why.
+The decision and what was rejected are in `docs/DECISIONS.md` (D211).
+
+## A package over `fetch`
+
+S3 is HTTP, so the client is JavaScript over `fetch`. It inherits the transport
+the runtime already has: the process trust store and `--tls-ca`, mutual TLS,
+`--proxy`, HTTP/2 and connection pooling. Reaching the endpoint is
+`--allow-net`, scoped to its host. The package adds no capability.
+
+The AWS SDK does not run here. On a server it sends through `node:http`, and
+esrun does not provide `node:` builtins.
+
+## The bytes stored are the bytes read
+
+S3 returns the `Content-Encoding` an object was stored with on every GET,
+whatever the request accepted. A `fetch` that decodes by that header would hand
+back different bytes from the ones stored: they would not match the object's
+size or ETag, and a range of them could not be decoded at all. Every read
+therefore passes `decompress: false` (D210), and the body arrives as stored.
+
+## Signing
+
+Requests are signed with SigV4 in the `Authorization` header. Two places S3
+differs from the generic algorithm are handled before the signer runs:
+
+- **The path is encoded once**, with `/` kept. Other AWS services encode it
+  twice.
+- **The path is never normalized.** `a//b` and `a/b` are different keys.
+
+The signing key changes once a day per region, so the last one is kept rather
+than paying four HMACs on every request.
+
+The signer is checked against the AWS signing test suite (from
+`awslabs/aws-c-auth`, pinned and committed under `packages/s3/test/fixtures`).
+The unit tests also run against a fake S3 that re-derives every signature from
+the request it received: method, raw path, query, signed headers and the body's
+hash. A request signed one way and sent another fails there, as it would
+against S3.
+
+## Every body is hashed
+
+A body is held in memory before it is sent, and signed with its SHA-256. Only a
+presigned URL is signed as `UNSIGNED-PAYLOAD`, because its body is not known
+when it is signed.
+
+That is what makes every request retryable: a body already in memory can be
+sent again. It is also what bounds a multipart upload. One part is filled while
+at most `queueSize` are in flight, so an upload of any size holds at most
+`partSize × (queueSize + 1)` bytes: 30 MiB at the defaults.
+
+S3's streaming signature (`aws-chunked`) would avoid buffering a part, but a
+part that has already streamed past cannot be retried, and a part is 5 MiB by
+default.
+
+A body that ends before the first part fills is one PUT. Nothing is created on
+the server until a part is full, so a small upload costs one request, not three.
+
+## What is refused before sending
+
+| Refused | Because |
+| --- | --- |
+| A key with a `.` or `..` segment | The URL parser resolves dot segments, even percent-encoded ones, so `a/../b` would reach `b`. In path-style addressing, `../other-bucket/x` would reach another bucket. |
+| A key over 1024 bytes of UTF-8 | S3's limit. |
+| An SSE-C key on a plain-HTTP endpoint | The key would cross the network in the clear. |
+| A metadata name that is not an HTTP token, or a value that is not printable ASCII | It cannot be sent as a header without changing it. |
+| A request path the URL parser would rewrite | The request would be signed for one path and sent to another. |
+
+## Listing exact keys
+
+S3 lists keys in XML, and XML cannot carry some characters a key may contain.
+The XML reader also trims whitespace at the edges of text, which would change a
+key such as `" draft "`. So every list asks for `encoding-type=url` and
+decodes the keys it gets back. A key with spaces at both ends lists as itself.
+
+## Retries
+
+| Answer | What happens |
+| --- | --- |
+| 429, 5xx, `SlowDown`, `RequestTimeout`, `InternalError`, `ServiceUnavailable`, no connection | Retried, up to `retry` times (3), with exponential backoff and full jitter. Throttling starts from a longer base. |
+| `RequestTimeTooSkewed` | The offset from the response's `Date` is kept, and the retry is signed in the server's time. |
+| `ExpiredToken` | The credentials provider is asked again. |
+| A `200` whose body is an `<Error>` | An error. CompleteMultipartUpload and CopyObject can answer this way. |
+| A redirect | Reported with the bucket's region. A signed request is signed for one host, so it is never followed. |
+| Anything else | Thrown at once. |
+
+A part that still fails after its retries fails the upload, and the multipart
+upload is aborted so no parts are left on the server. If the abort also fails,
+the original error is what the caller sees, and a bucket lifecycle rule
+(`AbortIncompleteMultipartUpload`) cleans up.
+
+## Credentials
+
+Credentials are given, or produced by a function. Expiring credentials are
+refreshed five minutes before they lapse, and concurrent requests share one
+refresh. A credential may be a `Secret` from `runtime:process`'s `env`. It is
+unmasked only when a request is signed, and `runtime:process` is loaded only
+then, so a program that passes plain strings needs no `env` grant.
+
+## Testing
+
+| Suite | Against |
+| --- | --- |
+| `sigv4.mjs` | The AWS signing test suite. |
+| `client.mjs` | The fake S3, including scripted faults: a part that fails twice, a `200` carrying an `<Error>`, a server clock an hour ahead, a wrong-region redirect. |
+| `e2e.mjs` | RustFS (pinned), in CI. The same suite runs against AWS with `S3_E2E_ENDPOINT` and `S3_E2E_REGION`. |

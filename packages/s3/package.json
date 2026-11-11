@@ -1,0 +1,36 @@
+{
+  "name": "@opentf/esrun-s3",
+  "version": "0.1.0",
+  "description": "S3 client for esrun: get, put, list, presign and multipart uploads against AWS S3, R2, GCS and any S3-compatible store, signed with SigV4 over fetch.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.47.0"
+  },
+  "scripts": {
+    "build": "esdev build --lib src"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "workspace:*",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "s3", "aws", "r2", "object-storage", "presign", "sigv4"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/s3"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/guides/object-storage",
+  "publishConfig": {
+    "access": "public"
+  }
+}
