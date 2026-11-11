@@ -690,8 +690,13 @@ async function handleRequest(entry, handler, onError) {
   // one when the names are known and the handler did not declare them itself.
   // HTTP/2 needs nothing here — this is the one place the two versions differ.
   const declared = Array.isArray(trailerArg) && trailerArg.length > 0;
-  const hasTrailerHeader = parts.headers.some(([name]) => name.toLowerCase() === "trailer");
-  for (const [name, value] of parts.headers) args.push(name, value);
+  // `parts.headers` is flat, with names already lowercase.
+  const flatHeaders = parts.headers;
+  let hasTrailerHeader = false;
+  for (let i = 0; i < flatHeaders.length; i += 2) {
+    if (flatHeaders[i] === "trailer") hasTrailerHeader = true;
+    args.push(flatHeaders[i], flatHeaders[i + 1]);
+  }
   // What the handler changed on `request.cookies`, beside whatever
   // `Set-Cookie` headers the response carries itself.
   if (cookies) {

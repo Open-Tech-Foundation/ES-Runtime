@@ -11,6 +11,8 @@
   // Fragment-local, so unreachable from guest code; the shared slots come from
   // __internal (see prelude/internals.js).
   const HEADER_LIST = Symbol("headerList");
+  // The same list flattened — [name, value, …] — for `runtime:http`'s answer.
+  const HEADER_FLAT = Symbol("headerFlat");
   const REQUEST_HEADERS = Symbol("requestHeaders");
   const BYTES = __internal.bytes;
   const ENCODE = __internal.encode;
@@ -79,12 +81,21 @@
     }
     return n.toLowerCase();
   }
+  // HTTP whitespace (Fetch): tab, LF, CR, space.
+  function isHttpSpace(c) {
+    return c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
+  }
   function normalizeValue(value) {
     // Strip leading/trailing HTTP whitespace first, then reject anything that
     // is not a header value byte. NUL/CR/LF *inside* the value would otherwise
     // let a caller splice extra header lines (or a body) into the wire format
     // via any header built from untrusted input — request/response splitting.
-    const v = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    let v = String(value);
+    // Trimmed only when there is something to trim: most values have nothing
+    // at either end, and the replace runs a regex and builds a string to say so.
+    if (v.length > 0 && (isHttpSpace(v.charCodeAt(0)) || isHttpSpace(v.charCodeAt(v.length - 1)))) {
+      v = v.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    }
     if (/[\0\n\r]/.test(v)) {
       throw new TypeError("Invalid header value: contains NUL, CR or LF");
     }
@@ -168,6 +179,18 @@
     // Internal slot: flat list for the fetch op.
     [HEADER_LIST]() {
       return this.#sortedEntries();
+    }
+    // The sorted, combined list as one flat array, built without the pair
+    // arrays `#sortedEntries` makes for iteration.
+    [HEADER_FLAT]() {
+      const names = [...this.#map.keys()].sort();
+      const flat = [];
+      for (const name of names) {
+        const list = this.#map.get(name);
+        if (name === "set-cookie") for (const v of list) flat.push(name, v);
+        else flat.push(name, list.length === 1 ? list[0] : list.join(", "));
+      }
+      return flat;
     }
     // A served request's headers, as a flat [name, value, …] list the host
     // already validated and normalized (`http_request_headers`, D216). Stored
@@ -817,7 +840,8 @@
       const s = this[BODY];
       return {
         status: this.#status,
-        headers: this.#headers[HEADER_LIST](),
+        // Flat [name, value, …]: names lowercase, values validated.
+        headers: this.#headers[HEADER_FLAT](),
         // A deferred string body crosses to http_respond as-is (encoded
         // Rust-side); otherwise hand over already-materialized bytes or a stream.
         str: s.str,

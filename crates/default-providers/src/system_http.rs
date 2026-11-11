@@ -454,28 +454,42 @@ fn valid_authority(authority: &str) -> Option<String> {
 fn build_response(resp: HttpServerResponse, head: bool) -> Response<OutBody> {
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
     let mut builder = Response::builder().status(status);
-    let mut head_length: Option<&str> = None;
-    for (name, value) in &resp.headers {
-        let lower = name.to_ascii_lowercase();
-        if lower == "content-length" {
-            if head
-                && head_length.is_none()
-                && !value.is_empty()
-                && value.len() <= 20
-                && value.bytes().all(|b| b.is_ascii_digit())
-                && value.parse::<u64>().is_ok()
-            {
-                head_length = Some(value);
+    let mut head_length: Option<hyper::header::HeaderValue> = None;
+    if let Some(map) = builder.headers_mut() {
+        map.reserve(resp.headers.len());
+        for (name, value) in resp.headers {
+            // Compared in place rather than through a lowercased copy: the
+            // guest's `Headers` already lowercased them, and an embedder's
+            // provider that did not is still matched.
+            if name.eq_ignore_ascii_case("content-length") {
+                if head
+                    && head_length.is_none()
+                    && !value.is_empty()
+                    && value.len() <= 20
+                    && value.bytes().all(|b| b.is_ascii_digit())
+                    && value.parse::<u64>().is_ok()
+                {
+                    head_length = hyper::header::HeaderValue::from_str(&value).ok();
+                }
+                continue;
             }
-            continue;
+            if name.eq_ignore_ascii_case("transfer-encoding") {
+                continue;
+            }
+            // The value's bytes move into the header rather than being copied.
+            // Both are checked as `builder.header` checks them, and a pair that
+            // fails makes the answer a 500, as a failed builder did.
+            let (Ok(name), Ok(value)) = (
+                hyper::header::HeaderName::from_bytes(name.as_bytes()),
+                hyper::header::HeaderValue::from_maybe_shared(Bytes::from(value)),
+            ) else {
+                return status_only(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            map.append(name, value);
         }
-        if lower == "transfer-encoding" {
-            continue;
+        if let Some(length) = head_length {
+            map.insert(hyper::header::CONTENT_LENGTH, length);
         }
-        builder = builder.header(name, value);
-    }
-    if let Some(length) = head_length {
-        builder = builder.header(hyper::header::CONTENT_LENGTH, length);
     }
     let body: OutBody = match (resp.body, resp.trailers) {
         (body, None) => match body {
@@ -1174,6 +1188,66 @@ mod tests {
     use es_runtime_providers::HttpServerTls;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
+
+    fn answer(headers: &[(&str, &str)], head: bool) -> Response<OutBody> {
+        build_response(
+            HttpServerResponse {
+                status: 201,
+                headers: headers
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), v.to_string()))
+                    .collect(),
+                body: HttpServerBody::Bytes(b"hi".to_vec()),
+                trailers: None,
+            },
+            head,
+        )
+    }
+
+    #[test]
+    fn a_response_keeps_its_headers_in_order_with_repeats() {
+        let resp = answer(
+            &[
+                ("x-a", "1"),
+                ("set-cookie", "a=1"),
+                ("set-cookie", "b=2"),
+                ("X-B", "2"),
+            ],
+            false,
+        );
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let cookies: Vec<_> = resp.headers().get_all("set-cookie").iter().collect();
+        assert_eq!(cookies, ["a=1", "b=2"]);
+        assert_eq!(resp.headers()["x-a"], "1");
+        assert_eq!(resp.headers()["x-b"], "2");
+    }
+
+    #[test]
+    fn framing_headers_from_the_guest_are_not_sent_as_given() {
+        // Matched in any case: the body decides framing, not the guest.
+        let resp = answer(
+            &[("Transfer-Encoding", "chunked"), ("Content-Length", "99")],
+            false,
+        );
+        assert!(resp.headers().get("transfer-encoding").is_none());
+        assert!(resp.headers().get("content-length").is_none());
+        // A HEAD answer keeps a well-formed length, since it has no body to give one.
+        let head = answer(&[("content-length", "99")], true);
+        assert_eq!(head.headers()["content-length"], "99");
+    }
+
+    #[test]
+    fn a_header_hyper_would_refuse_makes_the_answer_a_500() {
+        for (name, value) in [("bad name", "v"), ("x-ok", "line\nbreak")] {
+            let resp = answer(&[("x-a", "1"), (name, value)], false);
+            assert_eq!(
+                resp.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{name:?}: {value:?}"
+            );
+            assert!(resp.headers().get("x-a").is_none());
+        }
+    }
 
     /// An HTTP/2 client that opens with the connection preface (prior
     /// knowledge, h2c) — a mode no fetch client needs, so these server tests

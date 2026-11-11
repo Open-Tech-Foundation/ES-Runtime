@@ -36,6 +36,10 @@ namespace) is unstable and may change between minor releases until the API freez
   JS, and the strings are handed over instead of copied. With 15 request
   headers and a handler that reads one, user CPU per request drops from 26.2 to
   20.8 µs (+16% req/s).
+- Response headers cost less to send: values with nothing to trim skip the
+  trimming regex, the answer's headers cross as one flat list, and the host
+  moves each value into the response instead of copying it. With 10 response
+  headers, user CPU per request drops from 23.3 to 19.5 µs (+15% req/s).
 - **Embedders:** `HttpServerRequest.headers` is now an `HttpRequestHeaders`
   (`es-runtime-providers`), built with `from_pairs(..)` / `.into()` from the
   old `Vec<(String, String)>`, or with `deferred(..)` to convert only when read.
