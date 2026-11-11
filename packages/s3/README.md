@@ -235,9 +235,15 @@ await s3.copy("a.md", "b.md", { sourceBucket: "other", metadata: { reviewed: "ye
 const { errors } = await s3.deleteMany(["a", "b", { key: "c", versionId: "…" }]);
 ```
 
-`copy` runs inside S3, so the bytes never pass through this process, up to S3's
-5 GiB limit for one copy. Passing `metadata` or `type` replaces the source's
-metadata; otherwise it is copied. `deleteMany` sends a thousand keys per
+`copy` runs inside S3, so the bytes never pass through this process, at any
+size. It sends one CopyObject, and if the service refuses it for a source
+larger than one copy takes (5 GB on AWS), copies the source in ranges as a
+multipart upload (UploadPartCopy). The parts are pinned to the source's version
+when it has one. Otherwise the source's ETag is checked again before the copy
+completes, and a change fails it with `PreconditionFailed`. Passing `metadata`
+or `type` replaces the source's metadata; otherwise it is carried over. A
+multipart copy's ETag ends in `-N`, like any multipart object's. `partSize`
+(default 256 MiB for a copy) and `queueSize` set the parts. `deleteMany` sends a thousand keys per
 request and resolves with the keys S3 could not delete. Deleting a missing key
 is not an error.
 

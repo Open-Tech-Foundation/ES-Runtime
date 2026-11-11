@@ -12,6 +12,7 @@
  */
 import type { Core } from "./core.js";
 import { invalid, S3Error, S3ErrorCode } from "./errors.js";
+import { abortUpload, completeUpload, createUpload } from "./multipart.js";
 import {
   checksumName,
   checksumValue,
@@ -24,7 +25,6 @@ import {
   sseCustomerHeaders,
   type WriteOptions,
 } from "./options.js";
-import { build, childText, NAMESPACE, parse } from "./xml.js";
 
 export interface S3WriteResult {
   /** The new object's ETag, quoted as S3 returns it. */
@@ -274,31 +274,24 @@ export class S3Writer {
     this.#inflight.add(tracked);
   }
 
-  async #create(): Promise<string> {
+  #target() {
+    return {
+      core: this.#core,
+      bucket: this.#bucket,
+      key: this.#key,
+      retry: this.#retry,
+      signal: this.#options.signal,
+    };
+  }
+
+  #create(): Promise<string> {
     const headers = [
       ...objectHeaders(this.#key, this.#options, this.#fallbackType),
       ...sseCustomerHeaders(this.#options.sseCustomerKey, this.#core.isHttps(this.#bucket)),
     ];
     const algorithm = checksumName(this.#options.checksum);
     if (algorithm !== undefined) headers.push(["x-amz-checksum-algorithm", algorithm]);
-    const response = await this.#core.send({
-      method: "POST",
-      bucket: this.#bucket,
-      key: this.#key,
-      query: [["uploads", ""]],
-      headers,
-      signal: this.#options.signal,
-      retry: this.#retry,
-    });
-    const root = parse(await response.text(), `CreateMultipartUpload ${this.#key}`);
-    const id = childText(root.InitiateMultipartUploadResult, "UploadId");
-    if (!id) {
-      throw new S3Error("CreateMultipartUpload returned no UploadId", {
-        code: S3ErrorCode.Response,
-        key: this.#key,
-      });
-    }
-    return id;
+    return createUpload(this.#target(), headers);
   }
 
   async #uploadPart(number: number, body: Uint8Array): Promise<Part> {
@@ -342,34 +335,16 @@ export class S3Writer {
     const checksum = checksumName(this.#options.checksum);
     const parts = this.#parts.map((part) => {
       const entry: Record<string, unknown> = { PartNumber: part.PartNumber, ETag: part.ETag };
-      if (checksum !== undefined && part.checksum !== undefined)
+      if (checksum !== undefined && part.checksum !== undefined) {
         entry[`Checksum${checksum}`] = part.checksum;
+      }
       return entry;
     });
-    const body = encoder.encode(
-      build({ CompleteMultipartUpload: { "@xmlns": NAMESPACE, Part: parts } }),
-    );
-    const response = await this.#core.send({
-      method: "POST",
-      bucket: this.#bucket,
-      key: this.#key,
-      query: [["uploadId", uploadId]],
-      headers: [
-        ["content-type", "application/xml"],
-        ...conditionalWriteHeaders(this.#options),
-        ...sseCustomerHeaders(this.#options.sseCustomerKey, this.#core.isHttps(this.#bucket)),
-      ],
-      body,
-      signal: this.#options.signal,
-      retry: this.#retry,
-      errorIn200: true,
-    });
-    const root = parse(await response.text(), `CompleteMultipartUpload ${this.#key}`);
-    return {
-      etag: childText(root.CompleteMultipartUploadResult, "ETag") ?? "",
-      versionId: response.headers.get("x-amz-version-id") ?? undefined,
-      size: this.#size,
-    };
+    const done = await completeUpload(this.#target(), uploadId, parts, [
+      ...conditionalWriteHeaders(this.#options),
+      ...sseCustomerHeaders(this.#options.sseCustomerKey, this.#core.isHttps(this.#bucket)),
+    ]);
+    return { ...done, size: this.#size };
   }
 
   async #abortUpload(): Promise<void> {
@@ -382,21 +357,7 @@ export class S3Writer {
     } catch {
       return; // never created, so nothing to abort
     }
-    try {
-      const response = await this.#core.send({
-        method: "DELETE",
-        bucket: this.#bucket,
-        key: this.#key,
-        query: [["uploadId", uploadId]],
-        retry: this.#retry,
-        accept: [404],
-      });
-      await response.body?.cancel();
-    } catch {
-      // Best effort: the original failure is what the caller needs to see. An
-      // abandoned upload is what a bucket lifecycle rule
-      // (AbortIncompleteMultipartUpload) is for.
-    }
+    await abortUpload(this.#target(), uploadId);
   }
 }
 

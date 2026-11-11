@@ -80,6 +80,23 @@ The XML reader also trims whitespace at the edges of text, which would change a
 key such as `" draft "`. So every list asks for `encoding-type=url` and
 decodes the keys it gets back. A key with spaces at both ends lists as itself.
 
+## Large copies
+
+AWS copies at most 5 GB in one CopyObject; a larger copy is a multipart upload
+whose parts are ranges of the source (UploadPartCopy). Providers differ here:
+Google Cloud Storage copies up to 5 TiB in one request and does not implement
+UploadPartCopy, and Cloudflare R2 implements UploadPartCopy but not
+`x-amz-copy-source-if-match` on it. So `copy()` always sends the single copy
+first, and turns to ranges only when it is refused with a `400` and a `HEAD`
+shows the source is over 5 GiB. It keys on the size rather than the refusal's
+wording, which is each provider's own.
+
+The parts must all come from one source. A version id pins them where the
+bucket has versions. Where it does not, the ETag read before the first part is
+read again before completing, and a mismatch aborts the copy. That catches a
+source replaced during the copy on every provider, R2 included. It cannot
+catch one replaced and then restored between the two reads.
+
 ## Reads resume
 
 A request is retried before its body starts. A body that breaks after that, by

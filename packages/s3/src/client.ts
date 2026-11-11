@@ -10,6 +10,7 @@
  * conditional write or a cache needs next.
  */
 import { hash } from "runtime:hashing";
+import { copyLimits, headSource, multipartCopy } from "./copy.js";
 import { Core, checkBucket, checkKey, type Pairs } from "./core.js";
 import {
   CredentialCache,
@@ -531,7 +532,9 @@ export class S3Client {
 
   /**
    * Copies `from` to `to` inside S3, without the bytes passing through this
-   * process. Up to 5 GiB, S3's limit for one copy.
+   * process, at any size: one CopyObject, or — when that is refused for a
+   * source larger than one copy takes (5 GB on AWS) — a multipart copy of its
+   * ranges.
    */
   async copy(from: string, to: string, options: S3CopyOptions = {}): Promise<S3CopyResult> {
     const bucket = this.#bucketOf(options.bucket);
@@ -569,15 +572,40 @@ export class S3Client {
       ...conditionalWriteHeaders(options),
       ...sseCustomerHeaders(options.sseCustomerKey, https),
     );
-    const response = await this.#core.send({
-      method: "PUT",
-      bucket,
-      key: to,
-      headers,
-      signal: options.signal,
-      retry: options.retry,
-      errorIn200: true,
-    });
+    let response: Response;
+    try {
+      response = await this.#core.send({
+        method: "PUT",
+        bucket,
+        key: to,
+        headers,
+        signal: options.signal,
+        retry: options.retry,
+        errorIn200: true,
+      });
+    } catch (error) {
+      // Refused, and the source is more than one copy takes: copy it in
+      // ranges instead. Keyed on the size, not on the refusal's wording, which
+      // is the provider's own.
+      if (!(error instanceof S3Error) || error.status !== 400) throw error;
+      const retry = retryOf(options.retry, this.#core.config.retry);
+      const source = await headSource(this.#core, sourceBucket, from, options.sourceVersionId, {
+        retry,
+        signal: options.signal,
+      });
+      if (!(source.size > copyLimits.single)) throw error;
+      const done = await multipartCopy(
+        this.#core,
+        bucket,
+        to,
+        sourceBucket,
+        from,
+        source,
+        merged,
+        Boolean(replace),
+      );
+      return { ...done, lastModified: undefined };
+    }
     const root = parse(await response.text(), `CopyObject ${to}`).CopyObjectResult;
     return {
       etag: childText(root, "ETag") ?? "",

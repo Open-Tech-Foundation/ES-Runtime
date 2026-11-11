@@ -5,6 +5,7 @@
 // too: point S3_E2E_ENDPOINT at https://s3.<region>.amazonaws.com and set
 // S3_E2E_REGION; it creates and removes its own bucket.
 import { env, exit, unmask } from "runtime:process";
+import { headSource, multipartCopy } from "../dist/copy.js";
 import { Core } from "../dist/core.js";
 import { CredentialCache } from "../dist/credentials.js";
 import { S3Client } from "../dist/index.js";
@@ -185,6 +186,29 @@ try {
   is(await s3.file("copied/hello.txt").text(), "hello from esrun", "copy");
   await s3.copy("meta.txt", "copied/meta.txt", { metadata: { owner: "copied" } });
   is((await s3.stat("copied/meta.txt")).metadata.owner, "copied", "copy with new metadata");
+
+  // -- multipart copy -------------------------------------------------------
+  // A real server's UploadPartCopy, driven directly: no server here refuses a
+  // 12 MiB single copy, so copy()'s fallback would never reach it.
+  {
+    const source = await headSource(core, bucket, "big.bin", undefined, { retry: 2 });
+    const copied = await multipartCopy(
+      core,
+      bucket,
+      "copied/big.bin",
+      bucket,
+      "big.bin",
+      source,
+      { partSize: 5 * MiB },
+      false,
+    );
+    ok(copied.etag.length > 2, "a multipart copy completes");
+    const back = await s3.file("copied/big.bin").bytes();
+    ok(
+      back.length === big.length && back.every((b, i) => b === big[i]),
+      "and the copy is byte for byte the source",
+    );
+  }
 
   // -- presign --------------------------------------------------------------
   const getUrl = await s3.presign("hello.txt", { expiresIn: 300 });

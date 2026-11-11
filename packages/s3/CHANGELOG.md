@@ -32,3 +32,7 @@ package written entirely in JavaScript over `fetch`. See the root
 - Reads resume where a dropped connection left them: the rest is requested
   with `Range` and `If-Match` on the first answer's ETag, up to `retry` times,
   so a replaced object fails the read instead of splicing two versions.
+- `copy()` copies sources of any size inside S3: when one CopyObject is
+  refused for a source over 5 GiB, it copies the source in ranges
+  (UploadPartCopy), pinned to its version or checked against its ETag
+  (DECISIONS D213).

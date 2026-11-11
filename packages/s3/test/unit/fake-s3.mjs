@@ -44,6 +44,17 @@ export async function startFake() {
   const log = [];
   let nextUpload = 1;
   let skewMs = 0;
+  /** The largest source one CopyObject takes; S3's is 5 GB, a test's is smaller. */
+  const limits = { copy: Number.POSITIVE_INFINITY };
+
+  /** `bucket/key[?versionId=…]` as sent in x-amz-copy-source. */
+  const copySource = (value) => {
+    const [path] = value.split("?");
+    const [srcBucket, ...srcKey] = path.split("/");
+    return buckets
+      .get(decodeURIComponent(srcBucket))
+      ?.get(srcKey.map(decodeURIComponent).join("/"));
+  };
 
   function verify(request, path, body) {
     const auth = request.headers.get("authorization") ?? "";
@@ -144,6 +155,24 @@ export async function startFake() {
     if (q.has("uploadId")) {
       const upload = uploads.get(q.get("uploadId"));
       if (!upload) return errorXml("NoSuchUpload", "no upload", 404);
+      if (request.method === "PUT" && request.headers.has("x-amz-copy-source")) {
+        // UploadPartCopy: a range of an existing object becomes the part.
+        const from = copySource(request.headers.get("x-amz-copy-source"));
+        if (!from) return errorXml("NoSuchKey", "copy source", 404);
+        let bytes = from.bytes;
+        const range = request.headers.get("x-amz-copy-source-range");
+        if (range) {
+          const [, a, b] = /^bytes=(\d+)-(\d+)$/.exec(range) ?? [];
+          if (a === undefined || Number(b) >= bytes.length)
+            return errorXml("InvalidArgument", "range", 400);
+          bytes = bytes.slice(Number(a), Number(b) + 1);
+        }
+        const etag = etagOf(bytes);
+        upload.parts.set(Number(q.get("partNumber")), { bytes, etag });
+        return xml(
+          `<CopyPartResult><LastModified>2026-11-11T00:00:00.000Z</LastModified><ETag>${esc(etag)}</ETag></CopyPartResult>`,
+        );
+      }
       if (request.method === "PUT") {
         const etag = etagOf(body);
         upload.parts.set(Number(q.get("partNumber")), { bytes: body, etag });
@@ -184,11 +213,15 @@ export async function startFake() {
       case "PUT": {
         const source = request.headers.get("x-amz-copy-source");
         if (source) {
-          const [srcBucket, ...srcKey] = source.split("/");
-          const from = buckets
-            .get(decodeURIComponent(srcBucket))
-            ?.get(srcKey.map(decodeURIComponent).join("/"));
+          const from = copySource(source);
           if (!from) return errorXml("NoSuchKey", "copy source", 404);
+          if (from.bytes.length > limits.copy) {
+            return errorXml(
+              "InvalidRequest",
+              `The specified copy source is larger than the maximum allowable size for a copy source: ${limits.copy}`,
+              400,
+            );
+          }
           const headers =
             request.headers.get("x-amz-metadata-directive") === "REPLACE"
               ? Object.fromEntries(request.headers)
@@ -361,6 +394,7 @@ export async function startFake() {
     fail(match, response) {
       faults.push({ match, response });
     },
+    limits,
     setSkew(ms) {
       skewMs = ms;
     },

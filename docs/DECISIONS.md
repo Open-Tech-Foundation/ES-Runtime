@@ -4431,3 +4431,16 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 **Rejected:** reading `~/.aws/credentials` and `~/.aws/config` — files outside the program's directory, which D79's sandbox does not reach, and profiles, SSO caches and `credential_process` bring more than an S3 client should own; a program that wants a profile reads it with its own `--allow-read` and passes the values. An IMDSv1 fallback, behind an option or not.
 
 **Consequences:** the common AWS deployments get credentials without a key in the environment. What is not covered — SSO, `credential_process`, Cognito — is a function the application writes.
+
+### D213 — `copy()` past one CopyObject: try the single copy, then ranges, pinned without `copy-source-if-match` · *Accepted (2026-11-11)* · *extends D211*
+
+**Context:** AWS copies at most 5 GB in one CopyObject and requires UploadPartCopy beyond that (CopyObject API reference). The providers differ (their own documentation): Google Cloud Storage's XML API copies up to 5 TiB in one request and "does not support `UploadPartCopy`"; Cloudflare R2 implements UploadPartCopy and `x-amz-copy-source-range` but not `x-amz-copy-source-if-match` on it. Bun v1.4.4 has no server-side copy at all; writing one `S3File` to another streams it through the process.
+
+**Decision (maintainer, 2026-11-11):**
+- **One CopyObject first, always.** Only a `400` refusal, followed by a `HEAD` showing the source over 5 GiB, turns the copy into a multipart upload of the source's ranges. The size decides, not the error's code or wording, which are each provider's own and not documented by AWS for this case.
+- **The parts are pinned to one source.** By its version id when it has one (every part names it); otherwise by checking its ETag before the first part and again before completing, aborting on a change. Per-part `x-amz-copy-source-if-match` is not used, since R2 does not implement it.
+- **The copy keeps the source's description** (type, metadata, cache-control, content-encoding, content-disposition, read from the `HEAD`) as CopyObject does, unless `metadata` or `type` replace it. Parts default to 256 MiB, raised to fit 10 000 parts; `queueSize` run at once; a failure aborts the upload.
+
+**Rejected:** deciding by size before trying (a `HEAD` on every copy, and a multipart copy on GCS, which refuses it); streaming the bytes through the process as Bun does (`write(to, file(from))` still does that, for anyone who wants it); `x-amz-copy-source-if-match` on each part (not portable to R2).
+
+**Consequences:** `copy()` has no size limit of its own. Without versioning the pin is a before-and-after check, so a source replaced and then restored between the two reads goes unnoticed. A multipart copy's ETag is a multipart one (`-N`), not the source's.

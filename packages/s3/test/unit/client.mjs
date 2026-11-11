@@ -1,6 +1,7 @@
 // The client against the fake S3: every request's signature is checked by the
 // fake from what arrived, so these pass only if what was signed is what was sent.
 
+import { copyLimits } from "../../dist/copy.js";
 import { backoff } from "../../dist/core.js";
 import { S3Client, S3Error } from "../../dist/index.js";
 import { is, ok, report, throws } from "./assert.mjs";
@@ -585,6 +586,132 @@ await rejects(
   is(errors[0]?.key, "locked/one", "with its key");
   is(errors[0]?.code, "AccessDenied", "and S3's code");
   ok(!(await client.exists("bulk/0")), "the rest are gone");
+}
+
+// -- copies larger than one CopyObject takes ----------------------------------
+
+{
+  // The limits scaled down: one copy takes 1 MiB here, as AWS's takes 5 GB.
+  const MiB = 1024 * 1024;
+  fake.limits.copy = 1 * MiB;
+  copyLimits.single = 1 * MiB;
+  copyLimits.part = 5 * MiB;
+  const big = new Uint8Array(12 * MiB + 3);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 7) & 0xff;
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  await client.write("large/src.bin", big, {
+    type: "application/x-big",
+    metadata: { owner: "source" },
+    cacheControl: "max-age=1",
+  });
+
+  const before = fake.log.length;
+  const result = await client.copy("large/src.bin", "large/dst.bin");
+  const sent = fake.log.slice(before);
+  ok(result.etag.endsWith('-3"'), "a copy over the limit becomes a multipart copy of three parts");
+  ok(same(await client.file("large/dst.bin").bytes(), big), "and copies every byte");
+  const ranges = sent
+    .filter((r) => r.headers["x-amz-copy-source-range"])
+    .map((r) => r.headers["x-amz-copy-source-range"]);
+  is(
+    ranges.sort().join(" "),
+    "bytes=0-5242879 bytes=10485760-12582914 bytes=5242880-10485759",
+    "in ranges of the source",
+  );
+  ok(
+    sent.every((r) => r.body.length === 0 || r.query.uploadId !== undefined),
+    "no part carries bytes: the copy is S3's",
+  );
+  const stat = await client.stat("large/dst.bin");
+  is(stat.type, "application/x-big", "the source's type is carried over");
+  is(stat.metadata.owner, "source", "and its metadata");
+  is(stat.cacheControl, "max-age=1", "and its cache-control");
+  is(fake.uploads.size, 0, "no upload is left open");
+
+  await client.copy("large/src.bin", "large/replaced.bin", { metadata: { owner: "copy" } });
+  is(
+    (await client.stat("large/replaced.bin")).metadata.owner,
+    "copy",
+    "metadata given to the copy replaces the source's",
+  );
+
+  const pinned = fake.log.length;
+  await client.copy("large/src.bin", "large/versioned.bin", { sourceVersionId: "v1" });
+  const parts = fake.log.slice(pinned).filter((r) => r.headers["x-amz-copy-source-range"]);
+  ok(
+    parts.length === 3 &&
+      parts.every((r) => r.headers["x-amz-copy-source"] === "bucket/large/src.bin?versionId=v1"),
+    "every part is pinned to the source's version",
+  );
+
+  fake.fail(
+    (r) => r.query.partNumber === "2" && r.headers["x-amz-copy-source"] !== undefined,
+    errorXml("InternalError", "boom", 500),
+  );
+  fake.fail(
+    (r) => r.query.partNumber === "2" && r.headers["x-amz-copy-source"] !== undefined,
+    errorXml("InternalError", "boom", 500),
+  );
+  await rejects(
+    () => client.copy("large/src.bin", "large/failed.bin", { retry: 1 }),
+    "InternalError",
+    "a part that keeps failing fails the copy",
+  );
+  is(fake.uploads.size, 0, "and aborts it");
+  ok(!(await client.exists("large/failed.bin")), "leaving no object");
+
+  // The source is replaced while its parts are copied: without a version to
+  // pin to, the ETag checked before completing catches it.
+  fake.fail(
+    (r) => r.query.partNumber === "2" && r.headers["x-amz-copy-source"] !== undefined,
+    () => {
+      fake.buckets.get("bucket").set("large/src.bin", {
+        bytes: new Uint8Array(12 * MiB + 3),
+        headers: {},
+        etag: '"changed"',
+      });
+      return new Response('<CopyPartResult><ETag>"p2"</ETag></CopyPartResult>');
+    },
+  );
+  await rejects(
+    () => client.copy("large/src.bin", "large/torn.bin"),
+    "PreconditionFailed",
+    "a source changed mid-copy fails the copy",
+  );
+  is(fake.uploads.size, 0, "and aborts it");
+  ok(!(await client.exists("large/torn.bin")), "rather than writing parts of two versions");
+  await client.write("large/src.bin", big);
+
+  await rejects(
+    () => client.copy("large/src.bin", "large/x.bin", { sourceIfMatch: '"stale"' }),
+    "PreconditionFailed",
+    "sourceIfMatch is checked before any part",
+  );
+  is(fake.uploads.size, 0, "before an upload is created");
+
+  // A refusal that is not about size is the refusal.
+  await client.write("large/small.txt", "small");
+  fake.fail(
+    (r) => r.headers["x-amz-copy-source"] !== undefined && r.query.uploadId === undefined,
+    errorXml("InvalidArgument", "bad header", 400),
+  );
+  const small = fake.log.length;
+  await rejects(
+    () => client.copy("large/small.txt", "large/small-copy.txt"),
+    "InvalidArgument",
+    "a 400 on a source within the limit is not retried as a multipart copy",
+  );
+  ok(
+    !fake.log.slice(small).some((r) => r.query.uploads !== undefined),
+    "no multipart upload is started",
+  );
+
+  fake.limits.copy = Number.POSITIVE_INFINITY;
+  copyLimits.single = 5 * 1024 * MiB;
+  copyLimits.part = 256 * MiB;
+  const direct = fake.log.length;
+  await client.copy("large/src.bin", "large/direct.bin");
+  is(fake.log.length - direct, 1, "where one copy takes it all (GCS's 5 TiB), it is one request");
 }
 
 // -- presign -----------------------------------------------------------------
