@@ -18,6 +18,12 @@ namespace) is unstable and may change between minor releases until the API freez
   due in the same turn ran back to back, so the second saw state the first
   callback's promise reactions had not yet written.
 
+### Changed
+
+- Every host op call is about 10% cheaper: the op's name was copied on each call
+  for a diagnostics span even when nothing was subscribed. It is now copied only
+  when a span is recorded.
+
 ## [0.47.0] - 2026-11-11
 
 ### Added

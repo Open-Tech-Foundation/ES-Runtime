@@ -446,6 +446,15 @@ overflow-checks = true
 # on every download. Node, Deno and Bun all ship stripped for the same reason.
 strip = true
 
+# The release build, with the names `perf` needs: `cargo build --profile
+# profiling -p es-runtime-cli`, then `perf record -g target/profiling/esrun …`.
+# Line tables only — enough for function names and source lines in a profile,
+# without the size of full DWARF. Never shipped.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1
 missing_docs = "warn"

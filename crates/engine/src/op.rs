@@ -547,7 +547,7 @@ fn op_dispatch_inner(
     // The gate: one mask test, false for every program nothing is watching, and
     // the op's name is not even cloned unless it comes back true.
     let span = crate::diagnostics::recorder(scope).and_then(|recorder| {
-        let name = state.ops[idx].name.clone();
+        let name = state.ops[idx].name.as_str();
         // The diagnostics module's own ops are not recorded. They exist only
         // because something is watching, so recording them would put the cost of
         // observing into the thing being observed — `span()` would contain the
@@ -558,6 +558,7 @@ fn op_dispatch_inner(
         crate::diagnostics::OpenSpan::open(
             &recorder,
             crate::diagnostics::SpanKind::Op,
+            // Copied only once `open` has decided the span is wanted.
             || std::rc::Rc::from(name),
             || {
                 (
