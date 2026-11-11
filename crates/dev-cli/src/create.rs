@@ -1904,16 +1904,58 @@ async fn registry_version(
         .map_err(|_| failure(format!("no answer within {}s", REGISTRY_TIMEOUT.as_secs())))??;
     let metadata: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|error| failure(format!("invalid registry response: {error}")))?;
-    metadata
+    scaffold_version(&metadata).ok_or_else(|| RegistryFailure {
+        message: "registry response has no dist-tags.latest version".to_string(),
+        retryable: false,
+    })
+}
+
+/// The version a new project is pinned to: `dist-tags.latest`, unless that is
+/// a prerelease and the package has a stable release (D215).
+///
+/// `latest` is whatever a maintainer last published without a tag, and a
+/// prerelease lands there by mistake — elysia's `2.0.0-rc.4` did in November
+/// 2026, and every project scaffolded that week pinned a release candidate
+/// whose API the template was not written for. npm installs `latest` either
+/// way; a scaffolder writes the pin somebody keeps, so it takes the newest
+/// stable, non-deprecated version instead. A package that has only ever
+/// published prereleases keeps its `latest`: there is nothing stable to pin.
+fn scaffold_version(metadata: &serde_json::Value) -> Option<String> {
+    let latest = metadata
         .get("dist-tags")
         .and_then(|tags| tags.get("latest"))
         .and_then(serde_json::Value::as_str)
-        .filter(|version| !version.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| RegistryFailure {
-            message: "registry response has no dist-tags.latest version".to_string(),
-            retryable: false,
-        })
+        .filter(|version| !version.is_empty())?;
+    if stable(latest).is_some() {
+        return Some(latest.to_string());
+    }
+    let newest_stable = metadata
+        .get("versions")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, manifest)| manifest.get("deprecated").is_none())
+        .filter_map(|(version, _)| stable(version).map(|parsed| (parsed, version)))
+        .max_by_key(|(parsed, _)| *parsed)
+        .map(|(_, version)| version.clone());
+    Some(newest_stable.unwrap_or_else(|| latest.to_string()))
+}
+
+/// A stable semver version as its three numbers, or `None` for a prerelease
+/// (`2.0.0-rc.4`) or anything that is not `major.minor.patch`. Build metadata
+/// (`+abc`) does not make a version a prerelease, so it is ignored.
+fn stable(version: &str) -> Option<(u64, u64, u64)> {
+    let core = version.split('+').next()?;
+    if core.contains('-') {
+        return None;
+    }
+    let mut parts = core.split('.');
+    let numbers = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(numbers)
 }
 
 fn registry_backoff(attempt: usize, retryable: bool) -> Option<Duration> {
@@ -2407,6 +2449,62 @@ mod tests {
             r#"{"devDependencies":{"@types/react":"19.3.0"}}"#
         );
         assert!(render_registry_versions(registry_placeholder("typescript"), &versions).is_err());
+    }
+
+    #[test]
+    fn a_stable_latest_is_pinned_as_it_is() {
+        let metadata = serde_json::json!({
+            "dist-tags": { "latest": "1.4.31", "next": "2.0.0-beta.32" },
+            "versions": { "1.4.31": {}, "2.0.0-beta.32": {} },
+        });
+        assert_eq!(scaffold_version(&metadata).as_deref(), Some("1.4.31"));
+    }
+
+    /// elysia, November 2026: a release candidate tagged `latest` by mistake.
+    /// The newest stable is pinned instead — by version order, not by which
+    /// was published last, and never a deprecated one.
+    #[test]
+    fn a_prerelease_latest_pins_the_newest_stable_release() {
+        let metadata = serde_json::json!({
+            "dist-tags": { "latest": "2.0.0-rc.4", "rc": "2.0.0-rc.3" },
+            "versions": {
+                "1.4.9": {},
+                "1.4.31": {},
+                "1.4.30": {},
+                "1.5.0": { "deprecated": "published by mistake" },
+                "2.0.0-rc.3": {},
+                "2.0.0-rc.4": {},
+            },
+        });
+        assert_eq!(scaffold_version(&metadata).as_deref(), Some("1.4.31"));
+    }
+
+    /// With no stable release at all there is nothing better to pin.
+    #[test]
+    fn a_package_with_only_prereleases_keeps_its_latest() {
+        let metadata = serde_json::json!({
+            "dist-tags": { "latest": "0.1.0-alpha.2" },
+            "versions": { "0.1.0-alpha.1": {}, "0.1.0-alpha.2": {} },
+        });
+        assert_eq!(
+            scaffold_version(&metadata).as_deref(),
+            Some("0.1.0-alpha.2")
+        );
+        assert_eq!(
+            scaffold_version(&serde_json::json!({ "versions": {} })),
+            None
+        );
+    }
+
+    #[test]
+    fn stable_versions_are_three_numbers_without_a_prerelease() {
+        assert_eq!(stable("1.4.31"), Some((1, 4, 31)));
+        assert_eq!(stable("1.4.31+build.7"), Some((1, 4, 31)));
+        assert_eq!(stable("2.0.0-rc.4"), None);
+        assert_eq!(stable("2.0.0-rc.4+build"), None);
+        assert_eq!(stable("1.4"), None);
+        assert_eq!(stable("1.4.x"), None);
+        assert_eq!(stable("1.4.31.0"), None);
     }
 
     #[test]

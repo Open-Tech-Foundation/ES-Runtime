@@ -4459,3 +4459,19 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 - **Keeping one plugin per entry.** Every package made of several plugins would push the wiring onto each project, and a missing piece would fail silently.
 
 **Consequences:** `@opentf/afw-docs/build` can offer one entry. A plugin's default name (`plugin-<n>`) counts positions after flattening.
+
+### D215 — A scaffold never pins a prerelease that was tagged `latest` · *Accepted (2026-11-11)* · *amends D138*
+
+**Context:** D138 pins each template package to the registry's `dist-tags.latest`. `latest` is whatever a maintainer last published without `--tag`, and a prerelease can land there by mistake: on 2026-11-08 elysia published `2.0.0-rc.4` as `latest` while its newest stable was `1.4.31`. Every `esdev create --template=elysia` after that pinned the release candidate, which refuses the template's 1.x route order at startup, so `test`, `typecheck` and `start` failed in a freshly created project. npm installs `latest` regardless; pnpm and Yarn read the same tag.
+
+**Decision (maintainer, 2026-11-11):**
+- **A stable `latest` is pinned as before.**
+- **A prerelease `latest` (a version with a `-` before any `+`) pins the newest stable, non-deprecated version** in the package document's `versions`, by version order rather than publish date.
+- **A package with no stable release keeps its `latest`**: there is nothing better to pin.
+
+**Rejected:**
+- **Rewriting the template for Elysia 2.** It would break the day the tag is corrected, and it fixes one package rather than the class of mistake.
+- **Pinning versions in the templates.** D138 rejected that: the pins age until the next esdev release.
+- **Refusing to scaffold.** The project is still writable with a stable release, and the person creating it did not choose the prerelease.
+
+**Consequences:** a new project's manifest can name an older major than `npm install <pkg>` would install, until the maintainer retags. The version parser is ours (three numbers and a prerelease check), not a semver crate.

@@ -85,6 +85,44 @@ fn test_registry() -> &'static str {
         .as_str()
 }
 
+/// A registry whose `latest` is a release candidate, as elysia's was in
+/// November 2026, beside an older stable release and a newer deprecated one.
+fn prerelease_registry() -> &'static str {
+    static REGISTRY: OnceLock<String> = OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind prerelease registry");
+            let address = listener.local_addr().expect("prerelease registry address");
+            std::thread::spawn(move || {
+                for incoming in listener.incoming() {
+                    let Ok(mut stream) = incoming else { continue };
+                    std::thread::spawn(move || {
+                        let Ok(clone) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(clone);
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            if reader.read_line(&mut line).is_err()
+                                || line.is_empty()
+                                || line == "\r\n"
+                            {
+                                break;
+                            }
+                        }
+                        let body = r#"{"dist-tags":{"latest":"2.0.0-rc.4"},"versions":{"1.4.30":{},"1.4.31":{},"1.5.0":{"deprecated":"oops"},"2.0.0-rc.4":{}}}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    });
+                }
+            });
+            format!("http://{address}")
+        })
+        .as_str()
+}
+
 /// The first request fails transiently; later requests use the normal fixture
 /// response so the caller can assert that create reports and retries it.
 fn retry_registry() -> (&'static str, Arc<AtomicUsize>) {
@@ -12545,6 +12583,28 @@ fn create_reports_and_retries_a_transient_registry_failure() {
     let manifest = std::fs::read_to_string(parent.join("retry-app/package.json"))
         .expect("read generated manifest");
     assert!(!manifest.contains("{{registry:"), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// A prerelease tagged `latest` by mistake is not what a new project pins
+/// (D215): the newest stable, non-deprecated release is.
+#[test]
+fn create_pins_the_newest_stable_release_over_a_prerelease_latest() {
+    let parent = watch_dir("c_registry_prerelease");
+    let registry = prerelease_registry();
+    let created = esdev_in(&parent)
+        .args(["create", "rc-app", "--template=elysia", "--no-install"])
+        .env("npm_config_registry", registry)
+        .env("NPM_CONFIG_REGISTRY", registry)
+        .output()
+        .expect("spawn esdev create");
+
+    assert!(created.status.success(), "{}", stderr(&created));
+    let manifest = std::fs::read_to_string(parent.join("rc-app/package.json"))
+        .expect("read generated manifest");
+    assert!(manifest.contains(r#""elysia": "1.4.31""#), "{manifest}");
+    assert!(!manifest.contains("rc.4"), "{manifest}");
 
     let _ = std::fs::remove_dir_all(&parent);
 }

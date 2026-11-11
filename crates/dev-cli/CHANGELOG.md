@@ -110,6 +110,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **`esdev create` no longer pins a prerelease that a package tagged
+  `latest` by mistake** (DECISIONS D215). It pins the newest stable,
+  non-deprecated release instead. elysia's `2.0.0-rc.4`, tagged `latest` on
+  2026-11-08, made every new elysia project fail `test`, `typecheck` and
+  `start`; it now gets `1.4.31`. A package with no stable release keeps its
+  `latest`.
+
 - `esdev upgrade` tries a download again when the network fails it (a
   dropped connection, a truncated or stalled body, a `5xx` or `429`), up to
   three attempts in all, and shows a progress bar for the archive when
