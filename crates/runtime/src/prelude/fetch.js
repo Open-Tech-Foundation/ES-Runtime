@@ -180,13 +180,13 @@
     [HEADER_LIST]() {
       return this.#sortedEntries();
     }
-    // The sorted, combined list as one flat array, built without the pair
-    // arrays `#sortedEntries` makes for iteration.
+    // The combined list as one flat array, for a response going on the wire.
+    // In the order the names were first set: Fetch sorts only what a script
+    // iterates, and sorting every response's names costs an array and a sort
+    // the client never sees.
     [HEADER_FLAT]() {
-      const names = [...this.#map.keys()].sort();
       const flat = [];
-      for (const name of names) {
-        const list = this.#map.get(name);
+      for (const [name, list] of this.#map) {
         if (name === "set-cookie") for (const v of list) flat.push(name, v);
         else flat.push(name, list.length === 1 ? list[0] : list.join(", "));
       }

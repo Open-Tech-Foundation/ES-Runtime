@@ -75,6 +75,10 @@ namespace) is unstable and may change between minor releases until the API freez
   trimming regex, the answer's headers cross as one flat list, and the host
   moves each value into the response instead of copying it. With 10 response
   headers, user CPU per request drops from 21.5 to 19.2 µs (+10% req/s).
+- A response's headers go out in the order they were first set, rather than
+  sorted: Fetch sorts only what a script iterates, and the sort cost every
+  response an array and a sort (10 response headers: user CPU per request
+  15.3 → 14.2 µs, +7% req/s).
 - **Embedders:** `HttpServerRequest.headers` is now an `HttpRequestHeaders`
   (`es-runtime-providers`), built with `from_pairs(..)` / `.into()` from the
   old `Vec<(String, String)>`, or with `deferred(..)` to convert only when read.

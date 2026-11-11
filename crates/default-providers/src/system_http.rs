@@ -118,6 +118,34 @@ pub(crate) enum Upgrade {
     Raw(oneshot::Receiver<UpgradedIo>),
 }
 
+/// One handed-over request's parts, each consumed by a different call in an
+/// order none of them controls.
+struct InFlight {
+    /// Where `respond` sends the answer.
+    sender: Option<oneshot::Sender<HttpServerResponse>>,
+    /// The "was the response delivered?" half, taken by
+    /// [`request_disconnected`](HttpServerProvider::request_disconnected), or
+    /// dropped by `respond` — once the response is sent there is nothing left
+    /// to report a disconnect to.
+    delivered: Option<oneshot::Receiver<()>>,
+    /// The upgrade handle waiting on its `101`: taken by `upgrade`, dropped by
+    /// `respond` when the guest answers with anything else — which is how
+    /// declining an upgrade works, since there is nothing to decline
+    /// explicitly.
+    upgrade: Option<Upgrade>,
+    /// The `Sec-WebSocket-Accept` that `101` must carry.
+    accept: Option<String>,
+}
+
+impl InFlight {
+    fn is_spent(&self) -> bool {
+        self.sender.is_none()
+            && self.delivered.is_none()
+            && self.upgrade.is_none()
+            && self.accept.is_none()
+    }
+}
+
 /// Per-server shutdown handle, kept in a side map that `next_request` never
 /// removes — so `close` can stop a server even while a `next_request` await has
 /// the request receiver checked out. Aborting the acceptor stops new
@@ -185,21 +213,11 @@ impl LiveConnections {
 pub struct SystemHttpServer {
     requests: Arc<Mutex<HashMap<u64, mpsc::Receiver<Pending>>>>,
     controls: Arc<Mutex<HashMap<u64, Control>>>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<HttpServerResponse>>>>,
-    /// Upgrade handles waiting on their `101`, keyed by request id. Entered by
-    /// `next_requests`, taken by `upgrade`, and dropped by `respond` when the
-    /// guest answers with something else — which is how declining an upgrade
-    /// works, since there is nothing to decline explicitly.
-    upgrades: Arc<Mutex<HashMap<u64, Upgrade>>>,
-    /// The `Sec-WebSocket-Accept` each of those requests needs on its `101`.
-    /// Separate from the handle above because `respond` and `upgrade` consume
-    /// their halves in an order neither of them controls.
-    accepts: Arc<Mutex<HashMap<u64, String>>>,
-    /// Per-request "was the response delivered?" halves, read by
-    /// [`request_disconnected`](HttpServerProvider::request_disconnected). An
-    /// entry is taken by the first watcher; a request nobody watches has its
-    /// entry dropped with the server.
-    delivered: Arc<Mutex<HashMap<u64, oneshot::Receiver<()>>>>,
+    /// What the server holds for each request it handed over, keyed by
+    /// request id: one entry and one lock, rather than a map per part. Each
+    /// call takes only its own part, so they may come in any order, and the
+    /// entry goes when nothing is left in it. See [`InFlight`].
+    in_flight: Arc<Mutex<HashMap<u64, InFlight>>>,
     live: LiveConnections,
     next_id: Arc<AtomicU64>,
     /// Addresses `serve` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
@@ -1123,18 +1141,22 @@ impl HttpServerProvider for SystemHttpServer {
             // batch ⇒ closed/shutting down.)
             let mut out = Vec::with_capacity(batch.len());
             if !batch.is_empty() {
-                let mut pending = this.pending.lock().unwrap();
-                let mut delivered = this.delivered.lock().unwrap();
-                let mut upgrades = this.upgrades.lock().unwrap();
-                let mut accepts = this.accepts.lock().unwrap();
+                let mut in_flight = this.in_flight.lock().unwrap();
                 for (req, sender, disconnect, upgrade) in batch {
                     let rid = this.id();
-                    pending.insert(rid, sender);
-                    delivered.insert(rid, disconnect);
-                    if let Some(upgrade) = upgrade {
-                        upgrades.insert(rid, upgrade.on);
-                        accepts.insert(rid, upgrade.accept);
-                    }
+                    let (upgrade, accept) = match upgrade {
+                        Some(u) => (Some(u.on), Some(u.accept)),
+                        None => (None, None),
+                    };
+                    in_flight.insert(
+                        rid,
+                        InFlight {
+                            sender: Some(sender),
+                            delivered: Some(disconnect),
+                            upgrade,
+                            accept,
+                        },
+                    );
                     out.push((rid, req));
                 }
             }
@@ -1147,61 +1169,68 @@ impl HttpServerProvider for SystemHttpServer {
         request_id: u64,
         response: HttpServerResponse,
     ) -> BoxFuture<Result<(), ProviderError>> {
-        let pending = self.pending.clone();
-        let delivered = self.delivered.clone();
-        let upgrades = self.upgrades.clone();
-        let accepts = self.accepts.clone();
+        let in_flight = self.in_flight.clone();
         Box::pin(async move {
             let mut response = response;
+            let switching = response.status == StatusCode::SWITCHING_PROTOCOLS.as_u16();
+            // Everything `respond` consumes, under one lock. The disconnect
+            // watch goes too: it is entered for *every* request but otherwise
+            // only taken by `request_disconnected`, which the guest reaches
+            // solely by touching `request.signal` — left in place, a server
+            // that answered 500k requests held 112MB where it started at 25MB.
+            // A handler that asked first has already taken it.
+            let (sender, accept) = {
+                let mut map = in_flight.lock().unwrap();
+                match map.get_mut(&request_id) {
+                    Some(entry) => {
+                        let taken = (entry.sender.take(), entry.accept.take());
+                        entry.delivered = None;
+                        if !switching {
+                            entry.upgrade = None;
+                        }
+                        if entry.is_spent() {
+                            map.remove(&request_id);
+                        }
+                        taken
+                    }
+                    None => (None, None),
+                }
+            };
             // A `101` for a request that asked to be a WebSocket is a handshake
             // answer, and the three headers that make it one are computed from a
             // key the guest never sees. Added here rather than left to the
             // guest: a SHA-1 nobody can get wrong is better than one everybody
             // has to.
-            let accept = accepts.lock().unwrap().remove(&request_id);
-            if response.status == StatusCode::SWITCHING_PROTOCOLS.as_u16() {
-                if let Some(accept) = accept {
-                    response
-                        .headers
-                        .push(("upgrade".into(), "websocket".into()));
-                    response
-                        .headers
-                        .push(("connection".into(), "Upgrade".into()));
-                    response
-                        .headers
-                        .push(("sec-websocket-accept".into(), accept));
-                }
-            } else {
-                // Answered as an ordinary request: the takeover was declined,
-                // and the handle would otherwise sit here for the life of the
-                // server holding a connection nobody is going to claim.
-                upgrades.lock().unwrap().remove(&request_id);
+            if switching && let Some(accept) = accept {
+                response
+                    .headers
+                    .push(("upgrade".into(), "websocket".into()));
+                response
+                    .headers
+                    .push(("connection".into(), "Upgrade".into()));
+                response
+                    .headers
+                    .push(("sec-websocket-accept".into(), accept));
             }
-            if let Some(sender) = pending.lock().unwrap().remove(&request_id) {
+            if let Some(sender) = sender {
                 let _ = sender.send(response); // client may have gone away
             }
-            // Drop the disconnect watch too. It is inserted for *every* request
-            // but was only ever removed by `request_disconnected`, which the
-            // guest reaches solely by touching `request.signal` — so a handler
-            // that never looks at the signal (the overwhelmingly common one, and
-            // every hello-world) left one `oneshot::Receiver` in this map per
-            // request, for the life of the server. Measured at ~175 bytes a
-            // request: a server that had answered 500k of them held 112MB where
-            // it started at 25MB, and none of it came back.
-            //
-            // Responding is the right moment: once the response is sent there is
-            // nothing left to report a disconnect to. A handler that asked first
-            // has already taken the receiver out, so this finds nothing and does
-            // nothing.
-            delivered.lock().unwrap().remove(&request_id);
             Ok(())
         })
     }
 
     fn upgrade(&self, request_id: u64) -> BoxFuture<Result<UpgradedIo, ProviderError>> {
-        let upgrades = self.upgrades.clone();
+        let in_flight = self.in_flight.clone();
         Box::pin(async move {
-            let Some(on) = upgrades.lock().unwrap().remove(&request_id) else {
+            let taken = {
+                let mut map = in_flight.lock().unwrap();
+                let taken = map.get_mut(&request_id).and_then(|e| e.upgrade.take());
+                if map.get(&request_id).is_some_and(InFlight::is_spent) {
+                    map.remove(&request_id);
+                }
+                taken
+            };
+            let Some(on) = taken else {
                 return Err(ProviderError::Coded {
                     code: ErrorCode::NotFound,
                     message: format!(
@@ -1245,7 +1274,14 @@ impl HttpServerProvider for SystemHttpServer {
     fn request_disconnected(&self, request_id: u64) -> BoxFuture<bool> {
         // Take the receiver out rather than borrowing it: no lock may be held
         // across the await, and only one watcher exists per request.
-        let watch = self.delivered.lock().unwrap().remove(&request_id);
+        let watch = {
+            let mut map = self.in_flight.lock().unwrap();
+            let watch = map.get_mut(&request_id).and_then(|e| e.delivered.take());
+            if map.get(&request_id).is_some_and(InFlight::is_spent) {
+                map.remove(&request_id);
+            }
+            watch
+        };
         Box::pin(async move {
             match watch {
                 // Err means the service future was dropped without ever getting
