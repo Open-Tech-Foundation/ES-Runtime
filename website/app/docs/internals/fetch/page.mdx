@@ -18,8 +18,9 @@ For signatures, see the [Web APIs reference](/docs/globals).
 `fetch` runs on the runtime's own HTTP client. HTTP/1.1 and the connection pool
 are ES-Runtime's own — the same parser and framing code as the server, checked
 against llhttp's response cases and by fuzzing — and HTTP/2, for now, is
-hyper's, chosen by ALPN. DNS and Happy Eyeballs are still hyper-util's
-connector. TLS is rustls over the [process trust store](/docs/internals/tls).
+hyper's, chosen by ALPN. Names resolve through the system resolver, so the
+hosts file applies, and with addresses of both families the second is raced
+against the first after 300 ms (Happy Eyeballs). TLS is rustls over the [process trust store](/docs/internals/tls).
 What the client decides rather than parses — redirects, content codings,
 deadlines — is written to the specification that defines each.
 
@@ -44,8 +45,8 @@ costs time a script that never fetches should not pay.
 A request that has a `Range` sends `Accept-Encoding: identity` instead, since a
 range of a compressed representation is not a range of the resource. Leaving the
 header out would not do: a request without it accepts any coding. `TCP_NODELAY` is
-set explicitly: hyper-util's connector leaves Nagle's algorithm on, and a
-request written in pieces then waits on the peer's delayed ACK.
+set explicitly: with Nagle's algorithm on, a request written in pieces waits
+on the peer's delayed ACK.
 
 Connections are pooled and reused across requests, but only after a response
 that ended exactly where its framing said; one whose length is the connection

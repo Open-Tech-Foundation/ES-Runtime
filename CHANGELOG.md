@@ -34,7 +34,9 @@ namespace) is unstable and may change between minor releases until the API freez
   and 100 concurrent fetches 96.5 → 94.0 ms on the benchmark rows, with less
   memory. A server answering HTTP/1.0 is refused. A request that fails on a
   reused connection before its response began is retried once, only for an
-  idempotent method.
+  idempotent method. DNS, TCP and Happy Eyeballs are now the runtime's own too
+  (the system resolver, as before, and the same 300 ms family fallback), so
+  hyper-util's client pool and connector no longer ship.
 - **HTTP/1.1 only, strictly.** An HTTP/1.0 request is now answered `505` (it
   was served). A request with a bare LF or CR, a folded header line, whitespace
   before a colon, no `Host` or two, or framing two parsers could read two ways

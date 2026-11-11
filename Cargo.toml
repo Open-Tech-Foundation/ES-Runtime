@@ -122,25 +122,13 @@ futures-core = "0.3.32"
 futures-channel = { version = "0.3.32", default-features = false, features = ["alloc"] }
 futures-io = { version = "0.3.32", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.32", default-features = false }
-# Vetted HTTP/1.1 + HTTP/2 server for the default HttpServerProvider
-# (runtime:http). hyper-util's tokio executor + http-body-util's Full body keep
-# it minimal. All MIT. Confined to `default-providers`.
-#
-# One `h2` implementation serves both directions: the server's HTTP/2 and the
-# client's (below). hyper-util's `server-auto`
-# is what lets one accepted connection serve either version — it reads the
-# HTTP/2 connection preface and dispatches, so h2 over ALPN and cleartext h2c
-# (prior knowledge) both work without a second accept path.
-#
-# The client side is the outbound HTTP client (DECISIONS.md D198): hyper's
-# framing, hyper-util's `client-legacy` connection pool and `HttpConnector`
-# (DNS, TCP, Happy Eyeballs). Not `client-proxy`: the client reads no proxy
-# configuration.
-hyper = { version = "1.10.1", default-features = false, features = ["http1", "http2", "server", "client"] }
-hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "server-auto", "client-legacy", "http1", "http2"] }
-# The `Service` the client's connector implements, which is how hyper-util's
-# pool asks for a connection. Already in the tree with hyper-util.
-tower-service = "0.3.3"
+# HTTP/2, both directions, until DECISIONS D217's phase 3: the server's
+# HTTP/2 (chosen by ALPN or the connection preface) and the client's (chosen by
+# ALPN). HTTP/1.1 is `es-runtime-http`'s, in both directions, and DNS, TCP and
+# Happy Eyeballs are default-providers' own. hyper-util supplies only its tokio
+# glue (executor, timer, IO adapter). All MIT. Confined to `default-providers`.
+hyper = { version = "1.10.1", default-features = false, features = ["http2", "server", "client"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 # Streaming decoders for the HTTP client's content-codings (D198): the same
 # three `CompressionStream` implements (SPEC §2.8). `zstd` is left out — the
 # runtime decodes it nowhere else.

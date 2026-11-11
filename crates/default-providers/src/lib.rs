@@ -59,6 +59,7 @@ mod system_net;
 mod system_sync_fs;
 mod system_websocket;
 mod task;
+mod tcp_connect;
 mod telemetry;
 mod timers;
 mod tls;

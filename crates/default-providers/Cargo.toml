@@ -22,7 +22,6 @@ globset.workspace = true
 walkdir.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-tower-service.workspace = true
 async-compression.workspace = true
 http-body-util.workspace = true
 # The compat bridge between hyper's tokio IO and the futures-io the upgrade
@@ -73,6 +72,11 @@ windows-sys = { version = "0.61.2", features = [
 rustix = { workspace = true, features = ["fs", "process", "termios"] }
 
 [dev-dependencies]
+# The `hyper` and `hyper-h1` rows of `examples/http_floor.rs`: hyper's own
+# HTTP/1.1 server and its version-detecting builder, kept as the measured
+# baseline and never shipped.
+hyper = { workspace = true, features = ["http1"] }
+hyper-util = { workspace = true, features = ["server-auto", "http1", "http2"] }
 # Test-only: the async test harness and a current-thread runtime. `test-util`
 # is the paused clock the body-deadline tests run on — the alternative is
 # sleeping through a 30s grace in real time, once per case.

@@ -4,8 +4,8 @@
 //!
 //! The policy is here and the wire is in [`crate::h1_client`]: HTTP/1.1 and
 //! the connection pool are ES-Runtime's own (D217), HTTP/2 is hyper's until
-//! D217's phase 3, and DNS, TCP and Happy Eyeballs are still hyper-util's
-//! `HttpConnector`. TLS is tokio-rustls over the process trust store (D197).
+//! D217's phase 3, and DNS, TCP and Happy Eyeballs are [`crate::tcp_connect`].
+//! TLS is tokio-rustls over the process trust store (D197).
 //! What is written here is what a client decides rather than parses: which
 //! redirects to follow and what to strip on the way, which content-codings to
 //! decode, and how long a connection may take.
@@ -23,8 +23,7 @@ use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Body as _, Frame};
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, StatusCode, Uri};
-use hyper_util::client::legacy::connect::HttpConnector;
+use hyper::{Method, StatusCode};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -226,19 +225,8 @@ impl HttpClient {
         timeout: Duration,
         proxies: Option<Arc<Proxies>>,
     ) -> Self {
-        let mut http = HttpConnector::new();
-        // `https` URIs are this connector's to wrap in TLS, below.
-        http.enforce_http(false);
-        // Set explicitly: hyper-util leaves Nagle on, and a request written in
-        // pieces then waits on the peer's delayed ACK (deno#35581).
-        http.set_nodelay(true);
-        http.set_keepalive(Some(TCP_KEEPALIVE));
-        // The deadline covers DNS, TCP and TLS together, around the whole
-        // connector; this one would bound only the TCP connect.
-        http.set_connect_timeout(None);
         let tls = TlsConnector::from(config.clone());
         let connector = Connector {
-            http,
             tls,
             timeout,
             proxies: proxies.clone(),
@@ -793,11 +781,10 @@ fn chain(e: &(dyn std::error::Error + 'static)) -> String {
     text
 }
 
-/// DNS and TCP through hyper-util's `HttpConnector`, TLS through the trust
-/// store, all within one deadline.
+/// DNS and TCP through [`crate::tcp_connect`], TLS through the trust store,
+/// all within one deadline.
 #[derive(Clone)]
 struct Connector {
-    http: HttpConnector,
     tls: TlsConnector,
     timeout: Duration,
     proxies: Option<Arc<Proxies>>,
@@ -808,7 +795,6 @@ impl Connector {
     /// A connection to `host:port`, TLS when `secure`, through the proxy when
     /// one applies — DNS, TCP and TLS within the one deadline.
     async fn connect(&self, secure: bool, host: String, port: u16) -> Result<Conn, ConnectError> {
-        let mut http = self.http.clone();
         let tls = self.tls.clone();
         let proxies = self.proxies.clone();
         let proxy_tls = self.proxy_tls.clone();
@@ -835,23 +821,12 @@ impl Connector {
                 let wire: BoxWire = Box::new(stream);
                 return Ok(Conn::Proxied(Box::new(wire), h2));
             }
-            // An IPv6 literal is bracketed in a URI and bare everywhere else.
-            let uri_host = if host.contains(':') {
-                format!("[{host}]")
-            } else {
-                host.clone()
-            };
-            let uri: Uri =
-                format!("http://{uri_host}:{port}")
-                    .parse()
-                    .map_err(|_| ConnectError {
-                        code: ErrorCode::Io,
-                        message: "the host cannot be connected to".to_string(),
-                    })?;
-            let tcp = tower_service::Service::call(&mut http, uri)
+            let tcp = crate::tcp_connect::connect(&host, port, TCP_KEEPALIVE)
                 .await
-                .map_err(|e| tcp_error(&e))?
-                .into_inner();
+                .map_err(|e| ConnectError {
+                    code: e.code,
+                    message: e.message,
+                })?;
             if !secure {
                 return Ok(Conn::Plain(tcp));
             }
@@ -872,32 +847,6 @@ impl Connector {
                 code: ErrorCode::TimedOut,
                 message: format!("no connection within {}s", self.timeout.as_secs()),
             })?
-    }
-}
-
-/// A TCP connect failure from `HttpConnector`, coded: its resolver failures
-/// say `dns error`, and a refused or unreachable connect carries an io kind.
-fn tcp_error(e: &(dyn std::error::Error + 'static)) -> ConnectError {
-    let message = chain(e);
-    if e.to_string() == "dns error" {
-        return ConnectError {
-            code: ErrorCode::Dns,
-            message,
-        };
-    }
-    let mut source = Some(e);
-    while let Some(err) = source {
-        if let Some(io) = err.downcast_ref::<std::io::Error>() {
-            return ConnectError {
-                code: ErrorCode::from_io_kind(io.kind()),
-                message,
-            };
-        }
-        source = err.source();
-    }
-    ConnectError {
-        code: ErrorCode::Io,
-        message,
     }
 }
 
