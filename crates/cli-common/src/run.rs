@@ -759,10 +759,12 @@ fn warn_ignored_proxy_variables(bin: &str, options: &RunOptions) {
     if options.proxy_from_env || options.proxy.is_some() {
         return;
     }
-    let set: Vec<&str> = IGNORED_PROXY_VARIABLES
-        .into_iter()
-        .filter(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
-        .collect();
+    let set = distinct_names(
+        IGNORED_PROXY_VARIABLES
+            .into_iter()
+            .filter(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty())),
+        cfg!(windows),
+    );
     if !set.is_empty() {
         eprintln!(
             "{bin}: warning: {} is ignored; {bin} reads no proxy from the environment. \
@@ -770,6 +772,30 @@ fn warn_ignored_proxy_variables(bin: &str, options: &RunOptions) {
             set.join(", ")
         );
     }
+}
+
+/// `names` without a name that is the same variable as one before it. On
+/// Windows that is a name differing only in case (D195): `HTTP_PROXY` and
+/// `http_proxy` are one variable there, and a warning listing both would name
+/// it twice.
+fn distinct_names<'a>(
+    names: impl Iterator<Item = &'a str>,
+    case_insensitive: bool,
+) -> Vec<&'a str> {
+    let mut out: Vec<&str> = Vec::new();
+    for name in names {
+        let seen = out.iter().any(|kept| {
+            if case_insensitive {
+                kept.eq_ignore_ascii_case(name)
+            } else {
+                *kept == name
+            }
+        });
+        if !seen {
+            out.push(name);
+        }
+    }
+    out
 }
 
 fn warn_ignored_ca_variables(bin: &str) {
@@ -1655,5 +1681,23 @@ mod bundler_style {
     #[test]
     fn an_absolute_path_is_answered_too() {
         assert!(Loader::candidates("/p/src/util").contains(&"/p/src/util.ts".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod proxy_variables {
+    use super::distinct_names;
+
+    #[test]
+    fn a_variable_spelled_twice_is_named_once_where_names_ignore_case() {
+        let both = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY"];
+        assert_eq!(
+            distinct_names(both.into_iter(), true),
+            ["HTTP_PROXY", "HTTPS_PROXY"]
+        );
+        assert_eq!(
+            distinct_names(both.into_iter(), false),
+            ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY"]
+        );
     }
 }

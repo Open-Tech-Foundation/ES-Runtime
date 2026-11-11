@@ -75,6 +75,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- On Windows, the warning that a proxy variable is ignored names it once:
+  `HTTP_PROXY` and `http_proxy` are one variable there, and the warning listed
+  both.
 - `runtime:http` keeps a handler's `Content-Length` on the answer to a `HEAD`,
   so `new Response(null, { headers: { "content-length": "1234" } })` tells the
   client the size a `GET` would return (RFC 9110 §9.3.2), as Deno does. It was
