@@ -59,6 +59,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **`esdev create --template=docs` leaves the blog out unless asked**, as
+  create-afw does: the question is now "Add a blog?" and starts on No, and an
+  unattended run without `--blog` writes docs only. `--blog` adds `app/blog/`
+  with a sample post, a Blog link, and RSS and Atom feeds; `--no-blog` is
+  still accepted.
+
 - **`esdev upgrade` also updates the `esrun` installed beside it**
   (DECISIONS D204), each to its own newest release, checked against its
   `checksums.txt`. `--only=esdev` or `--only=esrun` (install.sh's spelling)

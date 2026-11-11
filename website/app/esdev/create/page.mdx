@@ -81,14 +81,14 @@ them:
 
 ```sh
 esdev create my-app --template=spa --language=ts --styling=tailwind
-esdev create my-app --template=docs --no-blog
+esdev create my-app --template=docs --blog
 ```
 
 | | |
 | --- | --- |
 | `--language=js\|ts` | `spa`, `fullstack`, `docs`, `library` — JavaScript (default) or TypeScript |
 | `--styling=css\|tailwind` | `spa`, `fullstack` — plain CSS or Tailwind v4 |
-| `--blog`, `--no-blog` | `docs` — keep the demo blog (default) or withhold it |
+| `--blog`, `--no-blog` | `docs` — add a blog with RSS and Atom feeds, or not (default) |
 
 TypeScript is a conversion, not a second template: sources rename (`.jsx` to
 `.tsx`) and a `tsconfig.json` plus the compiler-macro declarations arrive
@@ -244,7 +244,7 @@ other's flags by name. Nothing is ever overwritten.
 | `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
 | `--language=<name>` | AFW templates: `js` (default) or `ts` |
 | `--styling=<name>` | `css` or `tailwind`, for `react`, `vanilla`, `micro-ui`, `preact`, `lit`, `spa` and `fullstack` |
-| `--blog`, `--no-blog` | `docs`: keep the demo blog (default) or not |
+| `--blog`, `--no-blog` | `docs`: add a blog, or not (default) |
 | `--package-manager=<name>` | The project's manager: `npm`, `bun`, `pnpm`, `yarn` — the docs name it |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |

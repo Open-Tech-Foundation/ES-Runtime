@@ -13092,6 +13092,21 @@ fn afw_templates_scaffold_from_flags() {
     let document = std::fs::read_to_string(dir.join("index.html")).expect("read");
     assert!(document.contains("<title>journal</title>"), "{document}");
 
+    // Unattended and unasked, a docs site is docs: the blog is opt-in.
+    let unasked = esdev_in(&parent)
+        .args(["create", "handbook", "--template=docs"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(unasked.status.success(), "{}", stderr(&unasked));
+    let dir = parent.join("handbook");
+    assert!(dir.join("app/docs").is_dir());
+    assert!(!dir.join("app/blog").exists(), "a blog nobody asked for");
+    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
+    assert!(!config.contains("blog:"), "{config}");
+    let plugins = std::fs::read_to_string(dir.join("esdev.json")).expect("read");
+    assert!(!plugins.contains("blogPostsPlugin"), "{plugins}");
+
     // The library ships an `esdev test` suite that renders its component.
     // Running it needs installed dependencies (network), which the scaffold
     // harness does not have — so this asserts the wiring the run needs: the

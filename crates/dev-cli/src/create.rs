@@ -233,7 +233,7 @@ pub struct CreateConfig {
     /// by the templates with a page to style — `react`, `vanilla`, `micro-ui`,
     /// `preact`, `lit`, `spa` and `fullstack` ([`stylings`]); refused everywhere else.
     pub styling: Option<String>,
-    /// Whether the `docs` template keeps its demo blog, or `None` to ask
+    /// Whether the `docs` template has a blog, or `None` to ask
     /// (or take the default). Refused for every other template.
     pub blog: Option<bool>,
     /// Whether to write into a directory that already holds something.
@@ -910,10 +910,11 @@ fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// Whether the `docs` template keeps its demo blog. The menu starts on
-/// yes; the embedded files are the blog-on-disk state with the config and
-/// page unpatched, so "no" only withholds files and "yes" patches two.
-const DEFAULT_BLOG: bool = true;
+/// Whether the `docs` template has a blog when nobody said. No, as in
+/// create-afw: a docs site is docs, and a blog is something to ask for. The
+/// embedded files are the blog-on-disk state with the config and page
+/// unpatched, so "no" only withholds files and "yes" patches two.
+const DEFAULT_BLOG: bool = false;
 
 /// What an axis falls back to when its flag is absent.
 #[derive(Clone, Copy)]
@@ -1031,9 +1032,9 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
     }
     let choices = [
         crate::prompt::Choice {
-            name: "Yes — add demo blog",
-            label: "Yes — add demo blog",
-            description: "Adds app/blog/, a sample post, and a Blog link in the navbar",
+            name: "Yes — add a blog",
+            label: "Yes — add a blog",
+            description: "Adds app/blog/ with a sample post, a Blog link, and RSS and Atom feeds",
             disabled: false,
         },
         crate::prompt::Choice {
@@ -1044,12 +1045,7 @@ fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blo
         },
     ];
     let preselect = if DEFAULT_BLOG { 0 } else { 1 };
-    match crate::prompt::select(
-        "Include a Sample Blog?",
-        &choices,
-        Some(preselect),
-        ask.esc(),
-    ) {
+    match crate::prompt::select("Add a blog?", &choices, Some(preselect), ask.esc()) {
         Some(0) => Ok(Blog::On),
         Some(_) => Ok(Blog::Off),
         None => Ok(Blog::Back),
@@ -2311,7 +2307,7 @@ mod tests {
         ));
         assert!(matches!(
             resolve_blog("docs", None, SCRIPTED),
-            Ok(Blog::On) if DEFAULT_BLOG
+            Ok(Blog::Off) if !DEFAULT_BLOG
         ));
         assert!(matches!(
             resolve_manager(None, SCRIPTED),
@@ -2965,7 +2961,7 @@ mod tests {
         ));
         assert!(matches!(
             resolve_blog("docs", None, ASK),
-            Ok(Blog::On) if DEFAULT_BLOG
+            Ok(Blog::Off) if !DEFAULT_BLOG
         ));
         assert!(matches!(
             resolve_choice(

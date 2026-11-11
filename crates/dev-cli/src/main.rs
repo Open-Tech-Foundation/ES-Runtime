@@ -491,7 +491,7 @@ OPTIONS:
     --styling=<name>            css or tailwind, for the templates with a page.
                                 Asked, never assumed; unattended, nothing is
                                 added
-    --blog, --no-blog           docs only: keep the demo blog (default) or not
+    --blog, --no-blog           docs only: add a blog, or not (the default)
     --package-manager=<name>  The project's package manager: npm, bun, pnpm
                               or yarn. Asked; the docs name it, and
                               --install=<manager> answers it implicitly
