@@ -64,6 +64,25 @@ esrun --allow-net=s3.eu-west-1.amazonaws.com \
   on purpose, or through `fromEnv()`.
 </Callout>
 
+### On AWS infrastructure
+
+On EC2, ECS, EKS or a CI runner with OIDC, pass the provider for where the
+program runs. It fetches temporary credentials and refreshes them before they
+expire:
+
+```js
+import { S3Client, containerCredentials, instanceMetadata, webIdentity } from "@opentf/esrun-s3";
+
+new S3Client({ bucket, region, credentials: instanceMetadata() });      // EC2
+new S3Client({ bucket, region, credentials: containerCredentials() });  // ECS, EKS Pod Identity
+new S3Client({ bucket, region, credentials: webIdentity() });           // EKS IRSA, GitHub Actions
+```
+
+Each provider needs the grants for what it calls. On EC2, that is
+`--allow-net=169.254.169.254`. The
+[package reference](https://www.npmjs.com/package/@opentf/esrun-s3#credentials-on-aws)
+lists each provider's variables and grants.
+
 ## Read and write
 
 ```js

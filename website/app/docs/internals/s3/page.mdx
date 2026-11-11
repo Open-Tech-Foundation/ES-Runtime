@@ -104,10 +104,31 @@ refresh. A credential may be a `Secret` from `runtime:process`'s `env`. It is
 unmasked only when a request is signed, and `runtime:process` is loaded only
 then, so a program that passes plain strings needs no `env` grant.
 
+### Providers
+
+The providers speak AWS's protocols as the AWS SDK for JavaScript implements
+them, with two rules of their own.
+
+- **Instance metadata is IMDSv2 only.** The SDK falls back to IMDSv1 when the
+  token request fails. IMDSv1 answers any request without a token, which is how
+  a server-side request forgery reads an instance's credentials. A refused
+  token is reported instead, since it usually means a container cannot cross
+  the instance's hop limit.
+- **A token never travels in plain text.** A credentials URL must be HTTPS,
+  loopback, or one of AWS's link-local addresses (`169.254.169.254`,
+  `169.254.170.2`, `169.254.170.23`, `[fd00:ec2::23]`), the rule the SDK applies
+  to container endpoints, here applied to STS and instance metadata too. A
+  container token containing a line break is refused, since it would become a
+  second header.
+
+None is chosen automatically. A chain that tries each in turn would decide
+where a program's credentials come from by what happens to answer first.
+
 ## Testing
 
 | Suite | Against |
 | --- | --- |
 | `sigv4.mjs` | The AWS signing test suite. |
 | `client.mjs` | The fake S3, including scripted faults: a part that fails twice, a `200` carrying an `<Error>`, a server clock an hour ahead, a wrong-region redirect. |
+| `providers.mjs` | Fakes of the instance metadata service, a container endpoint and STS, which re-derives `AssumeRole`'s signature. |
 | `e2e.mjs` | RustFS (pinned), in CI. The same suite runs against AWS with `S3_E2E_ENDPOINT` and `S3_E2E_REGION`. |

@@ -25,3 +25,7 @@ package written entirely in JavaScript over `fetch`. See the root
   Bun's `S3_*` names and the AWS ones. Objects are read byte for byte,
   `Content-Encoding` included (`decompress: false`, D210), so it needs esrun
   0.47.0 or later.
+- Credential providers (DECISIONS D212): `instanceMetadata()` (IMDSv2 only),
+  `containerCredentials()` (ECS task roles, EKS Pod Identity), `webIdentity()`
+  (STS `AssumeRoleWithWebIdentity`: EKS IRSA, GitHub Actions OIDC) and
+  `assumeRole()`, each refreshed before its credentials expire.

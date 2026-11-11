@@ -2,6 +2,7 @@
 # Stands up an S3-compatible server and prints the environment e2e.mjs wants.
 #
 #   eval "$(test/s3-server.sh)" && test/run.sh
+#   test/s3-server.sh --plain >> "$GITHUB_ENV"   # KEY=value lines, for CI
 #   docker rm -f esrun-s3   # when you are done
 #
 # RustFS (Apache-2.0), pinned. MinIO's repository is archived and says it is no
@@ -27,6 +28,8 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-echo "S3_E2E_ENDPOINT=http://127.0.0.1:$port"
-echo "S3_E2E_ACCESS_KEY=$access"
-echo "S3_E2E_SECRET_KEY=$secret"
+prefix="export "
+[ "${1:-}" = "--plain" ] && prefix=""
+echo "${prefix}S3_E2E_ENDPOINT=http://127.0.0.1:$port"
+echo "${prefix}S3_E2E_ACCESS_KEY=$access"
+echo "${prefix}S3_E2E_SECRET_KEY=$secret"

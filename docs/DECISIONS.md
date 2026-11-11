@@ -4415,4 +4415,19 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 - **Streaming signatures** (`aws-chunked` with `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), so a stream need not be buffered into parts. A part is at most 5 GiB and usually 5 MiB, and a buffered part is what makes retrying it possible.
 - **Following Bun on `write()` returning a byte count.** The caller passed the bytes; what it does not have is the ETag.
 
-**Consequences:** the package needs esrun 0.47.0, for `decompress: false`. Credentials from instance metadata, containers and web identity are providers to add; until then they are passed in or produced by the application's own function.
+**Consequences:** the package needs esrun 0.47.0, for `decompress: false`. Credentials from instance metadata, containers and web identity are providers, D212.
+
+### D212 — `@opentf/esrun-s3`'s credential providers: named, IMDSv2 only, never in plain text · *Accepted (2026-11-11)* · *extends D211*
+
+**Context:** on AWS infrastructure, credentials are temporary and handed out by the platform: EC2's instance metadata service, the container credentials endpoint (ECS task roles, EKS Pod Identity), or STS in exchange for an OpenID Connect token (EKS IRSA, GitHub Actions). D211's client takes a function for credentials and refreshes before expiry; these are the functions. The protocols were taken from AWS's documentation (EC2 User Guide, SDKs and Tools Reference Guide, STS API Reference) and the AWS SDK for JavaScript v3.1166.0 and smithy-typescript sources.
+
+**Decision (maintainer, 2026-11-11):**
+- **Four exported providers:** `instanceMetadata()`, `containerCredentials()`, `webIdentity()`, `assumeRole()`. Each reads the AWS variables its platform sets (the SDKs' names) unless given values, so each needs exactly the `--allow-env`, `--allow-net` and `--allow-read` grants for what it reads and calls.
+- **No default chain.** The SDKs' default provider chain tries several sources in turn; a program here names its provider. Which credentials a program runs with is not decided by which endpoint answers first.
+- **IMDSv2 only.** The SDK falls back to IMDSv1 when the token request fails; IMDSv1 answers without a token, which is what a server-side request forgery exploits. A refused token is an error that says so.
+- **HTTPS, loopback or AWS's link-local addresses only** for every credentials URL — the SDK's rule for container endpoints, applied to instance metadata and STS too. A container token with a line break is refused.
+- **STS's regional endpoint** for `region` (default `AWS_REGION`, then `us-east-1`), as the SDK for JavaScript v3 does.
+
+**Rejected:** reading `~/.aws/credentials` and `~/.aws/config` — files outside the program's directory, which D79's sandbox does not reach, and profiles, SSO caches and `credential_process` bring more than an S3 client should own; a program that wants a profile reads it with its own `--allow-read` and passes the values. An IMDSv1 fallback, behind an option or not.
+
+**Consequences:** the common AWS deployments get credentials without a key in the environment. What is not covered — SSO, `credential_process`, Cognito — is a function the application writes.

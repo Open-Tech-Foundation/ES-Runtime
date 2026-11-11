@@ -297,6 +297,38 @@ followed: the error names the bucket's region (`region: "eu-west-1"`).
 Keys with a `.` or `..` segment are refused, because a URL cannot carry them as
 they are. So are keys over 1024 bytes of UTF-8.
 
+## Credentials on AWS
+
+Temporary credentials come from a provider, passed as `credentials`. The client
+calls it when it first needs credentials and again five minutes before they
+expire. None is picked for you: name the one your deployment uses.
+
+```js
+import { S3Client, containerCredentials, instanceMetadata, webIdentity, assumeRole } from "@opentf/esrun-s3";
+
+new S3Client({ bucket, region, credentials: instanceMetadata() });      // EC2 instance role
+new S3Client({ bucket, region, credentials: containerCredentials() });  // ECS task role, EKS Pod Identity
+new S3Client({ bucket, region, credentials: webIdentity() });           // EKS IRSA, GitHub Actions OIDC
+new S3Client({
+  bucket,
+  region,
+  credentials: assumeRole({ roleArn, credentials: webIdentity() }),     // a second role
+});
+```
+
+| Provider | Calls | Reads by default | Grants it needs |
+| --- | --- | --- | --- |
+| `instanceMetadata({ endpoint?, timeout? })` | IMDSv2 at `169.254.169.254`. Never falls back to IMDSv1. | — | `--allow-net=169.254.169.254` |
+| `containerCredentials({ uri?, token?, tokenFile?, timeout? })` | The container credentials endpoint, with the token as `Authorization`. | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`, `_TOKEN_FILE` | `--allow-env` for those, `--allow-net` for the endpoint (`169.254.170.2` on ECS, `169.254.170.23` on EKS), `--allow-read` for the token file |
+| `webIdentity({ roleArn?, tokenFile?, token?, roleSessionName?, durationSeconds?, region?, endpoint? })` | STS `AssumeRoleWithWebIdentity`, unsigned. The token file is read on every refresh. | `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_SESSION_NAME`, `AWS_REGION` | `--allow-env` for those, `--allow-net=sts.<region>.amazonaws.com`, `--allow-read` for the token file |
+| `assumeRole({ roleArn, credentials, externalId?, roleSessionName?, durationSeconds?, region?, endpoint? })` | STS `AssumeRole`, signed with `credentials` (given, or another provider). | `AWS_REGION` | `--allow-net=sts.<region>.amazonaws.com` |
+
+STS is called at the regional endpoint for `region`, which defaults to
+`AWS_REGION` and then `us-east-1`. A credentials URL must be HTTPS, loopback, or
+the AWS address named above, so a token never crosses a network in plain text.
+`token` may be a function returning a fresh token. A failure is an `S3Error`
+with code `ERR_S3_CREDENTIALS`, naming the service's own error code.
+
 ## Providers
 
 | | |

@@ -561,7 +561,7 @@ jobs:
       - run: tsr build
       - run: tsr typecheck
       - name: start the S3 server
-        run: ./test/s3-server.sh >> "$GITHUB_ENV"
+        run: ./test/s3-server.sh --plain >> "$GITHUB_ENV"
       - run: tsr test:s3
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun

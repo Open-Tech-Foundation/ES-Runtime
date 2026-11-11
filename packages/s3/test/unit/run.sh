@@ -18,4 +18,11 @@ status=0
 # serves the fake on loopback and dials it (listen, net).
 "$esrun" --allow-imports --allow-read="$here/../fixtures" "$here/sigv4.mjs" || status=1
 "$esrun" --allow-imports --allow-net=127.0.0.1 --allow-listen=127.0.0.1 "$here/client.mjs" || status=1
+# The providers read AWS's variables, as they would on EKS; the run sets two
+# and grants exactly the names they read, so the rest read as unset.
+AWS_ROLE_ARN="arn:aws:iam::123456789012:role/from-env" \
+  AWS_WEB_IDENTITY_TOKEN_FILE="$here/web-identity-token.txt" \
+  "$esrun" --allow-imports --allow-net=127.0.0.1 --allow-listen=127.0.0.1 --allow-read="$here" \
+  --allow-env=AWS_REGION,AWS_ROLE_ARN,AWS_WEB_IDENTITY_TOKEN_FILE,AWS_ROLE_SESSION_NAME,AWS_CONTAINER_CREDENTIALS_RELATIVE_URI,AWS_CONTAINER_CREDENTIALS_FULL_URI,AWS_CONTAINER_AUTHORIZATION_TOKEN,AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE \
+  "$here/providers.mjs" || status=1
 exit $status
