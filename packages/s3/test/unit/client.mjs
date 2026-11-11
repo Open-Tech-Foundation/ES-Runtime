@@ -119,6 +119,149 @@ async function rejects(fn, code, what) {
   throws(() => f.slice(0, -1), "a negative end is refused");
 }
 
+// -- reads resume where they broke -------------------------------------------
+
+{
+  // A GET whose body stops after `at` bytes: the connection is cut mid-body.
+  // `atCut` runs at the cut, to change the object underneath a resume.
+  const cut = (key, at, { status = 200, headers = {}, atCut, clean = false } = {}) =>
+    fake.fail(
+      (r) =>
+        r.method === "GET" &&
+        r.path === `/bucket/${key}` &&
+        r.headers.range === headers.expectRange,
+      () => {
+        const object = fake.buckets.get("bucket").get(key);
+        const from = Number(/^bytes (\d+)-/.exec(headers["content-range"] ?? "")?.[1] ?? 0);
+        const sent = object.bytes.slice(from, from + at);
+        const h = { etag: object.etag, ...headers };
+        delete h.expectRange;
+        return new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(sent);
+              setTimeout(() => {
+                atCut?.();
+                if (clean) c.close();
+                else c.error(new Error("connection reset"));
+              }, 5);
+            },
+          }),
+          { status, headers: h },
+        );
+      },
+    );
+  const big = new Uint8Array(1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 13) & 0xff;
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const { etag } = await client.write("resume.bin", big);
+
+  cut("resume.bin", 300_000);
+  ok(same(await client.file("resume.bin").bytes(), big), "bytes() resumes a body cut mid-way");
+  const again = fake.log[fake.log.length - 1];
+  is(again.headers.range, "bytes=300000-", "the resume asks for the rest");
+  is(again.headers["if-match"], etag, "pinned to the ETag the read started with");
+
+  cut("resume.bin", 400_000);
+  const chunks = [];
+  for await (const chunk of client.file("resume.bin").stream()) chunks.push(chunk);
+  ok(same(new Uint8Array(await new Blob(chunks).arrayBuffer()), big), "stream() resumes too");
+
+  cut("resume.bin", 1000, {
+    status: 206,
+    headers: { expectRange: "bytes=100-199999", "content-range": "bytes 100-199999/1048576" },
+  });
+  ok(
+    same(await client.file("resume.bin").slice(100, 200_000).bytes(), big.slice(100, 200_000)),
+    "a slice resumes within its range",
+  );
+  is(
+    fake.log[fake.log.length - 1].headers.range,
+    "bytes=1100-199999",
+    "from where it stopped to the slice's end",
+  );
+
+  const tail = big.length - 5000;
+  cut("resume.bin", 10, {
+    status: 206,
+    headers: {
+      expectRange: "bytes=-5000",
+      "content-range": `bytes ${tail}-${big.length - 1}/${big.length}`,
+    },
+  });
+  ok(
+    same(await client.file("resume.bin").slice(-5000).bytes(), big.slice(-5000)),
+    "a suffix slice resumes at the absolute offset",
+  );
+  is(
+    fake.log[fake.log.length - 1].headers.range,
+    `bytes=${tail + 10}-${big.length - 1}`,
+    "taken from Content-Range",
+  );
+
+  cut("resume.bin", 50, {
+    status: 206,
+    clean: true,
+    headers: { expectRange: "bytes=0-99", "content-range": "bytes 0-99/1048576" },
+  });
+  ok(
+    same(await client.file("resume.bin").slice(0, 100).bytes(), big.slice(0, 100)),
+    "a body that ends short of its length without an error is resumed",
+  );
+
+  cut("resume.bin", 1000, {
+    atCut: () =>
+      fake.buckets
+        .get("bucket")
+        .set("resume.bin", { bytes: new Uint8Array(10), headers: {}, etag: '"other"' }),
+  });
+  await rejects(
+    () => client.file("resume.bin").bytes(),
+    "PreconditionFailed",
+    "an object replaced mid-read fails rather than splicing two versions",
+  );
+  await client.write("resume.bin", big);
+
+  const once = new S3Client({
+    endpoint: fake.endpoint,
+    bucket: "bucket",
+    accessKeyId: ACCESS_KEY,
+    secretAccessKey: SECRET_KEY,
+    retry: 0,
+  });
+  cut("resume.bin", 1000);
+  const sentBefore = fake.log.length;
+  try {
+    await once.file("resume.bin").bytes();
+    ok(false, "retry: 0 does not resume");
+  } catch {
+    is(
+      fake.log.length - sentBefore,
+      1,
+      "retry: 0 surfaces the broken body without a second request",
+    );
+  }
+
+  fake.fail(
+    (r) => r.method === "GET" && r.path === "/bucket/resume.bin",
+    () =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array(10));
+            setTimeout(() => c.error(new Error("connection reset")), 5);
+          },
+        }),
+      ),
+  );
+  try {
+    await client.file("resume.bin").bytes();
+    ok(false, "a body without an ETag is not resumed");
+  } catch {
+    ok(true, "a body without an ETag is not resumed");
+  }
+}
+
 // -- streams -----------------------------------------------------------------
 
 {

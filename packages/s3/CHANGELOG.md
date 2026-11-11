@@ -29,3 +29,6 @@ package written entirely in JavaScript over `fetch`. See the root
   `containerCredentials()` (ECS task roles, EKS Pod Identity), `webIdentity()`
   (STS `AssumeRoleWithWebIdentity`: EKS IRSA, GitHub Actions OIDC) and
   `assumeRole()`, each refreshed before its credentials expire.
+- Reads resume where a dropped connection left them: the rest is requested
+  with `Range` and `If-Match` on the first answer's ETag, up to `retry` times,
+  so a replaced object fails the read instead of splicing two versions.

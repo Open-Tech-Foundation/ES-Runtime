@@ -80,6 +80,22 @@ The XML reader also trims whitespace at the edges of text, which would change a
 key such as `" draft "`. So every list asks for `encoding-type=url` and
 decodes the keys it gets back. A key with spaces at both ends lists as itself.
 
+## Reads resume
+
+A request is retried before its body starts. A body that breaks after that, by
+a reset connection or an answer that ends short of its `Content-Length`, is
+resumed: the client asks for the rest with `Range: bytes=<next>-<last>` and
+`If-Match` on the ETag of the first answer, and checks that the `206` starts at
+the byte it asked for. Offsets are absolute, taken from `Content-Range`, so a
+suffix slice (`slice(-n)`) resumes as exactly as a whole object. The same
+`retry` budget applies again to the body.
+
+`If-Match` is what makes a resume safe. Without it, an object overwritten
+between two pieces would come back as the start of one version and the end of
+another, with nothing to show for it. With it, the read fails with
+`PreconditionFailed`. An answer with no ETag is not resumed, since nothing
+would tie the rest to it.
+
 ## Retries
 
 | Answer | What happens |

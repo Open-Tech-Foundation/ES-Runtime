@@ -8,9 +8,9 @@
  * credentials may come from a provider that has to be asked first.
  */
 import type { Core, Pairs } from "./core.js";
-import { invalid } from "./errors.js";
+import { invalid, S3Error, S3ErrorCode } from "./errors.js";
 import type { Acl, ReadOptions, WriteOptions } from "./options.js";
-import { readHeaders } from "./options.js";
+import { readHeaders, retryOf } from "./options.js";
 import { type Chunk, type S3WriteResult, S3Writer, writableOf } from "./writer.js";
 
 export type S3FileOptions = ReadOptions & WriteOptions;
@@ -125,11 +125,25 @@ export class S3File {
     return this.#options.versionId === undefined ? [] : [["versionId", this.#options.versionId]];
   }
 
-  async #get(): Promise<Response> {
-    const range = this.#rangeHeader();
+  /**
+   * One GET. `resume` is a range and an ETag for picking a read back up: the
+   * caller's own conditions are replaced by `If-Match` on the ETag the read
+   * started with, so every piece comes from the same object.
+   */
+  async #get(resume?: { range: string; etag: string }): Promise<Response> {
+    const range = resume ? resume.range : this.#rangeHeader();
     if (range === null) return new Response(new Uint8Array(0));
     const core = this.#host.core;
-    const headers = readHeaders(this.#options, core.isHttps(this.#bucket));
+    const options: ReadOptions = resume
+      ? {
+          ...this.#options,
+          ifMatch: resume.etag,
+          ifNoneMatch: undefined as never,
+          ifModifiedSince: undefined as never,
+          ifUnmodifiedSince: undefined as never,
+        }
+      : this.#options;
+    const headers = readHeaders(options, core.isHttps(this.#bucket));
     if (range !== undefined) headers.push(["range", range]);
     const response = await core.send({
       method: "GET",
@@ -140,7 +154,7 @@ export class S3File {
       signal: this.#options.signal,
       retry: this.#options.retry,
       // A range past the end reads as nothing, as Blob.slice does.
-      accept: range === undefined ? [] : [416],
+      accept: range === undefined || resume ? [] : [416],
     });
     if (response.status === 416) {
       await response.body?.cancel();
@@ -149,12 +163,130 @@ export class S3File {
     return response;
   }
 
+  /**
+   * The object's bytes, resumed where they stopped if the connection fails
+   * mid-body. `retry` before the body starts is the request's own; this is the
+   * same budget again for the body.
+   *
+   * A resume asks for the rest with `Range` and `If-Match` on the ETag of the
+   * first answer, so an object replaced in between fails the read
+   * (`PreconditionFailed`) rather than splicing two versions together. A body
+   * that ends short of its `Content-Length` without an error is resumed too.
+   * An object served without an ETag is not resumed: nothing would prove the
+   * rest belongs to it.
+   */
+  #body(onHeaders?: (headers: Headers) => void): ReadableStream<Uint8Array> {
+    const what = `GET ${this.#bucket}/${this.#key}`;
+    let budget = retryOf(this.#options.retry, this.#host.core.config.retry);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let etag: string | undefined;
+    /** The first byte of the read and the last (inclusive), in the object. */
+    let first = 0;
+    let last: number | undefined;
+    let expected: number | undefined;
+    let received = 0;
+
+    const open = async (response: Response) => {
+      reader = response.body?.getReader();
+      if (reader === undefined) expected = 0;
+    };
+    const start = async () => {
+      const response = await this.#get();
+      onHeaders?.(response.headers);
+      etag = response.headers.get("etag") ?? undefined;
+      const span = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/.exec(
+        response.headers.get("content-range") ?? "",
+      );
+      if (response.status === 206 && span) {
+        first = Number(span[1]);
+        last = Number(span[2]);
+        expected = last - first + 1;
+      } else {
+        const length = response.headers.get("content-length");
+        expected = length === null ? undefined : Number(length);
+        if (expected !== undefined) last = expected - 1;
+      }
+      await open(response);
+    };
+    const resume = async (cause: unknown) => {
+      if (this.#options.signal?.aborted) throw this.#options.signal.reason;
+      if (budget <= 0 || etag === undefined) throw cause;
+      budget--;
+      await reader?.cancel().catch(() => {});
+      const from = first + received;
+      const range = `bytes=${from}-${last ?? ""}`;
+      let response: Response;
+      try {
+        response = await this.#get({ range, etag });
+      } catch (error) {
+        if ((error as S3Error).code === "PreconditionFailed") {
+          throw new S3Error(`${what}: the object changed while it was being read`, {
+            code: "PreconditionFailed",
+            status: 412,
+            bucket: this.#bucket,
+            key: this.#key,
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      const span = /^bytes (\d+)-/.exec(response.headers.get("content-range") ?? "");
+      if (response.status !== 206 || !span || Number(span[1]) !== from) {
+        await response.body?.cancel();
+        throw new S3Error(`${what}: the server did not resume at byte ${from}`, {
+          code: S3ErrorCode.Response,
+          bucket: this.#bucket,
+          key: this.#key,
+          cause,
+        });
+      }
+      await open(response);
+    };
+
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        if (reader === undefined && expected === undefined) await start();
+        for (;;) {
+          if (reader === undefined) {
+            controller.close();
+            return;
+          }
+          let chunk: ReadableStreamReadResult<Uint8Array>;
+          try {
+            chunk = await reader.read();
+          } catch (cause) {
+            await resume(cause);
+            continue;
+          }
+          if (chunk.done) {
+            if (expected !== undefined && received < expected) {
+              await resume(
+                new S3Error(`${what}: the body ended at ${received} of ${expected} bytes`, {
+                  code: S3ErrorCode.Network,
+                  bucket: this.#bucket,
+                  key: this.#key,
+                }),
+              );
+              continue;
+            }
+            controller.close();
+            return;
+          }
+          received += chunk.value.length;
+          controller.enqueue(chunk.value);
+          return;
+        }
+      },
+      cancel: (reason) => reader?.cancel(reason),
+    });
+  }
+
   async bytes(): Promise<Uint8Array> {
-    return new Uint8Array(await (await this.#get()).arrayBuffer());
+    return new Uint8Array(await new Response(this.#body()).arrayBuffer());
   }
 
   async arrayBuffer(): Promise<ArrayBuffer> {
-    return (await this.#get()).arrayBuffer();
+    return new Response(this.#body()).arrayBuffer();
   }
 
   async text(): Promise<string> {
@@ -166,28 +298,21 @@ export class S3File {
   }
 
   async blob(): Promise<Blob> {
-    return (await this.#get()).blob();
+    let type = "";
+    const bytes = await new Response(
+      this.#body((headers) => {
+        type = headers.get("content-type") ?? "";
+      }),
+    ).arrayBuffer();
+    return new Blob([bytes], { type });
   }
 
-  /** The object's bytes as they arrive. The request is sent when the stream is first read. */
+  /**
+   * The object's bytes as they arrive. The request is sent when the stream is
+   * first read, and a connection lost mid-body is resumed (see {@link bytes}).
+   */
   stream(): ReadableStream<Uint8Array> {
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    return new ReadableStream<Uint8Array>({
-      pull: async (controller) => {
-        if (reader === undefined) {
-          const body = (await this.#get()).body;
-          if (body === null) {
-            controller.close();
-            return;
-          }
-          reader = body.getReader();
-        }
-        const { done, value } = await reader.read();
-        if (done) controller.close();
-        else controller.enqueue(value);
-      },
-      cancel: (reason) => reader?.cancel(reason),
-    });
+    return this.#body();
   }
 
   /** `false` for a missing object; any other failure throws. */

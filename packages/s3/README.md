@@ -104,6 +104,12 @@ The bytes read are the bytes stored. An object written with
 `contentEncoding: "gzip"` reads back gzipped, with no decoding, so its size and
 ETag match.
 
+A read whose connection drops mid-body picks up where it stopped, up to `retry`
+times. The rest is requested with `Range` and `If-Match` on the ETag the read
+started with, so if the object is replaced in between, the read fails with
+`PreconditionFailed` rather than returning parts of two versions. An object
+served without an ETag is not resumed.
+
 ### Ranges
 
 `slice(start, end)` follows `Blob.slice`: `start` is inclusive, `end` exclusive,
