@@ -7,7 +7,8 @@
 // WebAssembly, JavaScript, RabbitMQ, MQTT and NATS from Simple Icons (CC0); Valkey's
 // mark from valkey.io (img/Valkey-logo.svg; a trademark of LF Projects, LLC). The JSX tile is that
 // JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
-// WebSocket, images, PDFs, archives, durable state, the toolchain, the sandbox, mail,
+// WebSocket, images, PDFs, archives, durable state, object storage (a bucket:
+// the client speaks to any S3-compatible store, and no free S3 mark exists), the toolchain, the sandbox, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile. PDF
@@ -185,6 +186,15 @@ export default function StackIcon({ name }) {
             <ellipse cx="12" cy="5" rx="9" ry="3" />
             <path d="M3 5V19A9 3 0 0 0 21 19V5" />
             <path d="M3 12A9 3 0 0 0 21 12" />
+          </svg>
+        </span>
+      )}
+      {name === "s3" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <ellipse cx="12" cy="5" rx="9.5" ry="3" />
+            <path d="M2.5 5 5 19.5a7 2.5 0 0 0 14 0L21.5 5" />
+            <path d="M3.7 12.4a8.3 2.8 0 0 0 16.6 0" />
           </svg>
         </span>
       )}

@@ -111,6 +111,10 @@ Read part of an object with `slice`, as with a `Blob`:
 const header = await s3.file("video.mp4").slice(0, 64 * 1024).bytes();
 ```
 
+A read whose connection drops part-way resumes from the last byte it received,
+and fails with `PreconditionFailed` if the object was replaced in the meantime.
+A long download does not start over.
+
 ## Write many chunks
 
 Use a writer when the data arrives over time:
@@ -140,6 +144,26 @@ await s3.write("config.json", updated, { ifMatch: etag });
 ```
 
 A lost race fails with `PreconditionFailed`.
+
+## Copy and move
+
+`copy` runs inside S3, so the bytes never pass through your program, whatever
+the object's size:
+
+```js
+await s3.copy("uploads/raw.mov", "archive/2026/raw.mov");
+await s3.copy("a.json", "b.json", { sourceBucket: "staging" });
+```
+
+S3 has no rename. Move an object by copying it and deleting the original:
+
+```js
+await s3.copy("inbox/report.pdf", "done/report.pdf");
+await s3.delete("inbox/report.pdf");
+```
+
+Pass `metadata` or `type` to give the copy new metadata; otherwise it keeps the
+source's.
 
 ## List
 

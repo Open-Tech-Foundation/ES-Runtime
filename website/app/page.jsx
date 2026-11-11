@@ -86,7 +86,7 @@ const groups = [
   },
   {
     name: "Store",
-    desc: "Embedded SQLite plus first-party Postgres, MySQL/MariaDB, MongoDB (beta), Redis, and Valkey.",
+    desc: "Embedded SQLite plus first-party Postgres, MySQL/MariaDB, MongoDB (beta), Redis, Valkey, and S3-compatible object storage.",
     tiles: [
       { icon: "sqlite", label: "SQLite", to: "/docs/db/sqlite" },
       { icon: "postgres", label: "PostgreSQL", to: "/docs/db/postgres" },
@@ -95,6 +95,7 @@ const groups = [
       { icon: "mongodb", label: "MongoDB", to: "/docs/db/mongodb" },
       { icon: "redis", label: "Redis", to: "/docs/db/redis" },
       { icon: "valkey", label: "Valkey", to: "/docs/db/valkey" },
+      { icon: "s3", label: "S3", to: "/docs/guides/object-storage" },
     ],
   },
   {
