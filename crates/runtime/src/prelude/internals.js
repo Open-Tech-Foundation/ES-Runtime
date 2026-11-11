@@ -9,6 +9,7 @@
 //   encode  FormData multipart encoder  — blob.js  → fetch.js
 //   parts   Response's synchronous parts — fetch.js → runtime_modules/http.js
 //   fileBody a runtime:fs file as a body — runtime_modules/fs.js → fetch.js
+//   hostHeaders  build Headers from host-validated pairs — fetch.js → runtime_modules/http.js
 //
 // Plus shared state:
 //
@@ -37,6 +38,7 @@
       // A response built from one keeps the path rather than the bytes, so
       // `serve` can send the file without the bytes ever entering JS (D145).
       fileBody: Symbol("file body"),
+      hostHeaders: Symbol("headers from the host"),
       // href -> Blob, for URL.createObjectURL. Entries live until revoked;
       // there is no document unload to clear them.
       blobURLs: new Map(),

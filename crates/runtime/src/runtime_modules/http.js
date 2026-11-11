@@ -384,19 +384,17 @@ function checkHead(head) {
   if (head.released) throw new TypeError(HEAD_RELEASED);
 }
 
-// The request's headers as [name, value] pairs, from the host (D216).
-function requestHeaders(requestId) {
-  const flat = ops.http_request_headers(requestId);
-  const pairs = [];
-  for (let i = 0; i + 1 < flat.length; i += 2) pairs.push([flat[i], flat[i + 1]]);
-  return pairs;
+// A served request's Headers, from the flat list the host validated (D216).
+function hostHeaders(flat) {
+  return Headers[__internal.hostHeaders](flat);
 }
 
 // Runs one request through the handler and writes the response back. Never
 // throws: a handler error or a non-Response return becomes a 500. `entry` is the
 // structured tuple from http_next_request: [requestId, method, url, hasBody,
-// headers] — `headers` is the pairs when something already read them (a
-// trusted `traceparent`), otherwise null and fetched on first use.
+// headers] — `headers` is the host's flat [name, value, …] list when
+// something already read it (a trusted `traceparent`), otherwise null and
+// fetched on first use.
 // Names what a handler returned, for the 500's report. Deliberately a shape,
 // not the value: a handler's return can hold anything, including secrets.
 function describeReturn(v) {
@@ -423,7 +421,15 @@ function inRequestScope(entry, trustTraceHeaders, method, url, run) {
   const inner = () => inRequestSpan(method, url, run);
   // Only a trusted `traceparent` needs the headers now; they are kept in the
   // entry so the handler's request does not fetch them a second time.
-  if (trustTraceHeaders) entry[4] = requestHeaders(entry[0]);
+  // A header the host refuses is not this loop's to report: left unread, the
+  // handler meets the same refusal when it reads `request.headers`.
+  if (trustTraceHeaders) {
+    try {
+      entry[4] = ops.http_request_headers(entry[0]);
+    } catch {
+      entry[4] = null;
+    }
+  }
   const trace = inboundTrace(entry[4], trustTraceHeaders);
   const scope = __internal.context.scope;
   // The program imported `runtime:context`, so it owns the mapping's shape —
@@ -579,7 +585,8 @@ async function handleRequest(entry, handler, onError) {
   const hasBody = entry[3];
   // Set the moment the response goes to the host, which drops the head then.
   const head = { released: false };
-  const headers = entry[4] ?? (() => (checkHead(head), requestHeaders(requestId)));
+  const headers = () =>
+    hostHeaders(entry[4] ?? (checkHead(head), ops.http_request_headers(requestId)));
   let response;
   let request;
   let cookies = null;
@@ -893,11 +900,12 @@ function parseTrustTraceHeaders(options) {
 }
 
 // The trace id to run a request under, or null to mint a fresh one.
-function inboundTrace(headers, trust) {
-  if (!trust) return null;
-  for (let i = 0; i < headers.length; i++) {
-    if (headers[i][0].toLowerCase() !== "traceparent") continue;
-    const match = TRACEPARENT.exec(headers[i][1].trim().toLowerCase());
+// `flat` is the host's [name, value, …] list: names lowercase, values trimmed.
+function inboundTrace(flat, trust) {
+  if (!trust || flat === null) return null;
+  for (let i = 0; i + 1 < flat.length; i += 2) {
+    if (flat[i] !== "traceparent") continue;
+    const match = TRACEPARENT.exec(flat[i + 1].toLowerCase());
     // A malformed or all-zero id is refused rather than propagated: it is the
     // usual shape of a field that was never filled in.
     if (match === null || /^0+$/.test(match[1])) return null;

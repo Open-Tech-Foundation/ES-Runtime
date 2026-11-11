@@ -129,3 +129,26 @@ fn connection_info_serializes_with_both_fields() {
     );
     assert_eq!(lines(&out), ["remoteAddr,peerCertificate tcp null"]);
 }
+
+/// Headers built from the host's pairs are ordinary `Headers`: looked up in any
+/// case, iterated sorted with repeats combined, and changeable.
+#[test]
+fn host_built_headers_behave_as_headers() {
+    let out = esrun(
+        "import { serve } from 'runtime:http'; \
+         const server = serve({ hostname: '127.0.0.1', port: 0 }, (req) => { \
+           const h = req.headers; \
+           const before = [...h].filter(([n]) => n.startsWith('x-')).map(([n, v]) => `${n}=${v}`).join(';'); \
+           h.set('x-b', 'changed'); h.delete('x-c'); h.append('x-d', 'new'); \
+           return new Response([before, h.get('X-A'), h.get('x-b'), h.has('x-c'), h.get('x-d'), h instanceof Headers].join('|')); \
+         }); \
+         const { port } = await server.addr; \
+         const headers = new Headers([['x-c', '3'], ['x-a', ' 1 '], ['x-b', '2'], ['x-a', '4']]); \
+         console.log(await (await fetch(`http://127.0.0.1:${port}/`, { headers })).text()); \
+         await server.stop();",
+    );
+    assert_eq!(
+        lines(&out),
+        ["x-a=1, 4;x-b=2;x-c=3|1, 4|changed|false|new|true"]
+    );
+}

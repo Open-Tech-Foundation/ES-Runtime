@@ -67,9 +67,8 @@ type BodyItem = std::result::Result<Vec<u8>, ProviderError>;
 /// What a request carried beyond what routing needs, held until the guest reads
 /// it or the response is handed over (D216).
 struct RequestHead {
-    /// Converted on the first read, then kept as pairs.
+    /// Taken by the one read the prelude makes.
     headers: Option<HttpRequestHeaders>,
-    pairs: Option<Vec<(String, String)>>,
     remote_address: String,
     remote_port: u16,
     peer_certificate: Option<Arc<PeerCertificate>>,
@@ -270,7 +269,6 @@ pub(crate) fn install(
                     rid,
                     RequestHead {
                         headers: Some(req.headers),
-                        pairs: None,
                         remote_address: req.remote_address,
                         remote_port: req.remote_port,
                         peer_certificate: req.peer_certificate,
@@ -286,24 +284,25 @@ pub(crate) fn install(
     }))?;
 
     // ---- http_request_headers / http_request_peer (sync, D216) ---------------
-    // The headers as a flat [name, value, …] list, converted on the first read
-    // and kept for any later one.
+    // The headers as a flat [name, value, …] list. Handed over once and moved,
+    // not copied: the prelude keeps what it was given, so it never asks twice.
     let heads = req_heads.clone();
     let owned = requests.clone();
     engine.register_op(OpDecl::sync("http_request_headers", move |args| {
         let rid = owned.check(arg_u64(&args, 0))?;
         let mut heads = heads.borrow_mut();
-        let head = heads
+        let headers = heads
             .get_mut(&rid)
-            .ok_or_else(|| OpError::type_error(HEAD_RELEASED))?;
-        if head.pairs.is_none() {
-            head.pairs = Some(head.headers.take().unwrap_or_default().into_pairs());
-        }
-        let pairs = head.pairs.as_deref().unwrap_or_default();
+            .ok_or_else(|| OpError::type_error(HEAD_RELEASED))?
+            .headers
+            .take()
+            .ok_or_else(|| OpError::type_error("request headers were already read"))?;
+        let pairs = headers.into_pairs();
         let mut flat = Vec::with_capacity(pairs.len() * 2);
         for (name, value) in pairs {
-            flat.push(Value::String(name.clone()));
-            flat.push(Value::String(value.clone()));
+            let (name, value) = host_header(name, value)?;
+            flat.push(Value::String(name));
+            flat.push(Value::String(value));
         }
         Ok(Value::Array(flat))
     }))?;
@@ -711,6 +710,33 @@ fn arg_timeout(
     }
 }
 
+/// One request header as the guest's `Headers` stores it: the name lowercased,
+/// the value with surrounding HTTP whitespace removed. The prelude builds
+/// `request.headers` from these without validating them again (D216), so this
+/// is where the Fetch rules are enforced — whatever the provider was. A pair
+/// that breaks them is refused as `Headers` itself would refuse it.
+fn host_header(mut name: String, value: String) -> std::result::Result<(String, String), OpError> {
+    let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
+    if name.is_empty() || !name.bytes().all(token) {
+        return Err(OpError::type_error(format!(
+            "Invalid header name: \"{name}\""
+        )));
+    }
+    name.make_ascii_lowercase();
+    let trimmed = value.trim_matches(['\t', '\n', '\r', ' ']);
+    if trimmed.bytes().any(|b| matches!(b, b'\0' | b'\n' | b'\r')) {
+        return Err(OpError::type_error(
+            "Invalid header value: contains NUL, CR or LF",
+        ));
+    }
+    let value = if trimmed.len() == value.len() {
+        value
+    } else {
+        trimmed.to_string()
+    };
+    Ok((name, value))
+}
+
 fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
 }
@@ -759,4 +785,31 @@ fn server_value(id: u64, info: &SocketInfo) -> Value {
             Value::Number(info.local_port as f64),
         ),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_header;
+
+    #[test]
+    fn a_host_header_is_stored_as_headers_would_store_it() {
+        assert_eq!(
+            host_header("X-Probe".into(), " \tv a l \t".into()).unwrap(),
+            ("x-probe".to_string(), "v a l".to_string())
+        );
+        assert_eq!(
+            host_header("host".into(), "a.test".into()).unwrap(),
+            ("host".to_string(), "a.test".to_string())
+        );
+    }
+
+    #[test]
+    fn a_host_header_headers_would_refuse_is_refused() {
+        for name in ["", "bad name", "bad:name", "bad\nname", "é"] {
+            assert!(host_header(name.into(), "v".into()).is_err(), "{name:?}");
+        }
+        for value in ["a\nb", "a\rb", "a\0b"] {
+            assert!(host_header("x".into(), value.into()).is_err(), "{value:?}");
+        }
+    }
 }

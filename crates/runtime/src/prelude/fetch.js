@@ -169,6 +169,20 @@
     [HEADER_LIST]() {
       return this.#sortedEntries();
     }
+    // A served request's headers, as a flat [name, value, …] list the host
+    // already validated and normalized (`http_request_headers`, D216). Stored
+    // as they are: running `append` would redo, per header, two regexes the
+    // host has already applied.
+    static [__internal.hostHeaders](flat) {
+      const headers = new Headers();
+      const map = headers.#map;
+      for (let i = 0; i + 1 < flat.length; i += 2) {
+        const list = map.get(flat[i]);
+        if (list) list.push(flat[i + 1]);
+        else map.set(flat[i], [flat[i + 1]]);
+      }
+      return headers;
+    }
   }
 
   // ---- Body ---------------------------------------------------------------
@@ -620,9 +634,10 @@
     #ensureHeaders() {
       if (this.#headers === null) {
         const raw = this.#rawHeaders;
-        // A thunk that throws (the headers were already released) leaves both
-        // fields as they were, so every later read throws the same way.
-        this.#headers = new Headers((typeof raw === "function" ? raw() : raw) ?? undefined);
+        // A thunk (a served request, D216) returns the finished Headers. One
+        // that throws — the headers were already released — leaves both fields
+        // as they were, so every later read throws the same way.
+        this.#headers = typeof raw === "function" ? raw() : new Headers(raw ?? undefined);
         this.#rawHeaders = null;
       }
     }

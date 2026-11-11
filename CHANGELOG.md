@@ -31,6 +31,11 @@ namespace) is unstable and may change between minor releases until the API freez
   read of `request.headers`, `info.remoteAddr` or `info.peerCertificate` after
   it throws a `TypeError`. `info` is now an object with getters on its
   prototype; `JSON.stringify(info)` still gives both fields.
+- Reading a served request's headers is cheaper: the host checks them once and
+  `request.headers` is built from its list without re-validating each header in
+  JS, and the strings are handed over instead of copied. With 15 request
+  headers and a handler that reads one, user CPU per request drops from 26.2 to
+  20.8 µs (+16% req/s).
 - **Embedders:** `HttpServerRequest.headers` is now an `HttpRequestHeaders`
   (`es-runtime-providers`), built with `from_pairs(..)` / `.into()` from the
   old `Vec<(String, String)>`, or with `deferred(..)` to convert only when read.
