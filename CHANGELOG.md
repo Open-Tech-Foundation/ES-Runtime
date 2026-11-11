@@ -25,8 +25,8 @@ namespace) is unstable and may change between minor releases until the API freez
   when a span is recorded.
 - **`runtime:http` reads a request's headers and peer on demand** (DECISIONS
   D216): they stay in the host until the handler first reads them, so a handler
-  that reads none pays nothing for them — about 10% less CPU per request on a
-  hello-world server and 8% through Hono. The host releases them when the
+  that reads none pays nothing for them — about 8% less CPU per request on a
+  hello-world server and 13% through Hono. The host releases them when the
   response is sent: a value read before then stays readable, while a *first*
   read of `request.headers`, `info.remoteAddr` or `info.peerCertificate` after
   it throws a `TypeError`. `info` is now an object with getters on its
@@ -34,12 +34,12 @@ namespace) is unstable and may change between minor releases until the API freez
 - Reading a served request's headers is cheaper: the host checks them once and
   `request.headers` is built from its list without re-validating each header in
   JS, and the strings are handed over instead of copied. With 15 request
-  headers and a handler that reads one, user CPU per request drops from 26.2 to
-  20.8 µs (+16% req/s).
+  headers and a handler that reads one, user CPU per request drops from 27.0 to
+  21.6 µs (+18% req/s).
 - Response headers cost less to send: values with nothing to trim skip the
   trimming regex, the answer's headers cross as one flat list, and the host
   moves each value into the response instead of copying it. With 10 response
-  headers, user CPU per request drops from 23.3 to 19.5 µs (+15% req/s).
+  headers, user CPU per request drops from 21.5 to 19.2 µs (+10% req/s).
 - **Embedders:** `HttpServerRequest.headers` is now an `HttpRequestHeaders`
   (`es-runtime-providers`), built with `from_pairs(..)` / `.into()` from the
   old `Vec<(String, String)>`, or with `deferred(..)` to convert only when read.
