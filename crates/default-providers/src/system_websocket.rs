@@ -11,8 +11,9 @@
 //!
 //! TLS for `wss:` reuses the rustls / `tokio-rustls` stack from `runtime:net`
 //! (the `aws-lc-rs` provider, `webpki-roots` trust anchors, DECISIONS D28): we
-//! complete the TLS handshake ourselves and hand the established stream to
-//! `client_async`, so no TLS feature of `tokio-tungstenite` is pulled in.
+//! complete the TLS handshake ourselves. The client's opening handshake — an
+//! HTTP/1.1 request and its `101` — is ours too (D217), on `es-runtime-http`'s
+//! codec; tungstenite is handed the established stream and does the framing.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,17 +24,14 @@ use es_runtime_providers::{
     WsMessage, WsServeOptions,
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+#[cfg(test)]
+use tokio::net::TcpStream;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::handshake::client::Response;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tracing::Instrument;
@@ -379,20 +377,145 @@ fn into_message(message: WsMessage) -> Message {
     }
 }
 
-/// The negotiated subprotocol + extensions from the handshake response headers.
-fn info_of(response: &Response) -> WebSocketInfo {
-    let header = |name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string()
+/// TCP keepalive on a client connection, as `fetch` has it.
+const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The opening handshake, client side (RFC 6455 §4.1): the upgrade request,
+/// and a `101` checked the way the RFC says a client must — `Upgrade:
+/// websocket`, `Connection: upgrade`, the accept value derived from our key, a
+/// subprotocol only from those offered, and no extension we did not offer.
+/// Whatever the server sent after its head is handed on with the stream.
+async fn client_handshake(
+    mut wire: BoxWire,
+    url: &url::Url,
+    protocols: &[String],
+) -> Result<
+    (
+        WebSocketStream<crate::prefixed::Prefixed<BoxWire>>,
+        WebSocketInfo,
+    ),
+    ProviderError,
+> {
+    use base64::Engine as _;
+    use es_runtime_http::h1::{
+        Framing, Limits, ParsedResponse, encode_request_head, parse_response,
     };
-    WebSocketInfo {
-        protocol: header("sec-websocket-protocol"),
-        extensions: header("sec-websocket-extensions"),
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| err(format!("WebSocket key: {e}")))?;
+    let key = base64::engine::general_purpose::STANDARD.encode(nonce);
+    let target = match url.query() {
+        Some(q) => format!("{}?{q}", url.path()),
+        None => url.path().to_string(),
+    };
+    let host = url.host_str().unwrap_or_default();
+    let authority = match url.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host.to_string(),
+    };
+    let offered = protocols.join(", ");
+    let mut fields: Vec<(&[u8], &[u8])> = vec![
+        (b"upgrade", b"websocket"),
+        (b"connection", b"Upgrade"),
+        (b"sec-websocket-key", key.as_bytes()),
+        (b"sec-websocket-version", b"13"),
+    ];
+    if !protocols.is_empty() {
+        fields.push((b"sec-websocket-protocol", offered.as_bytes()));
     }
+    let mut head = Vec::with_capacity(256);
+    encode_request_head(
+        &mut head,
+        b"GET",
+        target.as_bytes(),
+        authority.as_bytes(),
+        fields,
+        Framing::NoBody,
+    )
+    .map_err(|e| err(format!("WebSocket handshake: {e}")))?;
+    wire.write_all(&head)
+        .await
+        .map_err(|e| coded(ErrorCode::from_io_kind(e.kind()), e.to_string()))?;
+
+    let limits = Limits::default();
+    let mut buf = Vec::with_capacity(1024);
+    let mut parsed = Vec::new();
+    let response = loop {
+        match parse_response(&buf, &limits, &mut parsed, false) {
+            Ok(ParsedResponse::Complete(r)) if r.is_interim() => {
+                buf.drain(..r.len);
+                continue;
+            }
+            Ok(ParsedResponse::Complete(r)) => break r,
+            Ok(ParsedResponse::Partial) => {}
+            Err(e) => return Err(err(format!("WebSocket handshake: {e}"))),
+        }
+        buf.reserve(4096);
+        let n = wire
+            .read_buf(&mut buf)
+            .await
+            .map_err(|e| coded(ErrorCode::from_io_kind(e.kind()), e.to_string()))?;
+        if n == 0 {
+            return Err(coded(
+                ErrorCode::ConnectionReset,
+                "the connection closed during the WebSocket handshake".to_string(),
+            ));
+        }
+    };
+    let field = |name: &[u8]| {
+        parsed
+            .iter()
+            .find(|f| f.name.of(&buf).eq_ignore_ascii_case(name))
+            .map(|f| f.value.of(&buf))
+    };
+    if response.status != 101 {
+        return Err(err(format!(
+            "the server answered the WebSocket handshake with HTTP {}",
+            response.status
+        )));
+    }
+    let refuse = |why: &str| Err(err(format!("WebSocket handshake refused: {why}")));
+    if !field(b"upgrade").is_some_and(|v| v.eq_ignore_ascii_case(b"websocket")) {
+        return refuse("no `Upgrade: websocket` in the 101");
+    }
+    let upgrade_token = field(b"connection").is_some_and(|v| {
+        v.split(|&b| b == b',')
+            .any(|t| es_runtime_http::fields::trim_ows(t).eq_ignore_ascii_case(b"upgrade"))
+    });
+    if !upgrade_token {
+        return refuse("no `Connection: upgrade` in the 101");
+    }
+    let expected = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+    if field(b"sec-websocket-accept") != Some(expected.as_bytes()) {
+        return refuse("`Sec-WebSocket-Accept` does not match the key sent");
+    }
+    let protocol = field(b"sec-websocket-protocol")
+        .map(|v| String::from_utf8_lossy(v).into_owned())
+        .unwrap_or_default();
+    if !protocol.is_empty() && !protocols.contains(&protocol) {
+        return refuse("the server chose a subprotocol that was not offered");
+    }
+    let extensions = field(b"sec-websocket-extensions")
+        .map(|v| String::from_utf8_lossy(v).into_owned())
+        .unwrap_or_default();
+    if !extensions.is_empty() {
+        return refuse("the server chose an extension that was not offered");
+    }
+    let leftover = buf.split_off(response.len);
+    let stream = WebSocketStream::from_raw_socket(
+        crate::prefixed::Prefixed::new(wire, leftover),
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        None,
+    )
+    .await;
+    Ok((
+        stream,
+        WebSocketInfo {
+            protocol,
+            extensions,
+        },
+    ))
 }
 
 impl WebSocketProvider for SystemWebSocket {
@@ -417,13 +540,6 @@ impl WebSocketProvider for SystemWebSocket {
                 allow.check(&host, port, "WebSocket connect")?;
             }
 
-            // Build the upgrade request, carrying any offered subprotocols.
-            let mut request = url.as_str().into_client_request().map_err(err)?;
-            if !protocols.is_empty() {
-                let value = HeaderValue::from_str(&protocols.join(", ")).map_err(err)?;
-                request.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, value);
-            }
-
             // Reaching the server — directly or through the proxy — and its
             // TLS, within the same deadline `fetch` has (D198).
             let target = host
@@ -441,10 +557,11 @@ impl WebSocketProvider for SystemWebSocket {
                         .await
                         .map_err(|e| coded(e.code, e.message))?,
                     None => {
-                        let tcp = TcpStream::connect((target.as_str(), port))
+                        // The same connector `fetch` has: the system resolver,
+                        // Happy Eyeballs, no Nagle, TCP keepalive.
+                        let tcp = crate::tcp_connect::connect(&target, port, TCP_KEEPALIVE)
                             .await
-                            .map_err(|e| coded(ErrorCode::from_io_kind(e.kind()), e.to_string()))?;
-                        let _ = tcp.set_nodelay(true);
+                            .map_err(|e| coded(e.code, e.message))?;
                         Box::new(tcp)
                     }
                 };
@@ -473,11 +590,8 @@ impl WebSocketProvider for SystemWebSocket {
                 })??;
 
             let id = this.id();
-            let (stream, response) = client_async(request, wire).await.map_err(err)?;
-            let (info, slot) = (
-                info_of(&response),
-                SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
-            );
+            let (stream, info) = client_handshake(wire, &parsed, &protocols).await?;
+            let slot = SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED));
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
         })
@@ -903,6 +1017,123 @@ impl WebSocketProvider for SystemWebSocket {
             }
             Ok(())
         })
+    }
+}
+
+/// The client's opening handshake, against a server that answers by hand.
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A one-connection server: reads the request head, then writes whatever
+    /// `answer` makes of the key it was sent.
+    async fn answering(answer: fn(&str) -> Vec<u8>) -> u16 {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                if s.read(&mut byte).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                head.push(byte[0]);
+            }
+            let text = String::from_utf8_lossy(&head).to_string();
+            let key = text
+                .lines()
+                .find_map(|l| l.strip_prefix("sec-websocket-key: "))
+                .unwrap_or_default()
+                .to_string();
+            s.write_all(&answer(&key)).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        });
+        port
+    }
+
+    fn accept(key: &str) -> String {
+        tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes())
+    }
+
+    async fn connect(port: u16, protocols: &[&str]) -> Result<(u64, WebSocketInfo), ProviderError> {
+        SystemWebSocket::default()
+            .connect(
+                format!("ws://127.0.0.1:{port}/chat?room=1"),
+                protocols.iter().map(|p| p.to_string()).collect(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_good_101_connects_and_bytes_after_it_are_the_first_frame() {
+        let port = answering(|key| {
+            let mut out = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\nSec-WebSocket-Protocol: chat\r\n\r\n",
+                accept(key)
+            )
+            .into_bytes();
+            // An unmasked text frame "hi", sent in the same write as the head.
+            out.extend_from_slice(&[0x81, 0x02, b'h', b'i']);
+            out
+        })
+        .await;
+        let ws = SystemWebSocket::default();
+        let (id, info) = ws
+            .connect(
+                format!("ws://127.0.0.1:{port}/chat?room=1"),
+                vec!["chat".into(), "v2".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(info.protocol, "chat");
+        let first = ws.recv(id).await.unwrap();
+        assert!(matches!(first, Some(WsIncoming::Text(ref t)) if t == "hi"));
+    }
+
+    #[tokio::test]
+    async fn a_101_that_breaks_the_handshake_is_refused() {
+        for (answer, why) in [
+            (
+                (|_: &str| {
+                    b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: wrong\r\n\r\n".to_vec()
+                }) as fn(&str) -> Vec<u8>,
+                "Accept",
+            ),
+            (
+                |key: &str| {
+                    format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\nSec-WebSocket-Protocol: other\r\n\r\n", accept(key)).into_bytes()
+                },
+                "subprotocol",
+            ),
+            (
+                |key: &str| {
+                    format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n", accept(key)).into_bytes()
+                },
+                "extension",
+            ),
+            (
+                |key: &str| {
+                    format!("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", accept(key)).into_bytes()
+                },
+                "Upgrade",
+            ),
+            (
+                |_: &str| b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
+                "HTTP 404",
+            ),
+        ] {
+            let port = answering(answer).await;
+            let Err(e) = connect(port, &["chat"]).await else {
+                panic!("a broken handshake ({why}) was accepted");
+            };
+            let e = e.to_string();
+            assert!(e.contains(why), "expected {why:?} in: {e}");
+        }
     }
 }
 

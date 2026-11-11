@@ -37,6 +37,11 @@ namespace) is unstable and may change between minor releases until the API freez
   idempotent method. DNS, TCP and Happy Eyeballs are now the runtime's own too
   (the system resolver, as before, and the same 300 ms family fallback), so
   hyper-util's client pool and connector no longer ship.
+- The `WebSocket` client's opening handshake is the runtime's own (RFC 6455
+  §4.1, on the same HTTP/1.1 codec): the `101` must carry `Upgrade: websocket`,
+  `Connection: upgrade`, the accept value for the key sent, and only a
+  subprotocol that was offered. It now connects through the same resolver and
+  Happy Eyeballs as `fetch`, with TCP keepalive.
 - **HTTP/1.1 only, strictly.** An HTTP/1.0 request is now answered `505` (it
   was served). A request with a bare LF or CR, a folded header line, whitespace
   before a colon, no `Host` or two, or framing two parsers could read two ways
