@@ -23,7 +23,9 @@ namespace) is unstable and may change between minor releases until the API freez
 - **`runtime:http` serves HTTP/1.1 with its own connection code** (DECISIONS
   D217) instead of hyper's; HTTP/2 still runs on hyper. Measured on the
   hello-world server: user CPU per request 10.75 → 9.9 µs, +10% req/s, +12%
-  through Hono, and +15% with 15 unread request headers.
+  through Hono, and +15% with 15 unread request headers; a faster head parser
+  and a per-connection cache of the validated `Host` take a further ~0.8 µs
+  off each request.
 - **HTTP/1.1 only, strictly.** An HTTP/1.0 request is now answered `505` (it
   was served). A request with a bare LF or CR, a folded header line, whitespace
   before a colon, no `Host` or two, or framing two parsers could read two ways

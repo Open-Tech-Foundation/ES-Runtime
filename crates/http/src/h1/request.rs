@@ -214,15 +214,16 @@ pub fn parse_request(
     if len > limits.max_head_bytes {
         return Err(RequestError::HeadTooLarge);
     }
-    check_line_endings(&buf[start..head_end + 2], true)?;
+    // No separate pass over the line endings: lines are split at LF and each
+    // must have its CR, and no grammar below admits a CR or LF inside a line,
+    // so a bare one anywhere is refused by the checks that follow.
 
     // ---- request line ----------------------------------------------------
-    let line_end = start + find_crlf(&buf[start..]).expect("a head has a line");
+    let line_end = start + line_end_at(&buf[start..])?.expect("a head has a line");
     let (method, target) = parse_request_line(buf, start, line_end, limits)?;
 
     // ---- field lines -----------------------------------------------------
     parse_field_lines(buf, line_end + 2, head_end + 2, limits, fields)?;
-    check_content_lengths(buf, fields)?;
 
     let mut head = RequestHead {
         method,
@@ -405,7 +406,7 @@ pub(crate) fn parse_field_lines(
 ) -> Result<(), RequestError> {
     let mut pos = from;
     while pos < to {
-        let line_end = pos + find_crlf(&buf[pos..to]).ok_or(bad("unterminated field line"))?;
+        let line_end = pos + line_end_at(&buf[pos..to])?.ok_or(bad("unterminated field line"))?;
         if line_end == pos {
             break; // the blank line
         }
@@ -442,7 +443,18 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 }
 
 fn find_crlf(buf: &[u8]) -> Option<usize> {
-    buf.windows(2).position(|w| w == b"\r\n")
+    let lf = buf.iter().position(|&b| b == b'\n')?;
+    (lf > 0 && buf[lf - 1] == b'\r').then(|| lf - 1)
+}
+
+/// Where the first line of `buf` ends — the offset of its CR — refusing a
+/// line ended by a bare LF. `None` when no LF has arrived yet.
+fn line_end_at(buf: &[u8]) -> Result<Option<usize>, RequestError> {
+    match buf.iter().position(|&b| b == b'\n') {
+        None => Ok(None),
+        Some(lf) if lf > 0 && buf[lf - 1] == b'\r' => Ok(Some(lf - 1)),
+        Some(_) => Err(bad("bare LF")),
+    }
 }
 
 /// Every LF must follow a CR and every CR must precede an LF. `complete` says
@@ -533,9 +545,13 @@ fn apply_semantics(
 
     for field in fields {
         let value = field.value.of(buf);
-        if named(buf, field, b"content-length") {
+        let name = field.name.of(buf);
+        // Dispatched on length first: most fields are none of these, and a
+        // length compare rules a name out without looking at its bytes.
+        let is = |want: &[u8]| name.len() == want.len() && name.eq_ignore_ascii_case(want);
+        if is(b"content-length") {
             // Checked, with its repeats, by `check_content_lengths`.
-        } else if named(buf, field, b"transfer-encoding") {
+        } else if is(b"transfer-encoding") {
             transfer_encoding = true;
             let mut any = false;
             for coding in list_elements(value) {
@@ -560,13 +576,13 @@ fn apply_semantics(
             if !any {
                 return Err(bad("empty Transfer-Encoding"));
             }
-        } else if named(buf, field, b"host") {
+        } else if is(b"host") {
             hosts += 1;
             if !value.iter().all(|&b| is_authority_byte(b)) {
                 return Err(bad("invalid Host"));
             }
             head.host = field.value;
-        } else if named(buf, field, b"connection") {
+        } else if is(b"connection") {
             for option in list_elements(value) {
                 if option.eq_ignore_ascii_case(b"close") {
                     head.keep_alive = false;
@@ -574,9 +590,9 @@ fn apply_semantics(
                     connection_upgrade = true;
                 }
             }
-        } else if named(buf, field, b"upgrade") {
+        } else if is(b"upgrade") {
             upgrade_field = !value.is_empty();
-        } else if named(buf, field, b"expect") {
+        } else if is(b"expect") {
             if value.eq_ignore_ascii_case(b"100-continue") {
                 head.expect_continue = true;
             } else {

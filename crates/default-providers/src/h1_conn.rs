@@ -84,6 +84,11 @@ where
 {
     let (mut rd, mut wr) = tokio::io::split(io);
     let mut fields: Vec<Field> = Vec::with_capacity(16);
+    // The last `Host` this connection sent and what validating it gave:
+    // nearly every request on a connection names the same one, and the
+    // validation is a pure function of the value, so a hit cannot differ
+    // from a miss.
+    let mut host_cache: Option<(Vec<u8>, Option<String>)> = None;
     loop {
         // ---- the next head ------------------------------------------------
         let head = match read_head(&mut rd, &mut buf, &mut fields, &mut ctx).await {
@@ -102,7 +107,7 @@ where
         // ---- the request, to the guest ------------------------------------
         let method = String::from_utf8_lossy(head.method.of(&buf)).into_owned();
         let is_head = method == "HEAD";
-        let Some(url) = request_url(&buf, &head, &ctx.origin) else {
+        let Some(url) = request_url(&buf, &head, &ctx.origin, &mut host_cache) else {
             let _ = write_error(&mut wr, 400).await;
             let _ = wr.shutdown().await;
             return;
@@ -565,10 +570,15 @@ fn date() -> [u8; IMF_FIXDATE_LEN] {
 
 /// The absolute URL the guest sees: the listener's scheme, the authority the
 /// request named (validated, as on HTTP/2) or the bound address, and the path.
-fn request_url(buf: &[u8], head: &RequestHead, origin: &str) -> Option<String> {
+fn request_url(
+    buf: &[u8],
+    head: &RequestHead,
+    origin: &str,
+    host_cache: &mut Option<(Vec<u8>, Option<String>)>,
+) -> Option<String> {
     let (scheme, fallback) = origin.split_once("://").unwrap_or(("http", origin));
     let target = std::str::from_utf8(head.target.of(buf)).ok()?;
-    let host_value = std::str::from_utf8(head.host.of(buf)).ok()?;
+    let host_bytes = head.host.of(buf);
     // The path as hyper's URI would give it: the target's path and query (an
     // absolute-form target's own path), "/" for authority-form, the fragment
     // dropped.
@@ -582,12 +592,26 @@ fn request_url(buf: &[u8], head: &RequestHead, origin: &str) -> Option<String> {
     };
     let path = path.split_once('#').map_or(path, |(p, _)| p);
     let path = if path.is_empty() { "/" } else { path };
-    let host = if host_value.is_empty() {
-        fallback.to_owned()
+    let host: &str = if host_bytes.is_empty() {
+        fallback
     } else {
-        valid_authority(host_value)?
+        match host_cache {
+            Some((raw, validated)) if raw.as_slice() == host_bytes => validated.as_deref()?,
+            _ => {
+                let validated = std::str::from_utf8(host_bytes)
+                    .ok()
+                    .and_then(valid_authority);
+                let entry = host_cache.insert((host_bytes.to_vec(), validated));
+                entry.1.as_deref()?
+            }
+        }
     };
-    Some(format!("{scheme}://{host}{path}"))
+    let mut url = String::with_capacity(scheme.len() + 3 + host.len() + path.len());
+    url.push_str(scheme);
+    url.push_str("://");
+    url.push_str(host);
+    url.push_str(path);
+    Some(url)
 }
 
 /// The request's headers, converted only if the guest reads them (D216): the

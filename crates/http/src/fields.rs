@@ -49,13 +49,34 @@ pub struct Field {
     pub value: Span,
 }
 
+/// The byte classes as lookup tables: a parser asks for every byte of a head,
+/// and one load beats a chain of range comparisons.
+const fn class_table(tchar: bool) -> [bool; 256] {
+    let mut t = [false; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        let c = b as u8;
+        t[b] = if tchar {
+            matches!(c,
+                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
+                | b'^' | b'_' | b'`' | b'|' | b'~'
+                | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z')
+        } else {
+            matches!(c, b'\t' | b' ' | 0x21..=0x7e | 0x80..=0xff)
+        };
+        b += 1;
+    }
+    t
+}
+
+static TCHAR: [bool; 256] = class_table(true);
+static FIELD_VALUE: [bool; 256] = class_table(false);
+
 /// Whether `b` may appear in a token (RFC 9110 §5.6.2 `tchar`).
 #[must_use]
-pub const fn is_tchar(b: u8) -> bool {
-    matches!(b,
-        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
-        | b'^' | b'_' | b'`' | b'|' | b'~'
-        | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z')
+#[inline]
+pub fn is_tchar(b: u8) -> bool {
+    TCHAR[b as usize]
 }
 
 /// Whether `s` is a token: one or more `tchar`. Field names and methods are
@@ -70,8 +91,9 @@ pub fn is_token(s: &[u8]) -> bool {
 /// other controls — is what request and response splitting is made of, and is
 /// refused.
 #[must_use]
-pub const fn is_field_value_byte(b: u8) -> bool {
-    matches!(b, b'\t' | b' ' | 0x21..=0x7e | 0x80..=0xff)
+#[inline]
+pub fn is_field_value_byte(b: u8) -> bool {
+    FIELD_VALUE[b as usize]
 }
 
 /// Whether every byte of `s` may appear in a field value.
