@@ -52,6 +52,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- The minimum supported Rust version is 1.97, up from 1.96: oxc 0.157, which
+  esdev builds with, requires it.
 - `runtime:serialization` moves to `quick-xml` 0.42 and `toml` 1.2. XML input
   nested more than 65,535 elements deep is refused instead of overflowing the
   parser's depth counter; output is unchanged (the writer is our own). esdev's
