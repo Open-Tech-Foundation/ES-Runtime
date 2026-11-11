@@ -1,8 +1,16 @@
-//! HTTP/2 (RFC 9113), sans-I/O. So far, frames: [`frame`] reads and writes
-//! them; the connection and stream state machine builds on it.
+//! HTTP/2 (RFC 9113), sans-I/O: [`frame`] reads and writes frames, and
+//! [`conn`] is a connection's state for either role — streams, flow control,
+//! settings, and the bounds against HTTP/2's known attacks.
 
+pub mod conn;
 pub mod frame;
+pub mod headers;
 
+/// A field section as decoded: name and value pairs, in order.
+pub type FieldList = Vec<(Vec<u8>, Vec<u8>)>;
+
+#[cfg(test)]
+mod conn_tests;
 #[cfg(test)]
 mod tests;
 

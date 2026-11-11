@@ -185,3 +185,9 @@ name = "h2_frame"
 path = "fuzz_targets/h2_frame.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "h2_server"
+path = "fuzz_targets/h2_server.rs"
+test = false
+doc = false

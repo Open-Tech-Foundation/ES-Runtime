@@ -22,7 +22,11 @@ namespace) is unstable and may change between minor releases until the API freez
   from the RFC's text, checked against the RFC's own examples and against
   47,142 header blocks from 14 independent encoders (hpack-test-case); and the
   HTTP/2 frame codec (RFC 9113 §4, §6), each refusal naming whether it ends the
-  stream or the connection.
+  stream or the connection; and the HTTP/2 connection state machine for both
+  roles — streams, flow control both ways, settings, message validation
+  (§8), and bounds on Rapid Reset (CVE-2023-44487), CONTINUATION, PING,
+  SETTINGS and empty-frame floods and oversized header lists. Not yet used by
+  the server or the client.
 
 ### Changed
 
