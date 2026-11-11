@@ -105,6 +105,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- `rustix` 1.1.6, for RUSTSEC-2026-0486 (GHSA-jh2m-fhpj-3vr7): its xattr
+  functions marked unwritten bytes as initialized. Neither binary calls them.
 - **`copy` can no longer be pointed outside the root jail.** It checked both
   paths when called and opened them by name when it ran, so a `copy` issued
   with a `rename` of its directory and a `symlink` out of the jail in the same
