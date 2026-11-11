@@ -20,6 +20,11 @@ Copyright (c) 2024-present VoidZero Inc. & Contributors and (c) 2023 Boshen,
 licensed under the MIT license (https://github.com/oxc-project/oxc-resolver).
 Its LICENSE and the list of changes (PATCHES.md) are kept beside it.
 
+The HTTP parser's tests read test cases from llhttp
+(crates/http/tests/corpus/llhttp), Copyright (c) 2018 Fedor Indutny, licensed
+under the MIT license (https://github.com/nodejs/llhttp). Test data only; not
+part of any binary. Its LICENSE is kept beside it.
+
 Rust dependencies are distributed under OSI-approved permissive licenses
 (Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0); the set is
 enforced by cargo-deny (see deny.toml). See docs/LICENSING.md for details.

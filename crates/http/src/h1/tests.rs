@@ -551,3 +551,111 @@ fn chunks_round_trip_through_our_own_decoder() {
     assert_eq!(trailers, [("x-sum".into(), "42".into())]);
     assert_eq!(used, wire.len());
 }
+
+// ---- refusing early -------------------------------------------------------
+
+#[test]
+fn what_is_already_wrong_is_refused_before_the_head_ends() {
+    for (partial, want) in [
+        (&b"GET / HTTP/5.6"[..], RequestError::VersionNotSupported),
+        (b"GET / HTTP/1.0\r", RequestError::VersionNotSupported),
+        (
+            b"GET / HTTX",
+            RequestError::Malformed("invalid HTTP version"),
+        ),
+        (b"G(T", RequestError::Malformed("invalid method")),
+        (
+            b"GET /a\x01",
+            RequestError::Malformed("invalid request-target"),
+        ),
+        (
+            b"GET / HTTP/1.1\r\n Host: foo",
+            RequestError::Malformed("obs-fold"),
+        ),
+        (
+            b"GET / HTTP/1.1\r\nHo st",
+            RequestError::Malformed("invalid field name"),
+        ),
+        (
+            b"GET / HTTP/1.1\r\nX: a\x00",
+            RequestError::Malformed("invalid field value"),
+        ),
+        (
+            b"PUT / HTTP/1.1\r\nContent-Length: 1000000000000000000000\r\n",
+            RequestError::Malformed("Content-Length overflows"),
+        ),
+        (
+            b"PUT / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n",
+            RequestError::Malformed("conflicting Content-Length"),
+        ),
+    ] {
+        assert_eq!(
+            parse(partial),
+            Err(want),
+            "{:?}",
+            String::from_utf8_lossy(partial)
+        );
+    }
+}
+
+#[test]
+fn every_prefix_of_several_good_heads_is_partial() {
+    for raw in [
+        &b"GET /a?b HTTP/1.1\r\nHost: h\r\nX:\r\nY: \t v \r\n\r\n"[..],
+        b"OPTIONS * HTTP/1.1\r\nHost: h:1\r\nContent-Length: 0\r\n\r\n",
+        b"CONNECT h:443 HTTP/1.1\r\nHost: h:443\r\n\r\n",
+        b"\r\n\r\nPOST http://h/x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
+    ] {
+        for n in 0..raw.len() {
+            assert_eq!(
+                parse(&raw[..n]),
+                Ok(Parsed::Partial),
+                "{:?} at {n}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+    }
+}
+
+// ---- chunk extensions -----------------------------------------------------
+
+#[test]
+fn chunk_extensions_follow_their_grammar() {
+    for ext in [
+        &b";a"[..],
+        b";a=b",
+        b";a=b;c",
+        b"; a = b ; c",
+        b" ;a",
+        b"\t;a=\"q \\\"x\\\" y\"",
+        b";a=\"\"",
+        b";a=b ",
+    ] {
+        let mut body = b"1".to_vec();
+        body.extend_from_slice(ext);
+        body.extend_from_slice(b"\r\nx\r\n0\r\n\r\n");
+        let (data, _, _) = dechunk(&body, 1).unwrap_or_else(|e| panic!("{ext:?}: {e}"));
+        assert_eq!(data, b"x", "{:?}", String::from_utf8_lossy(ext));
+    }
+    for ext in [
+        &b" junk"[..],
+        b";",
+        b"; ",
+        b";=b",
+        b";a=",
+        b";a=\"open",
+        b";a=b c",
+        b";a b",
+        b";a=\"x\x01\"",
+        b";a,b",
+    ] {
+        let mut body = b"1".to_vec();
+        body.extend_from_slice(ext);
+        body.extend_from_slice(b"\r\nx\r\n0\r\n\r\n");
+        assert!(
+            dechunk(&body, 1).is_err(),
+            "{:?}",
+            String::from_utf8_lossy(ext)
+        );
+    }
+}

@@ -6,7 +6,7 @@
 //! are left for whoever reads next. Chunk sizes, chunk extensions and the
 //! trailer section are bounded; lines end in CRLF only.
 
-use crate::fields::{Field, is_field_value_byte};
+use crate::fields::{Field, is_field_value_byte, is_tchar};
 
 use super::request::{Limits, RequestError};
 
@@ -51,10 +51,11 @@ enum State {
         value: u64,
         digits: u8,
     },
-    /// After the size: extensions (or whitespace before them) up to the CR.
+    /// After the size: chunk extensions up to the CR, by their grammar.
     Extension {
         value: u64,
         bytes: usize,
+        at: Ext,
     },
     /// Saw the size line's CR; the LF must follow.
     SizeLf {
@@ -70,6 +71,61 @@ enum State {
     /// After the last chunk: the trailer section, buffered until it ends.
     Trailers,
     Done,
+}
+
+/// Where inside the chunk extensions the decoder is (RFC 9112 §7.1.1):
+/// `*( BWS ";" BWS name [ BWS "=" BWS ( token / quoted-string ) ] )`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ext {
+    /// Whitespace after the size or after a value; `;` or the CR next.
+    BeforeSemicolon,
+    /// After `;`: whitespace, then a name.
+    BeforeName,
+    /// In a name.
+    Name,
+    /// Whitespace after a name: `=`, `;` or the CR next.
+    AfterName,
+    /// After `=`: whitespace, then a token or a quoted string.
+    BeforeValue,
+    /// In a token value.
+    Token,
+    /// In a quoted value, and just after a backslash in one.
+    Quoted,
+    QuotedEscape,
+}
+
+/// `qdtext` (RFC 9110 §5.6.4): tab, space, visible ASCII but `"` and `\`,
+/// obs-text.
+fn is_qdtext(b: u8) -> bool {
+    matches!(b, b'\t' | b' ' | 0x21 | 0x23..=0x5b | 0x5d..=0x7e | 0x80..=0xff)
+}
+
+/// Where the extension grammar goes from `at` on byte `b`: `Err` breaks the
+/// grammar, `Ok(None)` is the CR that ends the line.
+fn ext_step(at: Ext, b: u8) -> Result<Option<Ext>, ()> {
+    let ws = b == b' ' || b == b'\t';
+    Ok(Some(match at {
+        Ext::Quoted if b == b'"' => Ext::BeforeSemicolon,
+        Ext::Quoted if b == b'\\' => Ext::QuotedEscape,
+        Ext::Quoted if is_qdtext(b) => Ext::Quoted,
+        Ext::QuotedEscape if is_field_value_byte(b) => Ext::Quoted,
+        Ext::Quoted | Ext::QuotedEscape => return Err(()),
+        Ext::BeforeName | Ext::BeforeValue if ws => at,
+        Ext::BeforeName if is_tchar(b) => Ext::Name,
+        Ext::BeforeValue if b == b'"' => Ext::Quoted,
+        Ext::BeforeValue if is_tchar(b) => Ext::Token,
+        Ext::BeforeName | Ext::BeforeValue => return Err(()),
+        Ext::Name if is_tchar(b) => Ext::Name,
+        Ext::Token if is_tchar(b) => Ext::Token,
+        Ext::Name | Ext::AfterName if b == b'=' => Ext::BeforeValue,
+        Ext::Name | Ext::AfterName if ws => Ext::AfterName,
+        Ext::Token | Ext::BeforeSemicolon if ws => Ext::BeforeSemicolon,
+        Ext::Name | Ext::AfterName | Ext::Token | Ext::BeforeSemicolon => match b {
+            b';' => Ext::BeforeName,
+            b'\r' => return Ok(None),
+            _ => return Err(()),
+        },
+    }))
 }
 
 /// A chunked-body decoder for one message.
@@ -143,27 +199,38 @@ impl ChunkedDecoder {
                             self.state = State::SizeLf { value };
                             used += 1;
                         }
-                        b';' | b' ' | b'\t' => {
-                            self.state = State::Extension { value, bytes: 1 };
+                        b';' => {
+                            self.state = State::Extension {
+                                value,
+                                bytes: 1,
+                                at: Ext::BeforeName,
+                            };
+                            used += 1;
+                        }
+                        b' ' | b'\t' => {
+                            self.state = State::Extension {
+                                value,
+                                bytes: 1,
+                                at: Ext::BeforeSemicolon,
+                            };
                             used += 1;
                         }
                         _ => return Err(ChunkError("invalid chunk size")),
                     },
                 },
-                State::Extension { value, bytes } => {
-                    if b == b'\r' {
-                        self.state = State::SizeLf { value };
-                    } else if is_field_value_byte(b) {
-                        if bytes == MAX_EXTENSION_BYTES {
-                            return Err(ChunkError("chunk extensions too long"));
-                        }
-                        self.state = State::Extension {
+                State::Extension { value, bytes, at } => {
+                    if bytes == MAX_EXTENSION_BYTES {
+                        return Err(ChunkError("chunk extensions too long"));
+                    }
+                    self.state = match ext_step(at, b) {
+                        Ok(Some(next)) => State::Extension {
                             value,
                             bytes: bytes + 1,
-                        };
-                    } else {
-                        return Err(ChunkError("invalid chunk extension"));
-                    }
+                            at: next,
+                        },
+                        Ok(None) => State::SizeLf { value },
+                        Err(()) => return Err(ChunkError("invalid chunk extension")),
+                    };
                     used += 1;
                 }
                 State::SizeLf { value } => {

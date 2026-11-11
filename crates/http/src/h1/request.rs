@@ -202,8 +202,11 @@ pub fn parse_request(
             return Err(RequestError::HeadTooLarge);
         }
         // A head that cannot end well is refused now rather than when it is
-        // complete: a bare LF or CR is already wrong.
+        // complete: waiting would hold the connection, and up to the head
+        // limit of memory, for a request already known to be refused.
         check_line_endings(&buf[start..], false)?;
+        check_incomplete_head(buf, start, limits, fields)?;
+        fields.clear();
         return Ok(Parsed::Partial);
     };
     let head_end = start + end; // index of the blank line's CR
@@ -215,7 +218,36 @@ pub fn parse_request(
 
     // ---- request line ----------------------------------------------------
     let line_end = start + find_crlf(&buf[start..]).expect("a head has a line");
-    let line = &buf[start..line_end];
+    let (method, target) = parse_request_line(buf, start, line_end, limits)?;
+
+    // ---- field lines -----------------------------------------------------
+    parse_field_lines(buf, line_end + 2, head_end + 2, limits, fields)?;
+    check_content_lengths(buf, fields)?;
+
+    let mut head = RequestHead {
+        method,
+        target,
+        target_form: TargetForm::Origin,
+        host: Span::default(),
+        body: Body::Empty,
+        keep_alive: true,
+        expect_continue: false,
+        upgrade: false,
+        len,
+    };
+    apply_semantics(buf, fields, &mut head)?;
+    Ok(Parsed::Complete(head))
+}
+
+/// The method and target of the request line `buf[start..end]` (CRLF
+/// excluded), every part checked.
+fn parse_request_line(
+    buf: &[u8],
+    start: usize,
+    end: usize,
+    limits: &Limits,
+) -> Result<(Span, Span), RequestError> {
+    let line = &buf[start..end];
     let sp1 = line
         .iter()
         .position(|&b| b == b' ')
@@ -236,7 +268,6 @@ pub fn parse_request(
         start: start + sp1 + 1,
         end: start + sp1 + 1 + sp2,
     };
-    let version = &rest[sp2 + 1..];
     if target.is_empty() {
         return Err(bad("empty request-target"));
     }
@@ -247,24 +278,119 @@ pub fn parse_request(
     if !target.of(buf).iter().all(|&b| (0x21..=0x7e).contains(&b)) {
         return Err(bad("invalid request-target"));
     }
-    check_version(version)?;
+    check_version(&rest[sp2 + 1..])?;
+    Ok((method, target))
+}
 
-    // ---- field lines -----------------------------------------------------
-    parse_field_lines(buf, line_end + 2, head_end + 2, limits, fields)?;
-
-    let mut head = RequestHead {
-        method,
-        target,
-        target_form: TargetForm::Origin,
-        host: Span::default(),
-        body: Body::Empty,
-        keep_alive: true,
-        expect_continue: false,
-        upgrade: false,
-        len,
+/// Refuses an incomplete head as soon as what has arrived is already wrong:
+/// a request line or field line that breaks the grammar, a fold, or a
+/// `Content-Length` that is malformed, overflows or contradicts an earlier one.
+/// What cannot be judged yet is left for when the head completes.
+fn check_incomplete_head(
+    buf: &[u8],
+    start: usize,
+    limits: &Limits,
+    fields: &mut Vec<Field>,
+) -> Result<(), RequestError> {
+    let Some(line_len) = find_crlf(&buf[start..]) else {
+        return check_request_line_prefix(&buf[start..], limits);
     };
-    apply_semantics(buf, fields, &mut head)?;
-    Ok(Parsed::Complete(head))
+    let line_end = start + line_len;
+    parse_request_line(buf, start, line_end, limits)?;
+    // Whole field lines so far; the last line may still be arriving.
+    let after = line_end + 2;
+    let last_crlf = buf[after..].windows(2).rposition(|w| w == b"\r\n");
+    let whole_end = last_crlf.map_or(after, |i| after + i + 2);
+    fields.clear();
+    parse_field_lines(buf, after, whole_end, limits, fields)?;
+    check_content_lengths(buf, fields)?;
+    // The line still arriving: a fold or a bad name is wrong already.
+    let tail = &buf[whole_end..];
+    if matches!(tail.first(), Some(b' ' | b'\t')) {
+        return Err(bad("obs-fold"));
+    }
+    let tail = tail.strip_suffix(b"\r").unwrap_or(tail);
+    match tail.iter().position(|&b| !is_tchar(b)) {
+        None => {}
+        Some(0) if tail[0] == b':' => return Err(bad("empty field name")),
+        Some(i) if tail[i] != b':' => return Err(bad("invalid field name")),
+        Some(i) if !tail[i + 1..].iter().all(|&b| is_field_value_byte(b)) => {
+            return Err(bad("invalid field value"));
+        }
+        Some(_) => {}
+    }
+    Ok(())
+}
+
+/// Checks a request line that has not ended yet, as far as it goes.
+fn check_request_line_prefix(line: &[u8], limits: &Limits) -> Result<(), RequestError> {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    let mut parts = line.splitn(3, |&b| b == b' ');
+    let method = parts.next().unwrap_or_default();
+    if !method.iter().all(|&b| is_tchar(b)) {
+        return Err(bad("invalid method"));
+    }
+    let Some(target) = parts.next() else {
+        return Ok(());
+    };
+    if method.is_empty() {
+        return Err(bad("no method"));
+    }
+    if target.len() > limits.max_target_bytes {
+        return Err(RequestError::TargetTooLong);
+    }
+    if !target.iter().all(|&b| (0x21..=0x7e).contains(&b)) {
+        return Err(bad("invalid request-target"));
+    }
+    let Some(version) = parts.next() else {
+        return Ok(());
+    };
+    if target.is_empty() {
+        return Err(bad("empty request-target"));
+    }
+    if b"HTTP/1.1".starts_with(version) {
+        return Ok(());
+    }
+    // Not on its way to 1.1. A version of the right shape is one we do not
+    // speak; anything else is not a version.
+    let shape = b"HTTP/0.0";
+    let shaped = version.len() <= shape.len()
+        && version.iter().zip(shape).all(|(&v, &s)| {
+            if s == b'0' {
+                v.is_ascii_digit()
+            } else {
+                v == s
+            }
+        });
+    if shaped {
+        Err(RequestError::VersionNotSupported)
+    } else {
+        Err(bad("invalid HTTP version"))
+    }
+}
+
+/// Every `Content-Length` must be one plain number, and repeats must agree
+/// (RFC 9110 §8.6).
+fn check_content_lengths(buf: &[u8], fields: &[Field]) -> Result<Option<u64>, RequestError> {
+    let mut length = None;
+    for field in fields.iter().filter(|f| named(buf, f, b"content-length")) {
+        let value = field.value.of(buf);
+        if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+            return Err(bad("invalid Content-Length"));
+        }
+        let mut n: u64 = 0;
+        for &d in value {
+            n = n
+                .checked_mul(10)
+                .and_then(|n| n.checked_add(u64::from(d - b'0')))
+                .ok_or(bad("Content-Length overflows"))?;
+        }
+        if length.is_some_and(|prior| prior != n) {
+            return Err(bad("conflicting Content-Length"));
+        }
+        length = Some(n);
+    }
+    Ok(length)
 }
 
 /// Parses the field lines in `buf[from..to]` — whole CRLF-ended lines whose
@@ -396,7 +522,7 @@ fn apply_semantics(
     fields: &[Field],
     head: &mut RequestHead,
 ) -> Result<(), RequestError> {
-    let mut content_length: Option<u64> = None;
+    let content_length = check_content_lengths(buf, fields)?;
     let mut transfer_encoding = false;
     let mut chunked_seen = false;
     let mut chunked_last = false;
@@ -408,22 +534,7 @@ fn apply_semantics(
     for field in fields {
         let value = field.value.of(buf);
         if named(buf, field, b"content-length") {
-            // Digits only: no sign, no list, no whitespace inside. Repeats are
-            // allowed only when they agree (RFC 9110 §8.6).
-            if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
-                return Err(bad("invalid Content-Length"));
-            }
-            let mut n: u64 = 0;
-            for &d in value {
-                n = n
-                    .checked_mul(10)
-                    .and_then(|n| n.checked_add(u64::from(d - b'0')))
-                    .ok_or(bad("Content-Length overflows"))?;
-            }
-            if content_length.is_some_and(|prior| prior != n) {
-                return Err(bad("conflicting Content-Length"));
-            }
-            content_length = Some(n);
+            // Checked, with its repeats, by `check_content_lengths`.
         } else if named(buf, field, b"transfer-encoding") {
             transfer_encoding = true;
             let mut any = false;
