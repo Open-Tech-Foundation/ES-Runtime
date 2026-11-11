@@ -4444,3 +4444,18 @@ How the peers compare: Next.js and Bun put the server, the bundler and the overl
 **Rejected:** deciding by size before trying (a `HEAD` on every copy, and a multipart copy on GCS, which refuses it); streaming the bytes through the process as Bun does (`write(to, file(from))` still does that, for anyone who wants it); `x-amz-copy-source-if-match` on each part (not portable to R2).
 
 **Consequences:** `copy()` has no size limit of its own. Without versioning the pin is a before-and-after check, so a source replaced and then restored between the two reads goes unnoticed. A multipart copy's ETag is a multipart one (`-N`), not the source's.
+
+### D214 — A plugin entry may be several plugins · *Accepted (2026-11-11)* · *amends D148*
+
+**Context:** an `esdev.json` `plugins` entry had to resolve to exactly one plugin object. A factory returning a list failed with `plugin-0: unknown hook "0"`, and the count check behind it said a module exporting several plugins "is not usable from `plugins`". A package made of several plugins (`@opentf/afw-docs/build`: nav, posts, last-updated, highlight) therefore needed one entry per plugin, and leaving one out failed silently: without `codeHighlightPlugin`, code is plain after client-side navigation. Vite flattens a plugin list and ignores falsy entries ("presets including several plugins as a single element… The array will be flattened internally"); Rollup also awaits async plugins (`MaybeArray<MaybePromise<Plugin | void>>`).
+
+**Decision (maintainer, 2026-11-11):**
+- **An export, or what its factory returns, may be one plugin or a list of them.** The list takes the entry's place in `plugins`, in its own order; each plugin keeps its own hooks, filters and `order`. An entry that gives an empty list, `null` or `false` contributes nothing and is not an error.
+- **`runtime:build`'s `build({ plugins })` and `host()` read a list the same way.** Nested lists flatten and a promise is awaited, as in Rollup.
+- **Only `null`, `undefined` and `false` are skipped.** Vite and Rollup skip every falsy value. Here a `0` or an `""` in a plugin list is refused, naming its position, because it is a mistake rather than a switch. An entry whose export gives a value that is not an object, a list or nothing is refused naming the entry.
+
+**Rejected:**
+- **A preset key in `esdev.json`** (`"preset": true`). It is a second shape for a fact the returned value already states.
+- **Keeping one plugin per entry.** Every package made of several plugins would push the wiring onto each project, and a missing piece would fail silently.
+
+**Consequences:** `@opentf/afw-docs/build` can offer one entry. A plugin's default name (`plugin-<n>`) counts positions after flattening.

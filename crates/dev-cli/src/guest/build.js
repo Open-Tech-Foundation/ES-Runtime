@@ -406,7 +406,9 @@ function hookOf(name, hook, declared) {
 // isolate per module in the graph.
 function describe(plugin, index) {
   if (plugin === null || typeof plugin !== "object") {
-    throw new TypeError("build: each plugin must be an object");
+    throw new TypeError(
+      `build: plugin ${index} is ${plugin === null ? "null" : typeof plugin}, not a plugin object`,
+    );
   }
   const name = String(plugin.name ?? `plugin-${index}`);
   const handlers = {};
@@ -432,9 +434,27 @@ function describe(plugin, index) {
   return { id: register(handlers), name, hooks, ...(jsx ? { jsx } : {}) };
 }
 
+// A plugin list as written, as the plugins it names.
+//
+// One element may be several plugins: a package offers one entry — `docs()` —
+// and returns the four plugins it is made of, each with its own hooks and
+// order, in its place in the list. Nested lists flatten, a promise is awaited,
+// and `null`, `undefined` and `false` are skipped, so `dev && inspect()` reads
+// as it does in Vite and Rollup. Other falsy values are not skipped: a `0` or
+// an `""` in a plugin list is a mistake, and is refused as one.
+async function flatten(list, out = []) {
+  for (const item of list) {
+    const value = await item;
+    if (value === null || value === undefined || value === false) continue;
+    if (Array.isArray(value)) await flatten(value, out);
+    else out.push(value);
+  }
+  return out;
+}
+
 // The options, with every function replaced by the handle the host calls back
 // through. Nothing else is rewritten.
-function prepare(options) {
+async function prepare(options) {
   if (options === null || typeof options !== "object") {
     throw new TypeError(`build: options must be an object, got ${typeof options}`);
   }
@@ -444,7 +464,7 @@ function prepare(options) {
   }
   const plugins = options.plugins ?? [];
   if (!Array.isArray(plugins)) throw new TypeError("build: plugins must be an array");
-  prepared.plugins = plugins.filter((p) => p != null).map(describe);
+  prepared.plugins = (await flatten(plugins)).map(describe);
   return prepared;
 }
 
@@ -526,7 +546,7 @@ class Bundle {
 // and the rejection belongs at the line that wrote the declaration rather than
 // at the `generate()` three lines further down.
 async function build(options) {
-  const prepared = prepare(options);
+  const prepared = await prepare(options);
   // Started before the first hook can possibly fire.
   pump();
   return new Bundle(await ops.build_create(prepared));
@@ -550,7 +570,7 @@ async function host(plugins) {
   if (!Array.isArray(plugins)) {
     throw new TypeError("host: plugins must be an array");
   }
-  const described = plugins.filter((p) => p != null).map(describe);
+  const described = (await flatten(plugins)).map(describe);
   pump();
   await ops.build_host(described);
 }

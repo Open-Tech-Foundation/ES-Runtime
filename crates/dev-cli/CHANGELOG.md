@@ -28,6 +28,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **A `plugins` entry may be several plugins** (DECISIONS D214). An export, or
+  what its factory returns, may be a list of plugins, and the list takes the
+  entry's place in order, so a package made of several plugins needs one
+  `esdev.json` entry. Nested lists flatten and `null`/`false` are skipped.
+  `runtime:build`'s `build({ plugins })` reads its list the same way and also
+  awaits promises, as Rollup does. A `0` or `""` is refused rather than
+  skipped. This used to fail with `plugin-0: unknown hook "0"`.
+
 - **The `fullstack` template's server is the generated AFW handler**
   (`@afw/server`): API routes, loaders, middleware, server functions and
   server-rendered pages all come through one `createHandler`, so a new route

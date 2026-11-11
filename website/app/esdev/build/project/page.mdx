@@ -251,6 +251,11 @@ and `index` files a bundler tries, and answers `null` for a package.
 | `export` | Which export the plugin is; default: the default export |
 | `options` | What to call it with, when the export is a factory |
 
+An export, or what its factory returns, may be one plugin or a list of them.
+A list takes the entry's place in `plugins`, in its own order, so a package
+made of several plugins needs one entry. Nested lists flatten and `null` and
+`false` are skipped.
+
 Plugins load into an isolate of their own and are kept for the run. They run
 under esdev's grant, in the project directory, with the same `runtime:`
 namespace any other program gets. A plugin you configured is code you chose to

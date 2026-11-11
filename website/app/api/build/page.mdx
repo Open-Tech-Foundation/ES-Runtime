@@ -54,7 +54,7 @@ serve(output[0].code);      // never written to disk
 | `platform` | `"neutral" \| "browser" \| "node"` | Which environment the output runs in; decides `exports` conditions. Default `neutral`, which is what this runtime is. |
 | `resolve` | `{ alias, extensions, conditionNames, mainFields }` | Resolution. `conditionNames` is **appended** to the platform's, `mainFields` replaces them. |
 | `define` | `Record<string, string>` | Compile-time replacements. |
-| `plugins` | `Plugin[]` | See below. |
+| `plugins` | `PluginOption[]` | Plugins, nested lists of them, or promises of either; `null`, `undefined` and `false` are skipped. See below. |
 | `minify`, `treeshake` | `boolean` | |
 | `cwd` | `string` | Where the build runs. Defaults to the entry module's directory. |
 
@@ -200,6 +200,11 @@ const mdx = {
   },
 };
 ```
+
+A package made of several plugins can hand them over as one list, and the list
+takes its place among the others: `plugins: [docs(), dev && inspect()]`. Each
+plugin keeps its own hooks and `order`. Any other value, `0` or `""` included,
+is refused.
 
 ### The hooks
 

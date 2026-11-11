@@ -4662,7 +4662,7 @@ serve(output[0].code);          // never written to disk
 | `platform` | `"neutral" \| "browser" \| "node"` | `neutral` | Which environment the output runs in; decides `exports` conditions — see below. |
 | `resolve` | `{ alias, extensions, conditionNames, mainFields }` | — | Resolution. `conditionNames` is **appended** to the platform's; `mainFields` replaces. |
 | `define` | `Record<string, string>` | — | Compile-time replacements. |
-| `plugins` | `Plugin[]` | `[]` | See below. |
+| `plugins` | `PluginOption[]` | `[]` | Plugins, nested lists of them, or promises of either; `null`, `undefined` and `false` are skipped. See below. |
 | `minify` / `treeshake` | `boolean` | `false` / `true` | |
 | `cwd` | `string` | the entry's directory | Where the build runs. Resolved through the run's own filesystem view. |
 

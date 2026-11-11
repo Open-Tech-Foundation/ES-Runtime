@@ -13510,6 +13510,75 @@ fn build_loads_the_plugins_the_project_config_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// One `plugins` entry may be several plugins (D214): a package offers one
+/// factory and returns the plugins it is made of. Each keeps its own hooks,
+/// and together they take the entry's place — after the entry before it and
+/// before the one after. `null` and `false` are skipped, nested lists
+/// flatten, and an entry that gives no plugins at all is not an error.
+#[test]
+fn a_plugin_entry_may_return_several_plugins() {
+    let dir = build_dir("p_plugins_several");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "trail.mjs",
+        r#"
+const step = (name) => ({
+  name,
+  transform: {
+    filter: { id: /app\.mjs$/ },
+    handler: (code) => ({ code: code.replace(/"trail([^"]*)"/, `"trail$1>${name}"`) }),
+  },
+});
+export default function preset({ extra }) {
+  return [step("a"), [null, false, step("b")], extra && step("x")];
+}
+export const one = step("c");
+export const none = () => [];
+"#,
+    );
+    write_in(&dir, "src/app.mjs", "console.log(\"trail\");\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": [{"module": "./trail.mjs", "options": {"extra": false}}, {"module": "./trail.mjs", "export": "none"}, {"module": "./trail.mjs", "export": "one"}], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("the bundle");
+    assert!(bundle.contains("trail>a>b>c"), "{bundle}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What an entry gives must be a plugin, a list of them or nothing. Anything
+/// else is named against the entry that gave it, not the list it landed in.
+#[test]
+fn a_plugin_entry_that_gives_no_plugin_is_named() {
+    let dir = build_dir("p_plugins_not_one");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "odd.mjs", "export default () => \"mdx\";\n");
+    write_in(&dir, "src/app.mjs", "console.log(1);\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./odd.mjs"], "build": {"targets": {"app": {"entry": "src/app.mjs", "out": "dist/app.js"}}}}"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains(
+            "./odd.mjs: its default export gave string, not a plugin or a list of plugins"
+        ),
+        "{text}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Where a build runs, as a plugin reads it (D148): one declaration, and each
 /// target's build tells the plugin its command, platform and name. This is how
 /// a framework compiles for the browser and the server from one `plugins`
@@ -15132,6 +15201,50 @@ console.log(
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(out.status.success(), "{text}");
     assert!(text.contains("true main.js true true true"), "{text}");
+}
+
+/// `build()`'s `plugins` reads a list the way an `esdev.json` entry does
+/// (D214): nested lists flatten, a promise is awaited, `null`, `undefined`
+/// and `false` are skipped, in order. A `0` is not skipped — it is a mistake.
+#[test]
+fn runtime_build_flattens_its_plugin_list() {
+    let dir = build_dir("rb_flatten");
+    write_in(&dir, "main.js", "console.log(\"trail\");\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const step = (name) => ({
+  name,
+  transform: {
+    filter: { id: /main\.js$/ },
+    handler: (code) => ({ code: code.replace(/"trail([^"]*)"/, `"trail$1>${name}"`) }),
+  },
+});
+const bundle = await build({
+  input: "main.js",
+  plugins: [[step("a"), [undefined, step("b")]], false, null, Promise.resolve(step("c"))],
+});
+const { output } = await bundle.generate({ format: "esm" });
+console.log(output[0].code.includes("trail>a>b>c"));
+try {
+  await build({ input: "main.js", plugins: [step("a"), 0] });
+  console.log("NO ERROR");
+} catch (err) {
+  console.log(err.message);
+}
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("true\n"), "{text}");
+    assert!(
+        text.contains("build: plugin 1 is number, not a plugin object"),
+        "{text}"
+    );
 }
 
 /// A failed build says **where**. It used to be a string — the module id, a

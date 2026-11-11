@@ -60,7 +60,8 @@ use crate::guest::build::plugin::{Bridge, GuestPass};
 /// The plugins one project loaded, and the run holding them open.
 pub struct PluginHost {
     bridge: Arc<Bridge>,
-    /// Aligned with the [`PluginSpec`]s it was started from.
+    /// In the order the [`PluginSpec`]s were declared, an entry that gave
+    /// several plugins (or none) taking its place with all of them.
     plugins: Vec<Arc<contract::Plugin>>,
     /// Dropped to tell the driver its work is done. The isolate's `host()` call
     /// resolves, its program finishes, and the thread ends.
@@ -222,16 +223,6 @@ async fn start(
                      ended before it declared any"
                 .to_string(),
         })?;
-    if host.plugins.len() != specs.len() {
-        return Err(format!(
-            "the project declares {} plugin{}, and the modules named produced {}.\n\n\
-             A plugin module's export is one plugin; a module that exports several \
-             is not usable from `plugins`, where each entry is one thing to load.",
-            specs.len(),
-            if specs.len() == 1 { "" } else { "s" },
-            host.plugins.len()
-        ));
-    }
     Ok(host)
 }
 
@@ -423,6 +414,16 @@ for (const spec of specs) {{
     throw new TypeError(
       `${{spec.wrote}}: options were given, but its ${{name}} export is a plugin already, ` +
         `not a function to call with them`,
+    );
+  }} else {{
+    plugin = await plugin;
+  }}
+  // One plugin, a list of them, or nothing: `host()` flattens a list into
+  // this entry's place. Anything else is named against the entry that gave it.
+  if (plugin !== null && plugin !== undefined && plugin !== false && typeof plugin !== "object") {{
+    throw new TypeError(
+      `${{spec.wrote}}: its ${{name}} export gave ${{typeof plugin}}, ` +
+        `not a plugin or a list of plugins`,
     );
   }}
   plugins.push(plugin);
