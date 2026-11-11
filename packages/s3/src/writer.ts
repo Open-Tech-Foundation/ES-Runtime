@@ -109,6 +109,8 @@ export class S3Writer {
   #parts: Part[] = [];
   #inflight = new Set<Promise<void>>();
   #failure: unknown;
+  /** The one abort of the multipart upload, however many paths ask for it. */
+  #aborting: Promise<void> | undefined;
   #state: "open" | "ending" | "done" | "aborted" = "open";
 
   /** @internal Made by `S3File.writer()`. */
@@ -139,20 +141,24 @@ export class S3Writer {
 
   /** Adds `chunk`. Resolves once it is buffered — waiting, while the queue is full, for a part to finish. */
   async write(chunk: Chunk): Promise<void> {
-    this.#check();
+    await this.#check();
     const bytes = chunkBytes(chunk);
     if (bytes.length === 0) return;
     this.#chunks.push(bytes);
     this.#buffered += bytes.length;
     this.#size += bytes.length;
-    while (this.#buffered >= this.#partSize) {
-      await this.#queue(this.#take(this.#partSize));
+    try {
+      while (this.#buffered >= this.#partSize) {
+        await this.#queue(this.#take(this.#partSize));
+      }
+    } catch (error) {
+      throw await this.#fail(error);
     }
   }
 
   /** Sends what is left and completes the object. */
   async end(): Promise<S3WriteResult> {
-    this.#check();
+    await this.#check();
     this.#state = "ending";
     try {
       if (this.#upload === undefined) {
@@ -174,15 +180,18 @@ export class S3Writer {
       this.#state = "done";
       return result;
     } catch (error) {
-      await this.#abortUpload();
-      this.#state = "aborted";
-      throw error;
+      throw await this.#fail(error);
     }
   }
 
   /** Abandons the upload, deleting any parts already sent. */
   async abort(reason?: unknown): Promise<void> {
-    if (this.#state === "done" || this.#state === "aborted") return;
+    if (this.#state === "done") return;
+    if (this.#state === "aborted") {
+      // Failed already: resolve once that failure's cleanup has finished.
+      await this.#aborting;
+      return;
+    }
     this.#state = "aborted";
     this.#failure ??=
       reason ??
@@ -190,12 +199,34 @@ export class S3Writer {
         code: S3ErrorCode.Aborted,
         key: this.#key,
       });
-    await Promise.allSettled(this.#inflight);
-    await this.#abortUpload();
+    await this.#abortOnce();
   }
 
-  #check(): void {
-    if (this.#failure !== undefined) throw this.#failure;
+  /**
+   * Records `error` as the upload's failure and aborts the multipart upload,
+   * resolving with the failure once nothing is left on the server. Every path
+   * that fails comes here, so a caller that stops at the first rejected
+   * `write()` leaves no parts behind, whether or not it calls `abort()`.
+   */
+  async #fail(error: unknown): Promise<unknown> {
+    this.#failure ??= error;
+    this.#state = "aborted";
+    await this.#abortOnce();
+    return this.#failure;
+  }
+
+  #abortOnce(): Promise<void> {
+    this.#aborting ??= (async () => {
+      // Parts still in flight finish (or fail) first: a part that lands after
+      // the abort would be stored again under an upload nobody completes.
+      await Promise.allSettled(this.#inflight);
+      await this.#abortUpload();
+    })();
+    return this.#aborting;
+  }
+
+  async #check(): Promise<void> {
+    if (this.#failure !== undefined) throw await this.#fail(this.#failure);
     if (this.#state !== "open") throw invalid(`the writer for ${this.#key} has ended`);
   }
 
@@ -234,7 +265,9 @@ export class S3Writer {
         this.#parts[number - 1] = done;
       },
       (error) => {
-        this.#failure ??= error;
+        // Abort now rather than when the caller next writes: a caller that
+        // never does would leave the upload open.
+        void this.#fail(error);
       },
     );
     const tracked = task.finally(() => this.#inflight.delete(tracked));

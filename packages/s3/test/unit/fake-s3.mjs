@@ -256,8 +256,13 @@ export async function startFake() {
           bytes = bytes.slice(start, end + 1);
           status = 206;
         }
-        // runtime:http drops a Content-Length set on a body-less HEAD answer,
-        // so the body is given and the server sends its length, not its bytes.
+        // A HEAD answers with the length a GET would have, and no body.
+        if (request.method === "HEAD") {
+          return new Response(null, {
+            status,
+            headers: { ...headers, "content-length": String(bytes.length) },
+          });
+        }
         return new Response(bytes, { status, headers });
       }
       case "DELETE":

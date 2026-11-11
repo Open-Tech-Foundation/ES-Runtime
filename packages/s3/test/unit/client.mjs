@@ -212,6 +212,67 @@ async function rejects(fn, code, what) {
 }
 
 {
+  // A caller that stops at the first rejected write() — the usual `for await`
+  // loop that throws out — must not leave the upload open: its parts would be
+  // stored, and billed, until a lifecycle rule removed them.
+  const MiB = 1024 * 1024;
+  fake.fail(
+    (r) => r.method === "PUT" && r.query.partNumber === "2",
+    errorXml("InternalError", "boom", 500),
+  );
+  fake.fail(
+    (r) => r.method === "PUT" && r.query.partNumber === "2",
+    errorXml("InternalError", "boom", 500),
+  );
+  const writer = client.file("stopped.bin").writer({ retry: 1, queueSize: 1 });
+  let failed;
+  try {
+    for (let i = 0; i < 10; i++) await writer.write(new Uint8Array(5 * MiB));
+  } catch (error) {
+    failed = error;
+  }
+  is(failed?.code, "InternalError", "the failed part rejects a later write()");
+  is(fake.uploads.size, 0, "and the upload is already aborted, with no abort() from the caller");
+  try {
+    await writer.write("more");
+    ok(false, "a failed writer refuses more writes");
+  } catch (error) {
+    is(error?.code, "InternalError", "a failed writer keeps reporting the same failure");
+  }
+  await writer.abort();
+  ok(true, "abort() after a failure resolves");
+}
+
+{
+  // pipeTo into writable() with a failing part: the stream errors and the
+  // upload is aborted.
+  const MiB = 1024 * 1024;
+  fake.fail(
+    (r) => r.method === "PUT" && r.query.partNumber === "2",
+    errorXml("InternalError", "boom", 500),
+  );
+  fake.fail(
+    (r) => r.method === "PUT" && r.query.partNumber === "2",
+    errorXml("InternalError", "boom", 500),
+  );
+  let n = 0;
+  const source = new ReadableStream({
+    pull(c) {
+      if (n++ < 4) c.enqueue(new Uint8Array(5 * MiB));
+      else c.close();
+    },
+  });
+  let failed;
+  try {
+    await source.pipeTo(client.file("piped.bin").writable({ retry: 1 }));
+  } catch (error) {
+    failed = error;
+  }
+  is(failed?.code, "InternalError", "pipeTo rejects with the part's error");
+  is(fake.uploads.size, 0, "and leaves no upload open");
+}
+
+{
   // CompleteMultipartUpload can answer 200 with an error in the body.
   const MiB = 1024 * 1024;
   fake.fail(
