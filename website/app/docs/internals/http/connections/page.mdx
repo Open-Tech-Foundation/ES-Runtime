@@ -171,7 +171,7 @@ What changes on the wire, with the handler untouched:
 | Handshakes | one TLS handshake per session, not per connection |
 | Headers | HPACK-compressed instead of resent in full each request |
 | `request.url` | rebuilt from `:authority`, which replaced the `Host` header |
-| Framing | the version frames bodies; a handler's own `Content-Length` and `Transfer-Encoding` are dropped, and HTTP/2 forbids chunked encoding outright |
+| Framing | the version frames bodies; a handler's own `Content-Length` and `Transfer-Encoding` are dropped, and HTTP/2 forbids chunked encoding outright. The exception is a `HEAD`, which has no body to measure: a handler's decimal `Content-Length` is kept as the size a `GET` would return (RFC 9110 §9.3.2), as Deno does |
 
 Multiplexing needed nothing new above the socket. Responses were already matched
 to requests by id rather than by arrival order, so answering three streams out

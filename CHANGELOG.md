@@ -73,6 +73,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `runtime:http` keeps a handler's `Content-Length` on the answer to a `HEAD`,
+  so `new Response(null, { headers: { "content-length": "1234" } })` tells the
+  client the size a `GET` would return (RFC 9110 §9.3.2), as Deno does. It was
+  dropped, leaving no length at all. Only a plain decimal is kept, and only for
+  `HEAD`; every other response is still framed from its body.
 - `fetch` with a `Range` header sends `Accept-Encoding: identity`, as the Fetch
   standard says (D210), instead of leaving the header out — which accepted any
   coding, so a server could compress the range into a body that cannot be

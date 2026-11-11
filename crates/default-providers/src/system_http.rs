@@ -440,15 +440,38 @@ fn valid_authority(authority: &str) -> Option<String> {
 /// `Err` aborts the connection mid-body — the only honest signal once the status
 /// line is on the wire. Guest-supplied framing headers are dropped either way to
 /// avoid conflicting with what hyper computes.
-fn build_response(resp: HttpServerResponse) -> Response<OutBody> {
+///
+/// One exception: the answer to a `HEAD` has no body for hyper to measure, so
+/// a `Content-Length` the guest set is the size a `GET` would have returned
+/// (RFC 9110 §9.3.2) — what a proxy or an object store answers with — and is
+/// kept, as Deno keeps it. Only a plain decimal is: anything else is dropped as
+/// before. A body the guest returned for a `HEAD` still sets the length when
+/// the guest named none.
+fn build_response(resp: HttpServerResponse, head: bool) -> Response<OutBody> {
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
     let mut builder = Response::builder().status(status);
+    let mut head_length: Option<&str> = None;
     for (name, value) in &resp.headers {
         let lower = name.to_ascii_lowercase();
-        if lower == "content-length" || lower == "transfer-encoding" {
+        if lower == "content-length" {
+            if head
+                && head_length.is_none()
+                && !value.is_empty()
+                && value.len() <= 20
+                && value.bytes().all(|b| b.is_ascii_digit())
+                && value.parse::<u64>().is_ok()
+            {
+                head_length = Some(value);
+            }
+            continue;
+        }
+        if lower == "transfer-encoding" {
             continue;
         }
         builder = builder.header(name, value);
+    }
+    if let Some(length) = head_length {
+        builder = builder.header(hyper::header::CONTENT_LENGTH, length);
     }
     let body: OutBody = match (resp.body, resp.trailers) {
         (body, None) => match body {
@@ -582,6 +605,7 @@ async fn serve_connection<S>(
             // the key is a header the guest never sees. `None` for anything that
             // is not a WebSocket handshake, which is almost every request.
             let mut req = req;
+            let head = req.method() == hyper::Method::HEAD;
             let upgrade = take_upgrade(&mut req);
             // A request naming something that is not an authority never reaches
             // the guest: there is no URL to hand it that is both faithful to
@@ -610,7 +634,7 @@ async fn serve_connection<S>(
                     // client does to it — `dtx` drops unsent and the watcher
                     // sees the disconnect.
                     let _ = dtx.send(());
-                    Ok(build_response(resp))
+                    Ok(build_response(resp, head))
                 }
                 // Guest dropped the request without responding.
                 Err(_) => {
@@ -1666,6 +1690,108 @@ mod http2_tests {
     use es_runtime_providers::HttpServerTls;
 
     /// Answers `rid` with a 200 carrying `body`.
+    async fn respond_head(http: &SystemHttpServer, rid: u64, length: &str, body: &[u8]) {
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![
+                    ("content-length".into(), length.into()),
+                    ("etag".into(), "\"e\"".into()),
+                ],
+                body: if body.is_empty() {
+                    HttpServerBody::Empty
+                } else {
+                    HttpServerBody::Bytes(body.to_vec())
+                },
+                trailers: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// RFC 9110 §9.3.2: a `HEAD` answer may carry the `Content-Length` a `GET`
+    /// would have. There is no body for hyper to measure, so the guest's value
+    /// is kept — over HTTP/1.1 and HTTP/2 — and the body is still not sent.
+    #[tokio::test]
+    async fn a_head_answer_keeps_the_guests_content_length() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (http, id, port) = super::tests::bound().await;
+
+        let h1 = tokio::spawn(async move {
+            let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            sock.write_all(b"HEAD /obj HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut out = Vec::new();
+            sock.read_to_end(&mut out).await.unwrap();
+            String::from_utf8(out).unwrap()
+        });
+        let (rid, _) = http.next_requests(id, 8).await.unwrap().remove(0);
+        respond_head(&http, rid, "1234", b"").await;
+        let raw = h1.await.unwrap().to_ascii_lowercase();
+        assert!(raw.contains("content-length: 1234\r\n"), "{raw}");
+        assert!(
+            raw.ends_with("\r\n\r\n"),
+            "a HEAD answer sent a body: {raw}"
+        );
+
+        let client = H2c::connect(port).await;
+        let h2 = tokio::spawn(async move {
+            let reply = client
+                .request("HEAD", "/obj", &[], Vec::new())
+                .await
+                .unwrap();
+            let length = reply.headers().get("content-length").cloned();
+            (length, reply.bytes().await.unwrap())
+        });
+        let (rid, _) = http.next_requests(id, 8).await.unwrap().remove(0);
+        respond_head(&http, rid, "5678", b"").await;
+        let (length, body) = h2.await.unwrap();
+        assert_eq!(length.unwrap(), "5678");
+        assert!(body.is_empty());
+    }
+
+    /// Only a plain decimal survives: anything else would be a header hyper
+    /// did not compute and cannot vouch for. And a `GET` never keeps it.
+    #[tokio::test]
+    async fn only_a_head_keeps_it_and_only_as_a_decimal() {
+        let (http, id, port) = super::tests::bound().await;
+        let client = H2c::connect(port).await;
+        for (method, length, body, expect) in [
+            ("HEAD", "12x", &b""[..], None),
+            ("HEAD", "-1", &b""[..], None),
+            ("HEAD", "99999999999999999999999", &b""[..], None),
+            ("GET", "999", &b"ok"[..], Some("2")),
+        ] {
+            let send = {
+                let client = &client;
+                async move {
+                    client
+                        .request(method, "/obj", &[], Vec::new())
+                        .await
+                        .unwrap()
+                }
+            };
+            let (reply, ()) = tokio::join!(send, async {
+                let (rid, _) = http.next_requests(id, 8).await.unwrap().remove(0);
+                respond_head(&http, rid, length, body).await;
+            });
+            let got = reply
+                .headers()
+                .get("content-length")
+                .map(|v| v.to_str().unwrap().to_owned());
+            if method == "HEAD" {
+                assert_ne!(got.as_deref(), Some(length), "{method} {length}");
+            } else {
+                assert_eq!(got.as_deref(), expect, "{method} {length}");
+            }
+        }
+    }
+
     async fn ok(http: &SystemHttpServer, rid: u64, body: &str) {
         http.respond(
             rid,
