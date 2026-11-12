@@ -6,7 +6,10 @@
 //! through four operations this module implements once —
 //!
 //! 1. **an overlay** — `_option/<name>/<value>/`, whose files are added, or
-//!    replace the file at the same path;
+//!    replace the file at the same path. Overlays nest:
+//!    `_option/language/ts/_option/server/yes/app/todos/page.tsx` is written
+//!    only when both are chosen. Base files first, then overlays under one
+//!    condition, then two, and so on — the most specific file wins a path;
 //! 2. **`omit`** — paths, or directory prefixes ending in `/`, withheld;
 //! 3. **`devDependencies`** — packages added at the top of `package.json`'s
 //!    `devDependencies` as `{{registry:<name>}}`, unless already there;
@@ -70,6 +73,14 @@ pub struct OptionSpec {
     /// answered, and a run nobody can ask takes this (D135).
     #[serde(default)]
     pub unattended: Option<String>,
+    /// Asked only when every earlier option named here has one of these
+    /// values — `{ "render": ["static", "client"] }`. Otherwise the option is
+    /// not asked and takes `otherwise`.
+    #[serde(default)]
+    pub when: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// The value an option takes when its `when` does not hold.
+    #[serde(default)]
+    pub otherwise: Option<String>,
     pub choices: Vec<ChoiceSpec>,
 }
 
@@ -86,6 +97,35 @@ impl OptionSpec {
     pub fn choice(&self, value: &str) -> Option<&ChoiceSpec> {
         self.choices.iter().find(|choice| choice.value == value)
     }
+
+    /// Whether this option is asked, given the earlier answers.
+    pub fn applies(&self, earlier: &[(String, String)]) -> bool {
+        self.when.as_ref().is_none_or(|when| {
+            when.iter().all(|(name, values)| {
+                earlier
+                    .iter()
+                    .any(|(answered, value)| answered == name && values.contains(value))
+            })
+        })
+    }
+}
+
+/// The options an overlay path is under, and the path it writes; no
+/// conditions for a base file.
+pub fn conditions(path: &str) -> (Vec<(&str, &str)>, &str) {
+    let mut found = Vec::new();
+    let mut rest = path;
+    while let Some(after) = rest.strip_prefix(OPTION_PREFIX) {
+        let mut parts = after.splitn(3, '/');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(name), Some(value), Some(tail)) if !name.is_empty() && !value.is_empty() => {
+                found.push((name, value));
+                rest = tail;
+            }
+            _ => break,
+        }
+    }
+    (found, rest)
 }
 
 /// Whether an option is a menu of named choices or a yes/no.
@@ -155,7 +195,33 @@ pub fn manifest(template: &str, files: &[(&str, &[u8])]) -> Result<Manifest, Str
         .ok_or_else(|| format!("the {template} template has no {MANIFEST}"))?;
     let manifest: Manifest = serde_json::from_slice(bytes)
         .map_err(|e| format!("the {template} template's {MANIFEST}: {e}"))?;
-    for option in &manifest.options {
+    for (index, option) in manifest.options.iter().enumerate() {
+        if let Some(when) = &option.when {
+            for (name, values) in when {
+                let Some(earlier) = manifest.options[..index].iter().find(|o| &o.name == name)
+                else {
+                    return Err(format!(
+                        "the {template} template's {MANIFEST}: {}'s when names {name}, which is not an earlier option",
+                        option.name
+                    ));
+                };
+                if let Some(value) = values.iter().find(|v| earlier.choice(v).is_none()) {
+                    return Err(format!(
+                        "the {template} template's {MANIFEST}: {}'s when names {name}={value}, which is not one of its choices",
+                        option.name
+                    ));
+                }
+            }
+            match option.otherwise.as_deref() {
+                Some(value) if option.choice(value).is_some() => {}
+                _ => {
+                    return Err(format!(
+                        "the {template} template's {MANIFEST}: {} has a when, and needs an otherwise that is one of its choices",
+                        option.name
+                    ));
+                }
+            }
+        }
         let fallback = option.fallback();
         if option.choice(fallback).is_none() {
             return Err(format!(
@@ -172,6 +238,34 @@ pub fn manifest(template: &str, files: &[(&str, &[u8])]) -> Result<Manifest, Str
                 "the {template} template's {MANIFEST}: {} is a confirm, and has exactly the choices yes and no",
                 option.name
             ));
+        }
+    }
+    // Every overlay names options and choices the manifest has, each once: a
+    // misspelt directory would otherwise be a file that is silently never
+    // written.
+    for (path, _) in files {
+        let (under, _) = conditions(path);
+        if under.is_empty() && path.starts_with(OPTION_PREFIX) {
+            return Err(format!(
+                "the {template} template: {path} is not under _option/<name>/<value>/"
+            ));
+        }
+        for (position, (name, value)) in under.iter().enumerate() {
+            let known = manifest
+                .options
+                .iter()
+                .find(|option| option.name == *name)
+                .is_some_and(|option| option.choice(value).is_some());
+            if !known {
+                return Err(format!(
+                    "the {template} template: {path} is under {name}={value}, which is not an option and choice in {MANIFEST}"
+                ));
+            }
+            if under[..position].iter().any(|(earlier, _)| earlier == name) {
+                return Err(format!(
+                    "the {template} template: {path} names {name} twice"
+                ));
+            }
         }
     }
     Ok(manifest)
@@ -202,16 +296,38 @@ pub fn assemble(
         })
         .collect::<Result<_, _>>()?;
 
-    // 1. Overlays, first option to last: a later one wins a path.
-    for (name, value) in chosen {
-        let prefix = format!("{OPTION_PREFIX}{name}/{value}/");
-        for (path, bytes) in files {
-            if let Some(within) = path.strip_prefix(prefix.as_str()) {
-                match out.iter_mut().find(|(existing, _)| existing == within) {
-                    Some(entry) => entry.1 = bytes.to_vec(),
-                    None => out.push((within.to_string(), bytes.to_vec())),
-                }
+    // 1. Overlays whose every condition is chosen: fewer conditions first,
+    // then in option order, so the most specific file wins a path.
+    let position = |name: &str| {
+        manifest
+            .options
+            .iter()
+            .position(|option| option.name == name)
+            .unwrap_or(usize::MAX)
+    };
+    let mut overlays: Vec<(usize, usize, &str, &[u8])> = files
+        .iter()
+        .filter_map(|(path, bytes)| {
+            let (under, within) = conditions(path);
+            if under.is_empty() {
+                return None;
             }
+            let all_chosen = under
+                .iter()
+                .all(|(name, value)| chosen.iter().any(|(n, v)| n == name && v == value));
+            let last = under
+                .iter()
+                .map(|(name, _)| position(name))
+                .max()
+                .unwrap_or(0);
+            all_chosen.then_some((under.len(), last, within, *bytes))
+        })
+        .collect();
+    overlays.sort_by_key(|(count, last, _, _)| (*count, *last));
+    for (_, _, within, bytes) in overlays {
+        match out.iter_mut().find(|(existing, _)| existing == within) {
+            Some(entry) => entry.1 = bytes.to_vec(),
+            None => out.push((within.to_string(), bytes.to_vec())),
         }
     }
 
@@ -339,6 +455,76 @@ mod tests {
         );
     }
 
+    /// A nested overlay is written only when every option on its path is
+    /// chosen, and wins over a less specific file at the same path.
+    #[test]
+    fn a_nested_overlay_needs_every_condition_and_is_the_most_specific() {
+        let manifest = manifest_of(
+            r#"{ "label": "T", "description": "d", "options": [
+                 { "name": "server", "kind": "confirm", "question": "?", "default": "no", "choices": [
+                   { "value": "yes", "label": "Yes", "description": "" },
+                   { "value": "no", "label": "No", "description": "" } ] },
+                 { "name": "language", "question": "?", "default": "js", "choices": [
+                   { "value": "js", "label": "JS", "description": "" },
+                   { "value": "ts", "label": "TS", "description": "" } ] } ] }"#,
+        );
+        let files: Vec<(&str, &[u8])> = vec![
+            ("page.js", b"base"),
+            ("_option/server/yes/todos.js", b"todos"),
+            ("_option/language/ts/page.js", b"typed"),
+            (
+                "_option/language/ts/_option/server/yes/todos.ts",
+                b"typed todos",
+            ),
+            (
+                "_option/language/ts/_option/server/yes/page.js",
+                b"typed with a server",
+            ),
+        ];
+        let run = |server: &str, language: &str| {
+            let out = assemble(
+                &files,
+                &manifest,
+                &[
+                    ("server".into(), server.into()),
+                    ("language".into(), language.into()),
+                ],
+            )
+            .unwrap();
+            out.into_iter()
+                .map(|(p, b)| format!("{p}={}", String::from_utf8(b).unwrap()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run("no", "ts"), ["page.js=typed"]);
+        assert_eq!(run("yes", "js"), ["page.js=base", "todos.js=todos"]);
+        assert_eq!(
+            run("yes", "ts"),
+            [
+                "page.js=typed with a server",
+                "todos.js=todos",
+                "todos.ts=typed todos"
+            ]
+        );
+    }
+
+    /// An option with `when` is asked only when its earlier options say so.
+    #[test]
+    fn an_option_applies_only_when_its_condition_holds() {
+        let manifest = manifest_of(
+            r#"{ "label": "T", "description": "d", "options": [
+                 { "name": "render", "question": "?", "default": "client", "choices": [
+                   { "value": "server", "label": "Server", "description": "" },
+                   { "value": "client", "label": "Client", "description": "" } ] },
+                 { "name": "server", "kind": "confirm", "question": "?", "default": "no",
+                   "when": { "render": ["client"] }, "otherwise": "yes", "choices": [
+                   { "value": "yes", "label": "Yes", "description": "" },
+                   { "value": "no", "label": "No", "description": "" } ] } ] }"#,
+        );
+        let server = &manifest.options[1];
+        assert!(server.applies(&[("render".into(), "client".into())]));
+        assert!(!server.applies(&[("render".into(), "server".into())]));
+    }
+
     /// An addition the manifest already has is left as it is.
     #[test]
     fn an_addition_already_there_is_not_added_twice() {
@@ -368,5 +554,35 @@ mod tests {
         assert!(confirm.contains("yes and no"), "{confirm}");
         let unknown = bad(r#"{ "label": "T", "description": "d", "colour": "red" }"#);
         assert!(unknown.contains("colour"), "{unknown}");
+        let no_otherwise = bad(r#"{ "label": "T", "description": "d", "options": [
+                 { "name": "a", "question": "?", "default": "x", "choices": [
+                   { "value": "x", "label": "X", "description": "" } ] },
+                 { "name": "b", "question": "?", "default": "y", "when": { "a": ["x"] }, "choices": [
+                   { "value": "y", "label": "Y", "description": "" } ] } ] }"#);
+        assert!(no_otherwise.contains("otherwise"), "{no_otherwise}");
+        let later = bad(r#"{ "label": "T", "description": "d", "options": [
+                 { "name": "b", "question": "?", "default": "y", "when": { "a": ["x"] }, "otherwise": "y", "choices": [
+                   { "value": "y", "label": "Y", "description": "" } ] },
+                 { "name": "a", "question": "?", "default": "x", "choices": [
+                   { "value": "x", "label": "X", "description": "" } ] } ] }"#);
+        assert!(later.contains("not an earlier option"), "{later}");
+    }
+
+    /// An overlay under an option or choice the manifest does not have is a
+    /// file that would never be written: refused when the template is read.
+    #[test]
+    fn an_overlay_must_name_a_real_option_and_choice() {
+        let json = r#"{ "label": "T", "description": "d", "options": [
+             { "name": "language", "question": "?", "default": "js", "choices": [
+               { "value": "js", "label": "JS", "description": "" } ] } ] }"#;
+        for (path, why) in [
+            ("_option/langauge/js/a", "not an option"),
+            ("_option/language/tss/a", "not an option"),
+            ("_option/language/js/_option/language/js/a", "twice"),
+            ("_option/stray", "not under"),
+        ] {
+            let err = manifest("t", &[(MANIFEST, json.as_bytes()), (path, b"x")]).unwrap_err();
+            assert!(err.contains(why), "{path}: {err}");
+        }
     }
 }

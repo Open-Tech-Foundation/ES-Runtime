@@ -249,3 +249,123 @@ fn a_pinned_release_is_taken_or_refused() {
     assert!(said.contains("needs esdev >=99.0.0"), "{said}");
     assert!(!app.exists());
 }
+
+/// A package laid out on disk, with one template shaped as AFW's App is
+/// planned: a render choice, a server question asked only for some renders,
+/// and a language whose files depend on whether there is a server.
+fn conditional_package(label: &str) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("package-{label}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let put = |path: &str, text: &str| {
+        let at = root.join("templates/app").join(path);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, text).unwrap();
+    };
+    put(
+        "template.json",
+        r#"{ "label": "App", "description": "An app", "options": [
+             { "name": "render", "question": "Render?", "default": "client", "choices": [
+               { "value": "server", "label": "Server", "description": "per request" },
+               { "value": "client", "label": "Client", "description": "in the browser" } ] },
+             { "name": "server", "kind": "confirm", "question": "Add a server?", "default": "no",
+               "when": { "render": ["client"] }, "otherwise": "yes", "choices": [
+               { "value": "yes", "label": "Yes", "description": "API routes" },
+               { "value": "no", "label": "No", "description": "browser only" } ] },
+             { "name": "language", "question": "Language?", "default": "js", "choices": [
+               { "value": "js", "label": "JS", "description": "JavaScript" },
+               { "value": "ts", "label": "TS", "description": "TypeScript", "omit": ["app/page.jsx"] } ] } ] }"#,
+    );
+    put("package.json", "{\n  \"name\": \"{{name}}\"\n}\n");
+    put("app/page.jsx", "page");
+    put("_option/server/yes/app/todos/page.jsx", "todos");
+    put("_option/language/ts/app/page.tsx", "typed page");
+    put(
+        "_option/language/ts/_option/server/yes/app/todos/page.tsx",
+        "typed todos",
+    );
+    put(
+        "_option/language/ts/_option/server/yes/app/todos/page.jsx",
+        "unused",
+    );
+    root
+}
+
+/// The option asked only for some renders is decided by `otherwise` for the
+/// others, a flag contradicting that is refused, and a file under two options
+/// is written only with both.
+#[test]
+fn a_conditional_option_and_a_nested_overlay_work_from_a_directory() {
+    let package = conditional_package("conditional");
+    let from = format!("--from={}", package.display());
+    let registry = registry(|own| Says {
+        integrity: own.to_string(),
+        tarball_origin: None,
+    });
+    let files = |app: &Path| {
+        let mut found = Vec::new();
+        let mut stack = vec![app.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                if entry.path().is_dir() {
+                    stack.push(entry.path());
+                } else {
+                    found.push(
+                        entry
+                            .path()
+                            .strip_prefix(app)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        found.sort();
+        found
+    };
+
+    // Server rendering has a server: not asked, and the TypeScript todos are
+    // the nested overlay's.
+    let (out, app) = create(
+        "server-ts",
+        &registry,
+        &[&from, "--template=app", "--render=server", "--language=ts"],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        files(&app),
+        [
+            "app/page.tsx",
+            "app/todos/page.jsx",
+            "app/todos/page.tsx",
+            "package.json"
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(app.join("app/todos/page.jsx")).unwrap(),
+        "unused"
+    );
+
+    // Client rendering asks, and unattended takes the default: no server.
+    let (out, app) = create(
+        "client-ts",
+        &registry,
+        &[&from, "--template=app", "--render=client", "--language=ts"],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(files(&app), ["app/page.tsx", "package.json"]);
+
+    // --no-server cannot be: server rendering has one.
+    let (out, app) = create(
+        "server-no-server",
+        &registry,
+        &[&from, "--template=app", "--render=server", "--no-server"],
+    );
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("server is yes when render is server") && said.contains("--no-server"),
+        "{said}"
+    );
+    assert!(!app.exists());
+}

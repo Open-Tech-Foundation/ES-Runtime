@@ -27,3 +27,21 @@ templates/
 no default. A choice may also `omit` paths and add `devDependencies` and
 `scripts` to the project's `package.json`. `engines.esdev` in this package's
 `package.json` is the range of esdev versions that read its format.
+
+An option asked only for some earlier answers says so with `when`, and what it
+is otherwise with `otherwise`:
+
+```json
+{ "name": "server", "kind": "confirm", "question": "Add API routes?",
+  "default": "no", "when": { "render": ["static", "client"] }, "otherwise": "yes",
+  "choices": [ … ] }
+```
+
+Overlays nest. A file that depends on two choices sits under both:
+
+```text
+_option/language/ts/_option/server/yes/app/todos/page.tsx
+```
+
+It is written only when both are chosen, and the most specific file wins a
+path: base files, then overlays under one option, then two.

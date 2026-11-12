@@ -296,18 +296,22 @@ impl Entry {
     }
 
     /// Every option at its fallback, except those `overrides` names.
+    /// An option whose `when` does not hold takes its `otherwise`, whatever
+    /// the override says.
     fn answers(&self, overrides: &[(&str, &str)]) -> Vec<(String, String)> {
-        self.manifest
-            .options
-            .iter()
-            .map(|option| {
-                let value = overrides
+        let mut answers: Vec<(String, String)> = Vec::new();
+        for option in &self.manifest.options {
+            let value = if option.applies(&answers) {
+                overrides
                     .iter()
                     .find(|(name, _)| *name == option.name)
-                    .map_or(option.fallback(), |(_, value)| *value);
-                (option.name.clone(), value.to_string())
-            })
-            .collect()
+                    .map_or(option.fallback(), |(_, value)| *value)
+            } else {
+                option.otherwise.as_deref().unwrap_or_default()
+            };
+            answers.push((option.name.clone(), value.to_string()));
+        }
+        answers
     }
 
     /// The files written for `answers`.
@@ -465,12 +469,46 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
             Step::Option(index) => {
                 let entry = entry.expect("the template step resolves it");
                 let option = &entry.manifest.options[index];
-                let asked = config
+                let flag = config
                     .options
                     .iter()
                     .rev()
-                    .find(|flag| flag.name == option.name)
-                    .map(|flag| flag.value.as_str());
+                    .find(|flag| flag.name == option.name);
+                let asked = flag.map(|flag| flag.value.as_str());
+                // Not asked for these earlier answers: it is what `otherwise`
+                // says, and a flag saying something else is refused.
+                let earlier: Vec<(String, String)> = entry.manifest.options[..index]
+                    .iter()
+                    .zip(&answers.options)
+                    .filter_map(|(o, v)| v.clone().map(|v| (o.name.clone(), v)))
+                    .collect();
+                if !option.applies(&earlier) {
+                    let forced = option.otherwise.clone().unwrap_or_default();
+                    if let Some(flag) = flag
+                        && flag.value != forced
+                    {
+                        let because: Vec<String> = earlier
+                            .iter()
+                            .filter(|(name, _)| {
+                                option
+                                    .when
+                                    .as_ref()
+                                    .is_some_and(|when| when.contains_key(name))
+                            })
+                            .map(|(name, value)| format!("{name} is {value}"))
+                            .collect();
+                        return Err(format!(
+                            "the {} template's {} is {forced} when {}, so {} means nothing here.",
+                            entry.name,
+                            option.name,
+                            because.join(" and "),
+                            flag.spelled
+                        ));
+                    }
+                    answers.options[index] = Some(forced);
+                    step += 1;
+                    continue;
+                }
                 match resolve_option(&entry.name, option, asked, ask)? {
                     Some(value) => {
                         answers.options[index] = Some(value);

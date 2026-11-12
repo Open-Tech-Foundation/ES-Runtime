@@ -38,6 +38,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **Templates can express combinations and conditional questions**
+  (DECISIONS D220). Overlays nest — `_option/language/ts/_option/server/yes/…`
+  is written only when both are chosen, and the most specific file wins. An
+  option may carry `when` (the earlier answers it is asked for) and
+  `otherwise` (its value when not asked); a flag contradicting it is refused.
+  Every overlay path is checked against the template's options when it is
+  read, so a misspelt directory is an error rather than a missing file.
 - **`esdev create` reads its templates from `@opentf/esdev-templates`**
   (DECISIONS D220), a package released on its own, instead of templates built
   into esdev: a template fix no longer waits for an esdev release. esdev takes
