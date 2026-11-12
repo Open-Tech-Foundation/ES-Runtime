@@ -411,3 +411,171 @@ fn a_bad_tls_ca_stops_the_loop_before_it_starts() {
         "{err}"
     );
 }
+
+/// One GET of `path`; the whole response, or empty when nothing answers.
+fn get_path(port: u16, path: &str) -> String {
+    let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+        return String::new();
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let _ = write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    );
+    let mut out = String::new();
+    let _ = stream.read_to_string(&mut out);
+    out
+}
+
+/// Stderr's lines, read on a thread of their own, so a wait for one can give
+/// up at its deadline instead of blocking on a loop that never prints it.
+fn lines_of(stderr: std::process::ChildStderr) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+/// Reads lines until one contains `needle`; every line read, in order. Fails
+/// at the deadline rather than waiting for ever.
+fn read_until(lines: &std::sync::mpsc::Receiver<String>, needle: &str) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut seen = Vec::new();
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        let Ok(line) = lines.recv_timeout(left) else {
+            break;
+        };
+        let found = line.contains(needle);
+        seen.push(line);
+        if found {
+            return seen;
+        }
+    }
+    panic!("never saw {needle:?} in:\n{}", seen.join("\n"));
+}
+
+/// The port in the first `http://localhost:<port>` among `lines`.
+fn port_in(lines: &[String]) -> u16 {
+    lines
+        .iter()
+        .find_map(|line| {
+            let at = line.find("http://localhost:")?;
+            line[at + "http://localhost:".len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
+        .expect("no address named")
+}
+
+/// A first build that fails is not "ready": nothing runs and there is no app
+/// address to open. The loop says so, and says ready once a save fixes it.
+#[test]
+fn a_failed_first_build_is_not_called_ready() {
+    let dir = project("failed-first", &server_project(None));
+    std::fs::write(dir.join("src/server.ts"), "export const x = ;\n").expect("break the server");
+    let mut dev = Loop::start(dir.clone());
+    let lines = lines_of(dev.child.stderr.take().expect("stderr"));
+
+    let before = read_until(&lines, "the build failed");
+    assert!(
+        !before.iter().any(|line| line.contains("ready in")),
+        "called ready after a failed build:\n{}",
+        before.join("\n")
+    );
+    assert!(
+        !before.iter().any(|line| line.contains("the app is on")),
+        "an app address nothing listens on:\n{}",
+        before.join("\n")
+    );
+
+    std::fs::write(dir.join("src/server.ts"), SERVER).expect("fix the server");
+    let after = read_until(&lines, "the app is on http://localhost:");
+    assert!(
+        after.iter().any(|line| line.contains("ready in")),
+        "{}",
+        after.join("\n")
+    );
+    let port = port_in(&after);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !get(port).contains("ok") {
+        assert!(Instant::now() < deadline, "the fixed app never answered");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// With a failed build and nothing built to load, a page request is answered
+/// with the failure — not a blank 404 on every route — and a missing asset is
+/// still a 404. Once a save fixes it, the page is served.
+#[test]
+fn a_page_with_nothing_built_shows_the_build_failure() {
+    let dir = project(
+        "failure-page",
+        r#"{ "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } } }"#,
+    );
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><title>t</title><script type=\"module\" src=\"./src/main.js\"></script>\n",
+    )
+    .expect("write the page");
+    std::fs::write(dir.join("src/main.js"), "export const x = \"<b>\" + ;\n")
+        .expect("break the script");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .args(["start", "--port=0"])
+        .current_dir(&dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn esdev start");
+    let stderr = child.stderr.take().expect("stderr");
+    let mut dev = Loop {
+        child,
+        dir: dir.clone(),
+    };
+    let _ = &mut dev;
+    let lines = lines_of(stderr);
+    let before = read_until(&lines, "shows the error until then");
+    assert!(!before.iter().any(|line| line.contains("ready in")));
+    let port = port_in(&before);
+
+    for route in ["/", "/about"] {
+        let page = get_path(port, route);
+        assert!(page.starts_with("HTTP/1.1 500"), "{route}: {page}");
+        assert!(page.contains("text/html"), "{route}: {page}");
+        assert!(page.contains("Build failed"), "{route}: {page}");
+        assert!(page.contains("PARSE_ERROR"), "{route}: {page}");
+        assert!(
+            page.contains("/@esdev/hmr"),
+            "no client to reload it: {page}"
+        );
+    }
+    // Source quoted in the error is text, never markup.
+    let page = get_path(port, "/");
+    assert!(!page.contains("\"<b>\""), "unescaped source: {page}");
+    assert!(page.contains("&lt;b&gt;"), "{page}");
+    let asset = get_path(port, "/missing.png");
+    assert!(asset.starts_with("HTTP/1.1 404"), "{asset}");
+
+    std::fs::write(dir.join("src/main.js"), "export const x = 1;\n").expect("fix the script");
+    read_until(&lines, "ready in");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let page = get_path(port, "/");
+        if page.starts_with("HTTP/1.1 200") {
+            assert!(page.contains("<title>t</title>"), "{page}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fixed page was never served: {page}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

@@ -496,41 +496,60 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // line). A project with a server of its own names the app's URL instead
     // of this endpoint's; without one known, the endpoint's is the only URL
     // there is. The app sentence stays recognizable: the test helper reads it.
-    eprintln!(
-        "esdev {} — ready in {}",
-        env!("CARGO_PKG_VERSION"),
-        format_duration(started.elapsed())
-    );
-    eprintln!();
     let app_port = match (front_door, running.as_slice()) {
         // One address for everything: esdev's.
         (true, _) => Some(port),
         (false, [only]) => only.port.as_ref().map(|p| p.port),
         _ => None,
     };
+    let mut addresses = Vec::new();
     match app_port {
-        Some(app) => eprintln!(
+        Some(app) => addresses.push(format!(
             "  {}  the app is on {}",
             paint.dim("→"),
             paint.cyan(format_args!("http://localhost:{app}/"))
-        ),
-        None if running.is_empty() => eprintln!(
+        )),
+        None if running.is_empty() => addresses.push(format!(
             "  {}  Local:   {}",
             paint.dim("→"),
             paint.cyan(format_args!("http://localhost:{port}/"))
-        ),
+        )),
         None => {
             for server in &running {
                 if let Some(at) = &server.port {
-                    eprintln!(
+                    addresses.push(format!(
                         "  {}  {} is on {}",
                         paint.dim("→"),
                         server.spec.name,
                         paint.cyan(format_args!("http://localhost:{}/", at.port))
-                    );
+                    ));
                 }
             }
         }
+    }
+    // **Ready is said only when it is true.** A first build that failed has
+    // nothing running and nothing to load: saying "ready" with the URL sends
+    // the developer to a page that cannot work, the error scrolled away above
+    // it. The loop below says it once a build succeeds.
+    let mut announced = built;
+    if built {
+        announce_ready(&addresses, started.elapsed());
+    } else {
+        eprintln!(
+            "esdev {} — the build failed; fix it and save",
+            env!("CARGO_PKG_VERSION")
+        );
+        // Only where something answers: esdev's own endpoint shows the failure
+        // on a page. An app's own port has nothing on it until it builds.
+        if running.is_empty() || front_door {
+            eprintln!();
+            eprintln!(
+                "  {}  {} shows the error until then",
+                paint.dim("→"),
+                paint.cyan(format_args!("http://localhost:{port}/"))
+            );
+        }
+        eprintln!();
     }
     if built {
         let all: Vec<usize> = (0..running.len()).collect();
@@ -658,6 +677,10 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         )
         .await?;
         let restarting = !restarted.is_empty() || running.is_empty();
+        if !announced {
+            announce_ready(&addresses, cycle.elapsed());
+            announced = true;
+        }
 
         // After the restart, not before: a page told to reload while the server
         // is still coming back gets a connection refused and stays blank. Sent
@@ -714,6 +737,19 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         );
         error.send_replace(None);
         let _ = reload.send(update);
+    }
+}
+
+/// The banner: ready, how long it took, and where to open it.
+fn announce_ready(addresses: &[String], took: std::time::Duration) {
+    eprintln!(
+        "esdev {} — ready in {}",
+        env!("CARGO_PKG_VERSION"),
+        format_duration(took)
+    );
+    eprintln!();
+    for line in addresses {
+        eprintln!("{line}");
     }
 }
 

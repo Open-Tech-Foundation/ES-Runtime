@@ -37,6 +37,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **`esdev start` no longer says "ready" after a failed build.** A first build
+  that failed printed the ready banner and the app's address, though nothing
+  was running and every route answered a blank 404 (or, with a server of its
+  own, refused the connection). It now says the build failed, and prints the
+  ready banner once a save fixes it. Until then, a page request with nothing
+  built to load is answered with the failure — status 500, the error as text —
+  and that page reloads itself when the build succeeds. A missing asset is
+  still a 404.
 - **The fullstack servers answer a directory with a 404.** The `fullstack`
   and `react --mode=fullstack` templates served any path that existed, so
   `/assets/` sent a `200`, failed reading a directory, and cut the response

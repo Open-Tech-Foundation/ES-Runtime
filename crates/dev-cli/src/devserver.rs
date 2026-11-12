@@ -283,7 +283,22 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         .await;
         return;
     };
-    serve_file(&mut stream, root, &path, &head, server.miss).await;
+    // The build that failed, if the last one did: a page that has nothing
+    // built to load is shown the failure instead of a blank miss.
+    let failure = server.error.borrow().clone();
+    let failed = failure.as_deref().map(|message| Failed {
+        message,
+        port: stream.local_addr().map_or(0, |at| at.port()),
+    });
+    serve_file(&mut stream, root, &path, &head, server.miss, failed).await;
+}
+
+/// The dev loop's last build failed with `message`, and this endpoint is on
+/// `port` — which the page it answers with connects back to.
+#[derive(Clone, Copy)]
+struct Failed<'a> {
+    message: &'a str,
+    port: u16,
 }
 
 /// An error answer: `text/plain` with the length a GET would carry, and no
@@ -415,7 +430,14 @@ async fn updates(
 /// chunks: full, single-range and multi-range alike, so no request ever
 /// holds a file (or a span of one) in memory whole. The conditionals and
 /// ranges parse the head already in memory.
-async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str, miss: Miss) {
+async fn serve_file(
+    stream: &mut TcpStream,
+    root: &Path,
+    path: &str,
+    head: &str,
+    miss: Miss,
+    failed: Option<Failed<'_>>,
+) {
     let head_only = match crate::inspect::request_method(head) {
         Some("GET") => false,
         Some("HEAD") => true,
@@ -522,6 +544,21 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str,
     let mut resolved = resolve(canonical_root.as_deref(), file);
     let missing = !matches!(&resolved, Resolved::File { meta, .. } if meta.is_file())
         && !matches!(resolved, Resolved::Outside);
+    // **A page with nothing built to load shows why.** After a failed build a
+    // route has no document — none was ever written, or the target that
+    // writes it is the one failing — and a blank 404 on every route sends the
+    // developer looking for a routing bug. A page request gets the failure,
+    // and a client that reloads once a build succeeds. A missing asset is
+    // still a plain 404: an image or a script answered with HTML helps no one.
+    if missing
+        && let Some(failed) = failed
+        && Path::new(path)
+            .extension()
+            .is_none_or(|extension| extension == "html")
+    {
+        respond_build_failed(stream, head_only, failed).await;
+        return;
+    }
     match miss {
         // **A static site's own 404.html is its answer to a miss**, with the
         // status it is named for — what GitHub Pages, Cloudflare Pages and
@@ -585,6 +622,68 @@ async fn serve_file(stream: &mut TcpStream, root: &Path, path: &str, head: &str,
             serve_resolved(stream, head, head_only, file, &meta, &logical).await;
         }
     }
+}
+
+/// The page for a request that has nothing built to load because the build
+/// failed: the failure as text, readable with scripts off, and a client on the
+/// update channel that shows the next failure in its place and reloads on any
+/// other message — the build that works.
+///
+/// `500`, as Vite answers a page it could not transform. `no-store`, so the
+/// working page is fetched once there is one.
+async fn respond_build_failed(stream: &mut TcpStream, head_only: bool, failed: Failed<'_>) {
+    let body = format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <title>Build failed</title>\n\
+         <style>body{{margin:0;background:#180404;color:#ffd9d9;font:14px/1.5 monospace}}\
+         main{{padding:24px}}h1{{font-size:14px;margin:0 0 12px}}\
+         pre{{margin:0;white-space:pre-wrap;word-break:break-word}}</style>\n\
+         </head>\n<body>\n<main>\n<h1>Build failed &#8212; fix and save</h1>\n\
+         <pre id=\"__esdev_err_pre\">{message}</pre>\n</main>\n\
+         <script>(function(){{var wait=250;function open(){{\
+         var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
+         s.onopen=function(){{wait=250;}};\
+         s.onmessage=function(e){{var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
+         if(m.type===\"error\"){{document.getElementById(\"__esdev_err_pre\").textContent=m.message||\"\";return;}}\
+         location.reload();}};\
+         s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
+         s.onerror=function(){{s.close();}};}}open();}})();</script>\n\
+         </body>\n</html>\n",
+        message = escape_html(failed.message),
+        port = failed.port,
+        path = HMR_PATH,
+    );
+    let head = format!(
+        "HTTP/1.1 500 Internal Server Error\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes()).await;
+    if !head_only {
+        let _ = stream.write_all(body.as_bytes()).await;
+    }
+    let _ = stream.flush().await;
+}
+
+/// Text as HTML character data: the five characters that could end it early
+/// or start markup. A build error quotes source code, and source code is
+/// exactly where `<script>` appears.
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// The site's own `404.html`, with the status it is named for.
