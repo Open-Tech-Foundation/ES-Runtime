@@ -60,6 +60,16 @@ namespace) is unstable and may change between minor releases until the API freez
   connection opening once every one is full. A request the server never
   processed (`REFUSED_STREAM`, or above a GOAWAY's last stream) is sent once
   more on a fresh connection, whatever its method (RFC 9113 §8.7).
+- **WebSocket framing is the runtime's own** (DECISIONS D217) for the
+  `WebSocket` client, `upgradeWebSocket` and `runtime:websocket`'s `serve()`,
+  instead of `tokio-tungstenite`'s, which no longer ships. It passes the
+  Autobahn testsuite (`scripts/autobahn.sh`, permessage-deflate excluded) on
+  all three. A `runtime:websocket` server broadcasting to 32 clients delivers
+  +54% messages per second, 2× with 128 (`bench/websocket-chat` shapes). A
+  `serve()` listener now refuses a request that is not a well-formed upgrade —
+  `Sec-WebSocket-Version` other than 13 (`426`), or a key that is not base64
+  of 16 bytes (`400`) — and an HTTP request missing either is no longer
+  offered to `upgradeWebSocket`.
 - The `WebSocket` client's opening handshake is the runtime's own (RFC 6455
   §4.1, on the same HTTP/1.1 codec): the `101` must carry `Upgrade: websocket`,
   `Connection: upgrade`, the accept value for the key sent, and only a
@@ -76,6 +86,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A flaky `tls_trust` test: its tests ran in parallel against one script file
+  per process, rewritten (truncated first) while another test's `esrun` read
+  it, which ran an empty module that printed nothing.
 - An HTTP/2 request body whose connection was lost mid-upload ended, to the
   handler, as if it were complete; it now fails, as on HTTP/1.1.
 - A `fetch` response body that breaks off mid-way now rejects with a

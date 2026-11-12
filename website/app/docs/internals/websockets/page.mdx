@@ -9,7 +9,17 @@ How a `WebSocket` behaves underneath: who owns the connection, what the host
 answers without telling you, and how a close actually completes.
 
 For signatures see the [Web APIs reference](/docs/globals) and the [WebSocket
-guide](/docs/guides/websocket). Framing is RFC 6455 via `tokio-tungstenite`.
+guide](/docs/guides/websocket). Framing is RFC 6455 on ES-Runtime's own code,
+the same for client and server, checked against the Autobahn testsuite
+(`scripts/autobahn.sh`) and by fuzzing. A peer that breaks the protocol is
+answered with the close code RFC 6455 names for what it did — 1002 for a
+framing error, 1007 for text that is not UTF-8 (found as soon as the bytes so
+far cannot be UTF-8, not only when the message ends), 1009 for a frame over
+16 MiB or a message over 64 MiB — and the connection is dropped; the guest
+sees that as an abnormal close (1006), as a browser reports it. A close from
+the peer is answered with its own code and reason, so both ends report the
+same close. No extension is negotiated, so `permessage-deflate` is never
+used.
 
 ## One actor task per connection
 
@@ -92,9 +102,8 @@ named explicitly (both it and `ring` are linked, so the process default is
 ambiguous and would panic), verifying against the process trust store
 ([TLS trust](/docs/internals/tls)).
 
-The handshake is completed **here**, and the established stream handed to the
-WebSocket client — which means no TLS feature of `tokio-tungstenite` is compiled
-in, and one TLS stack is configured in one way across the whole runtime.
+The TLS handshake is completed **here**, before the opening handshake, so one
+TLS stack is configured in one way across the whole runtime.
 
 **No ALPN is offered.** The WebSocket upgrade rides plain HTTP/1.1, so there is
 nothing to negotiate. (HTTP/2 WebSockets — RFC 8441 extended CONNECT — are not
@@ -139,7 +148,7 @@ the reasoning behind each.
 | Accept queue | 64 | Accepted connections waiting for an `accept()` call |
 
 The handshake bound exists because RFC 6455's handshake is an HTTP request head,
-and tungstenite will wait for one forever. A peer that completes the TCP
+and a server waiting for one would otherwise wait forever. A peer that completes the TCP
 handshake and then says nothing is the cheapest hold there is — one syscall to
 it, a task and a descriptor to us — so this is the same slowloris bound the HTTP
 server puts on the same bytes.
@@ -237,7 +246,11 @@ problem from the other end.
 
 ### Two ways in
 
-`serve()` binds a listener of its own and drives the handshake with tungstenite.
+`serve()` binds a listener of its own and answers the handshake itself, on the
+HTTP/1.1 parser the HTTP server uses: a request that is not a well-formed
+upgrade (RFC 6455 §4.2.1: `GET`, `Upgrade: websocket`, `Connection: upgrade`,
+`Sec-WebSocket-Version: 13`, a key that is base64 of 16 bytes) is answered
+`400`, or `426` for another version.
 The other way is an **upgrade** off the HTTP server (D55), which is how every
 peer runtime does it and the only way to get `wss:` today: TLS terminates on the
 HTTP listener, the request arrives as an ordinary one, and `upgradeWebSocket()`

@@ -33,7 +33,9 @@ base64.workspace = true
 # tree through `es-runtime`.
 sha2.workspace = true
 rustls.workspace = true
-tokio-tungstenite.workspace = true
+# `Sec-WebSocket-Accept` (RFC 6455 §4.2.2). Already in the tree for WebCrypto's
+# SHA-1 (`es-runtime`), so no new crate.
+sha1.workspace = true
 webpki-roots.workspace = true
 bytes.workspace = true
 serde.workspace = true
@@ -81,6 +83,9 @@ hyper-util = { workspace = true, features = ["tokio", "server-auto", "http1", "h
 # is the paused clock the body-deadline tests run on — the alternative is
 # sleeping through a 30s grace in real time, once per case.
 tokio = { workspace = true, features = ["rt", "time", "macros", "sync", "test-util"] }
+# Never shipped: an independent WebSocket implementation for the tests to
+# drive ours with (client and server), as hyper is for HTTP/2.
+tokio-tungstenite = { workspace = true, features = ["connect"] }
 # Test-only: self-signed certs for the hermetic net-TLS round-trip test.
 rcgen.workspace = true
 # Test-only: a capture layer, so a test can assert on what the servers logged.

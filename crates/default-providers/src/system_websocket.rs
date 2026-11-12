@@ -1,8 +1,8 @@
 //! OS-backed [`WebSocketProvider`] — the default transport for the `WebSocket`
-//! global (DECISIONS D29), over `tokio-tungstenite` (RFC 6455 framing).
+//! global (DECISIONS D29), on `es-runtime-http`'s RFC 6455 framing (D217).
 //!
-//! Each connection is owned by a **spawned actor task** that holds the split
-//! `WebSocketStream` and runs a `select!` loop: it forwards inbound text/binary
+//! Each connection is owned by a **spawned actor task** ([`crate::ws_conn`])
+//! that holds the stream and runs a `select!` loop: it forwards inbound text/binary
 //! frames to a channel the `ws_recv` op drains, answers ping with pong itself,
 //! and applies `ws_send`/`ws_close` commands sent over a second channel. This is
 //! the same shape as [`SystemNet`](crate::SystemNet): the I/O is driven by the
@@ -11,42 +11,34 @@
 //!
 //! TLS for `wss:` reuses the rustls / `tokio-rustls` stack from `runtime:net`
 //! (the `aws-lc-rs` provider, `webpki-roots` trust anchors, DECISIONS D28): we
-//! complete the TLS handshake ourselves. The client's opening handshake — an
-//! HTTP/1.1 request and its `101` — is ours too (D217), on `es-runtime-http`'s
-//! codec; tungstenite is handed the established stream and does the framing.
+//! complete the TLS handshake ourselves. Both opening handshakes — the
+//! client's request and its `101`, and the standalone server's answer — are on
+//! `es-runtime-http`'s HTTP/1.1 codec.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use es_runtime_http::ws::Role;
 use es_runtime_providers::{
     BoxFuture, ProviderError, SocketInfo, UpgradedIo, WebSocketInfo, WebSocketProvider, WsIncoming,
     WsMessage, WsServeOptions,
 };
-use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 #[cfg(test)]
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 use crate::peer_limit::{PeerLimit, PeerSlot};
 use crate::proxy::BoxWire;
+use crate::ws_conn::{Actor, Cmd, accept_key, message_len};
 use es_runtime_common::ErrorCode;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-
-/// RFC 6455 §7.4.2's "Try Again Later" — the honest answer to a peer whose
-/// queue has run away: the server is not refusing the client, it is refusing to
-/// hold any more for it, and reconnecting is a reasonable thing to do next.
-const WS_TRY_AGAIN_LATER: u16 = 1013;
 
 /// The send-queue bound a client `connect` gets, since no server's options
 /// apply to one — a slow server is the same problem from the other end.
@@ -57,15 +49,6 @@ const WS_TRY_AGAIN_LATER: u16 = 1013;
 /// one, and the alternative to a bound is the host holding it until the process
 /// dies.
 const DEFAULT_MAX_BUFFERED: u64 = WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT;
-
-/// A close with no peer status code maps to 1005 ("no status received").
-const NO_STATUS_RCVD: u16 = 1005;
-
-/// An outbound command to a connection actor (a `ws_send` or `ws_close`).
-enum Cmd {
-    Send(Message),
-    Close { code: Option<u16>, reason: String },
-}
 
 /// A connection's channel ends. `inbound_rx` is taken out during a `recv` and
 /// restored after (one outstanding recv per socket, like [`SystemNet`] reads);
@@ -113,8 +96,8 @@ impl WsSlot {
     /// channel's 16 slots each `send()` leaves a pending future holding a
     /// message, and counting only what the channel accepted would count none of
     /// them.
-    fn queue(&self, msg: &Message) -> Queued {
-        let bytes = msg.len() as u64;
+    fn queue(&self, msg: &WsMessage) -> Queued {
+        let bytes = message_len(msg);
         if let Some(max) = self.max_buffered {
             // `fetch_update` rather than load-then-add: two concurrent sends
             // that each read the same value below the bound would both be
@@ -147,7 +130,7 @@ impl WsSlot {
 /// A bound server's queue of accepted (connection id, info), drained by `accept`.
 type AcceptRx = mpsc::Receiver<(u64, WebSocketInfo)>;
 
-/// A [`WebSocketProvider`] over real `tokio-tungstenite` connections. The `Arc`s
+/// A [`WebSocketProvider`] over real connections. The `Arc`s
 /// are cloned into each returned future so the futures stay `'static`.
 #[derive(Clone, Default)]
 pub struct SystemWebSocket {
@@ -221,9 +204,10 @@ impl SystemWebSocket {
         TlsConnector::from(Arc::new(self.trust.client_config(&[])))
     }
 
-    /// Spawns the actor task owning `ws` and returns its channel ends. Generic
-    /// over the stream so a plain `TcpStream` or a TLS stream drives the same
-    /// machinery.
+    /// Spawns the actor task owning `io` and returns its channel ends. Generic
+    /// over the stream so a plain `TcpStream`, a TLS stream or an upgraded
+    /// HTTP connection drive the same machinery. `leftover` is what was read
+    /// past the opening handshake.
     ///
     /// `permit` is a server's connection slot, moved into the task so it is
     /// released when the connection actually ends rather than when the handshake
@@ -233,7 +217,9 @@ impl SystemWebSocket {
     /// the long-lived ones. `None` for a client `connect`, which no server's
     /// budget applies to.
     fn spawn<S>(
-        ws: WebSocketStream<S>,
+        io: S,
+        leftover: Vec<u8>,
+        role: Role,
         permit: Option<OwnedSemaphorePermit>,
         peer_slot: Option<PeerSlot>,
         max_buffered: Option<u64>,
@@ -241,116 +227,23 @@ impl SystemWebSocket {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let (mut sink, mut stream) = ws.split();
         let (inbound_tx, inbound_rx) = mpsc::channel::<WsIncoming>(16);
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Cmd>(16);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(16);
         let buffered = Arc::new(AtomicU64::new(0));
         let overflow = Arc::new(Notify::new());
-        let actor_buffered = buffered.clone();
-        let actor_overflow = overflow.clone();
-
+        let actor = Actor {
+            inbound_tx,
+            cmd_rx,
+            buffered: buffered.clone(),
+            overflow: overflow.clone(),
+        };
         tokio::spawn(async move {
             // Released when this task ends, whichever way it ends — the peer's
             // close, a broken stream, the guest dropping the socket, or a panic.
             let _permit = permit;
             let _peer_slot = peer_slot;
-            loop {
-                tokio::select! {
-                    // A peer so far behind that the queue for it passed the
-                    // bound. Answered with a close frame rather than a dropped
-                    // connection, so the peer and the guest both learn why:
-                    // 1013 is "try again later", which is exactly the situation.
-                    () = actor_overflow.notified() => {
-                        tracing::debug!(
-                            target: "runtime::websocket",
-                            buffered = actor_buffered.load(Ordering::Relaxed),
-                            "closing: the send queue for this peer passed its bound",
-                        );
-                        let _ = sink.send(Message::Close(Some(CloseFrame {
-                            code: CloseCode::from(WS_TRY_AGAIN_LATER),
-                            reason: "send queue overflowed".into(),
-                        }))).await;
-                        break;
-                    },
-                    msg = stream.next() => match msg {
-                        Some(Ok(Message::Text(t))) => {
-                            if inbound_tx.send(WsIncoming::Text(t.as_str().to_string())).await.is_err() {
-                                break; // consumer gone
-                            }
-                        }
-                        Some(Ok(Message::Binary(b))) => {
-                            if inbound_tx.send(WsIncoming::Binary(b.to_vec())).await.is_err() {
-                                break;
-                            }
-                        }
-                        // Control frames stay in the host (the IDL has no ping event).
-                        Some(Ok(Message::Ping(p))) => {
-                            let _ = sink.send(Message::Pong(p)).await;
-                        }
-                        Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
-                        Some(Ok(Message::Close(frame))) => {
-                            let (code, reason) = match frame {
-                                Some(cf) => (u16::from(cf.code), cf.reason.as_str().to_string()),
-                                None => (NO_STATUS_RCVD, String::new()),
-                            };
-                            let _ = inbound_tx.send(WsIncoming::Close { code, reason }).await;
-                            let _ = sink.send(Message::Close(None)).await; // complete the handshake
-                            break;
-                        }
-                        // Stream error or end without a close: drop inbound_tx so
-                        // the next `recv` resolves `None` (an abnormal close, 1006).
-                        Some(Err(_)) | None => break,
-                    },
-                    cmd = cmd_rx.recv() => {
-                        // Coalesce a burst of queued sends (e.g. a fan-out that
-                        // enqueued one frame per broadcast) into the sink with a
-                        // single flush — one socket write for the whole batch
-                        // instead of a flush per frame.
-                        let mut closing = None;
-                        // Bytes this batch takes off the queue, returned to the
-                        // count once they have reached the transport — which is
-                        // the flush below, not the feed.
-                        let mut fed = 0u64;
-                        match cmd {
-                            Some(Cmd::Send(m)) => {
-                                fed += m.len() as u64;
-                                if sink.feed(m).await.is_err() { break; }
-                            }
-                            Some(Cmd::Close { code, reason }) => closing = Some((code, reason)),
-                            None => break, // the runtime dropped the socket
-                        }
-                        let mut broken = false;
-                        if closing.is_none() {
-                            loop {
-                                match cmd_rx.try_recv() {
-                                    Ok(Cmd::Send(m)) => {
-                                        fed += m.len() as u64;
-                                        if sink.feed(m).await.is_err() { broken = true; break; }
-                                    }
-                                    Ok(Cmd::Close { code, reason }) => {
-                                        closing = Some((code, reason));
-                                        break;
-                                    }
-                                    Err(_) => break, // drained (or disconnected)
-                                }
-                            }
-                        }
-                        if !broken && sink.flush().await.is_err() { broken = true; }
-                        actor_buffered.fetch_sub(fed, Ordering::Relaxed);
-                        if let Some((code, reason)) = closing {
-                            let frame = code.map(|c| CloseFrame {
-                                code: CloseCode::from(c),
-                                reason: reason.into(),
-                            });
-                            let _ = sink.send(Message::Close(frame)).await;
-                            // Keep looping to receive the peer's close acknowledgement.
-                        }
-                        if broken { break; }
-                    },
-                }
-            }
+            crate::ws_conn::run(io, leftover, role, actor).await;
         });
-
         WsSlot {
             inbound_rx: Some(inbound_rx),
             cmd_tx,
@@ -369,14 +262,6 @@ fn coded(code: ErrorCode, message: String) -> ProviderError {
     ProviderError::Coded { code, message }
 }
 
-/// A tungstenite frame for one outbound message (text ⇒ Text, bytes ⇒ Binary).
-fn into_message(message: WsMessage) -> Message {
-    match message {
-        WsMessage::Text(s) => Message::Text(s.into()),
-        WsMessage::Binary(b) => Message::Binary(b.into()),
-    }
-}
-
 /// TCP keepalive on a client connection, as `fetch` has it.
 const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -389,13 +274,7 @@ async fn client_handshake(
     mut wire: BoxWire,
     url: &url::Url,
     protocols: &[String],
-) -> Result<
-    (
-        WebSocketStream<crate::prefixed::Prefixed<BoxWire>>,
-        WebSocketInfo,
-    ),
-    ProviderError,
-> {
+) -> Result<(BoxWire, Vec<u8>, WebSocketInfo), ProviderError> {
     use base64::Engine as _;
     use es_runtime_http::h1::{
         Framing, Limits, ParsedResponse, encode_request_head, parse_response,
@@ -486,7 +365,7 @@ async fn client_handshake(
     if !upgrade_token {
         return refuse("no `Connection: upgrade` in the 101");
     }
-    let expected = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+    let expected = accept_key(key.as_bytes());
     if field(b"sec-websocket-accept") != Some(expected.as_bytes()) {
         return refuse("`Sec-WebSocket-Accept` does not match the key sent");
     }
@@ -503,14 +382,9 @@ async fn client_handshake(
         return refuse("the server chose an extension that was not offered");
     }
     let leftover = buf.split_off(response.len);
-    let stream = WebSocketStream::from_raw_socket(
-        crate::prefixed::Prefixed::new(wire, leftover),
-        tokio_tungstenite::tungstenite::protocol::Role::Client,
-        None,
-    )
-    .await;
     Ok((
-        stream,
+        wire,
+        leftover,
         WebSocketInfo {
             protocol,
             extensions,
@@ -590,8 +464,15 @@ impl WebSocketProvider for SystemWebSocket {
                 })??;
 
             let id = this.id();
-            let (stream, info) = client_handshake(wire, &parsed, &protocols).await?;
-            let slot = SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED));
+            let (wire, leftover, info) = client_handshake(wire, &parsed, &protocols).await?;
+            let slot = SystemWebSocket::spawn(
+                wire,
+                leftover,
+                Role::Client,
+                None,
+                None,
+                Some(DEFAULT_MAX_BUFFERED),
+            );
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
         })
@@ -600,7 +481,7 @@ impl WebSocketProvider for SystemWebSocket {
     fn send(&self, id: u64, message: WsMessage) -> BoxFuture<Result<(), ProviderError>> {
         let conns = self.conns.clone();
         Box::pin(async move {
-            let msg = into_message(message);
+            let msg = Arc::new(message);
             let queued = {
                 let guard = conns.lock().unwrap();
                 match guard.get(&id) {
@@ -636,11 +517,11 @@ impl WebSocketProvider for SystemWebSocket {
     fn broadcast(&self, ids: Vec<u64>, message: WsMessage) -> BoxFuture<Result<(), ProviderError>> {
         let conns = self.conns.clone();
         Box::pin(async move {
-            // Build the frame once and snapshot the live senders, then enqueue to
-            // every connection concurrently — the `Message` is refcounted (Bytes/
-            // Utf8Bytes), so each clone is O(1), and a slow connection awaits its
-            // own channel without blocking the others (no head-of-line stall).
-            let msg = into_message(message);
+            // One message, shared, and a snapshot of the live senders, then
+            // enqueued to every connection concurrently — each clone is a
+            // refcount, and a slow connection awaits its own channel without
+            // blocking the others (no head-of-line stall).
+            let msg = Arc::new(message);
             // Each connection is admitted or refused on its own count: a fan-out
             // is a list of sends, and the one peer that has stopped reading is
             // the one that should be closed for it.
@@ -679,19 +560,20 @@ impl WebSocketProvider for SystemWebSocket {
             // to negotiate here — frames start at the first byte, in the
             // **server** role (the side that does not mask).
             //
-            // `compat` back the other way: the seam speaks futures-io and
-            // tungstenite speaks tokio's traits (D55).
-            let stream = WebSocketStream::from_raw_socket(
-                io.compat(),
-                tokio_tungstenite::tungstenite::protocol::Role::Server,
-                None,
-            )
-            .await;
+            // `compat` back the other way: the seam speaks futures-io and the
+            // actor speaks tokio's traits (D55).
             let id = this.next_id.fetch_add(1, Ordering::Relaxed) + 1;
             // No server permit and no peer slot: an upgraded connection was
             // already counted by the HTTP server that accepted it, and counting
             // it twice would make one connection spend two budgets.
-            let slot = SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED));
+            let slot = SystemWebSocket::spawn(
+                io.compat(),
+                Vec::new(),
+                Role::Server,
+                None,
+                None,
+                Some(DEFAULT_MAX_BUFFERED),
+            );
             this.conns.lock().unwrap().insert(id, slot);
             Ok(id)
         })
@@ -892,11 +774,13 @@ impl WebSocketProvider for SystemWebSocket {
                             let establish = async move {
                                 match site {
                                     None => {
-                                        let ws = tokio_tungstenite::accept_async(tcp)
-                                            .await
-                                            .map_err(|e| e.to_string())?;
+                                        let mut tcp = tcp;
+                                        let leftover =
+                                            crate::ws_conn::server_handshake(&mut tcp).await?;
                                         Ok::<_, String>(SystemWebSocket::spawn(
-                                            ws,
+                                            tcp,
+                                            leftover,
+                                            Role::Server,
                                             permit,
                                             peer_slot,
                                             max_buffered,
@@ -908,11 +792,13 @@ impl WebSocketProvider for SystemWebSocket {
                                             .accept(tcp)
                                             .await
                                             .map_err(|e| format!("tls handshake: {e}"))?;
-                                        let ws = tokio_tungstenite::accept_async(tls)
-                                            .await
-                                            .map_err(|e| e.to_string())?;
+                                        let mut tls = tls;
+                                        let leftover =
+                                            crate::ws_conn::server_handshake(&mut tls).await?;
                                         Ok(SystemWebSocket::spawn(
-                                            ws,
+                                            tls,
+                                            leftover,
+                                            Role::Server,
                                             permit,
                                             peer_slot,
                                             max_buffered,
@@ -1170,7 +1056,7 @@ mod tests {
 
     /// A minimal echo server: accept the WebSocket, bounce every data frame, and
     /// let tungstenite drive the closing handshake when the peer closes.
-    async fn echo<S>(mut ws: WebSocketStream<S>)
+    async fn echo<S>(mut ws: tokio_tungstenite::WebSocketStream<S>)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {

@@ -683,18 +683,17 @@ fn websocket_accept(
     fields: &[Field],
     method: &str,
 ) -> Option<String> {
-    if !head.upgrade || method != "GET" {
+    if !head.upgrade {
         return None;
     }
-    let value = |name: &[u8]| {
+    let field = |name: &[u8]| {
         fields
             .iter()
             .find(|f| f.name.of(buf).eq_ignore_ascii_case(name))
             .map(|f| f.value.of(buf))
     };
-    if !value(b"upgrade")?.eq_ignore_ascii_case(b"websocket") {
-        return None;
-    }
-    let key = value(b"sec-websocket-key")?;
-    Some(tokio_tungstenite::tungstenite::handshake::derive_accept_key(key))
+    // A request that is not a well-formed upgrade (§4.2.1) is served as the
+    // ordinary request it also is; the guest's `upgrade()` then refuses it.
+    let key = es_runtime_http::ws::check_upgrade(method.as_bytes(), field).ok()?;
+    Some(crate::ws_conn::accept_key(key))
 }

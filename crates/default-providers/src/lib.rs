@@ -69,6 +69,7 @@ mod tls;
 mod trace_capture;
 mod trust;
 mod worker;
+mod ws_conn;
 
 /// The DNS response reader, for `fuzz/` only (DECISIONS D188).
 #[cfg(feature = "fuzzing")]
