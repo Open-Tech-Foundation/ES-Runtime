@@ -45,7 +45,7 @@ namespace) is unstable and may change between minor releases until the API freez
   of a reset stream, and ties flow control to the handler at both ends; one
   connection with 50 streams serves +28% req/s, 50 connections +16%. Answers
   that are ready together leave in one write, up to eight at a time: on one
-  connection with 50 streams that is 168k req/s at 6.2 µs of CPU each, against
+  connection with 50 streams that is 172k req/s at 6.05 µs of CPU each, against
   101k at 10.2 µs writing each answer alone (`bench/compare-http2.sh`). Measured on the
   hello-world server: user CPU per request 10.75 → 9.9 µs, +10% req/s, +12%
   through Hono, and +15% with 15 unread request headers; a faster head parser

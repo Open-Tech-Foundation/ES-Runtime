@@ -65,8 +65,8 @@ type Trailers = Vec<(String, String)>;
 /// connection carrying 50 streams. Gathering everything ready halved that but
 /// cost throughput: the client then received a whole batch at once and the
 /// two ends worked in lock-step. Measured on that shape (`bench/compare-http2.sh`)
-/// — no gathering 101k req/s, 256 93k, 32 160k, 16 160k, **8 168k at 6.2 µs**,
-/// 4 148k — and the many-connection shapes unchanged at every setting.
+/// — no gathering 101k req/s, 256 93k, 32 160k, 16 160k, **8 172k at 6.05 µs**,
+/// 4 148k — and the many-connection shapes unchanged.
 const MAX_GATHER: usize = 8;
 const GATHER_BYTES: usize = 64 * 1024;
 type RequestBodyTx = mpsc::UnboundedSender<Result<Vec<u8>, ProviderError>>;
@@ -190,18 +190,11 @@ where
         }
         // Anything else already ready is handled before writing, so a burst of
         // answers — one batch of the guest's work, on a multiplexed connection
-        // — leaves as one write rather than a write each, and requests that
-        // arrived meanwhile join the guest's next batch. Bounded, so output
+        // — leaves as one write rather than a write each. The socket is not
+        // tried here: on a connection with one stream nothing is waiting, and
+        // a read that finds nothing is a wasted syscall per request. Bounded, so output
         // never waits long on a run of input.
         if gathered < MAX_GATHER && d.conn.output().len() < GATHER_BYTES {
-            // Input first: new requests reach the guest in the same batch as
-            // the answers going out, rather than after them. A read that is
-            // not ready is dropped unstarted, which `read_buf` allows.
-            if let Some(n) = read_more(&mut io, &mut buf).now_or_never() {
-                wake = Some(Wake::Read(n));
-                gathered += 1;
-                continue;
-            }
             if let Some(Some(w)) = d.wakes.next().now_or_never() {
                 wake = Some(w);
                 gathered += 1;
