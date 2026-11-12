@@ -12912,7 +12912,7 @@ fn a_mode_that_does_not_exist_is_refused() {
         .expect("spawn esdev create");
     assert!(!modeless.status.success(), "{}", stdout(&modeless));
     assert!(
-        stderr(&modeless).contains("no modes"),
+        stderr(&modeless).contains("has no mode"),
         "{}",
         stderr(&modeless)
     );
@@ -13278,7 +13278,7 @@ fn afw_axes_are_refused_where_they_do_not_apply() {
     for (template, flag, message) in [
         ("api", "--language=ts", "has no language"),
         ("docs", "--styling=css", "has no styling"),
-        ("spa", "--blog", "means nothing for spa"),
+        ("spa", "--blog", "has no blog"),
         ("spa", "--language=elm", "no language elm"),
         ("spa", "--styling=sass", "no styling sass"),
         ("api", "--styling=tailwind", "has no styling"),

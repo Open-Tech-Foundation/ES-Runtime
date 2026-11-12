@@ -87,6 +87,7 @@ mod static_serve;
 mod style;
 mod tags;
 mod tailwind;
+mod template;
 mod test;
 mod trace;
 mod transform;
@@ -478,23 +479,20 @@ esdev create — a project that already works
 USAGE:
     esdev create <dir> [options]
                                 Write a new project into <dir>
-    esdev create --list         List the templates and their modes
+    esdev create --list         List the templates, their modes and options
     esdev create -h, --help     Show this help
 
 OPTIONS:
     --template=<name>           Which template, no default: react, api, hono,
                                 elysia, vanilla, micro-ui, preact, lit, lib,
                                 spa, fullstack, docs or library
-    --mode=<name>               Which shape of it, where it has more than one:
-                                react is static (default) or fullstack
-    --language=<name>           AFW templates only: js (default) or ts
-    --styling=<name>            css or tailwind, for the templates with a page.
-                                Asked, never assumed; unattended, nothing is
-                                added
-    --blog, --no-blog           docs only: add a blog, or not (the default)
-    --package-manager=<name>  The project's package manager: npm, bun, pnpm
-                              or yarn. Asked; the docs name it, and
-                              --install=<manager> answers it implicitly
+    --<option>=<value>          One of the template's own options, such as
+                                --mode=fullstack or --language=ts; a yes/no
+                                is --<option> or --no-<option>. Each template's
+                                are in --list. One it does not ask is refused
+    --package-manager=<name>    The project's package manager: npm, bun, pnpm
+                                or yarn. Asked; the docs name it, and
+                                --install=<manager> answers it implicitly
     --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
     -y, --yes                   Take every default; never ask
@@ -511,7 +509,7 @@ first run. Template files are baked into this binary; package versions are
 resolved from the npm registry while scaffolding, so create needs registry
 access even with --no-install.
 
-On a terminal it asks which template, mode and supported options to use, which
+On a terminal it asks which template and which of its options to use, which
 package manager the project uses, and whether to install. In a pipe or CI job it
 uses defaults without prompting — except the template, which has no default
 and must be named with --template. It still reports resolved package versions
@@ -1355,10 +1353,9 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     // `None` means "not said", which on a terminal becomes a question and
     // away from one becomes the default. A flag is always an answer.
     let mut template: Option<String> = None;
-    let mut mode: Option<String> = None;
-    let mut language: Option<String> = None;
-    let mut styling: Option<String> = None;
-    let mut blog: Option<bool> = None;
+    // Every other `--<name>` is one of the template's options, checked once
+    // the template is known: what a template asks is its own (D220).
+    let mut options: Vec<create::OptionFlag> = Vec::new();
     let mut manager: Option<String> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
@@ -1383,17 +1380,6 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 std::process::exit(0);
             }
             "--template" => template = Some(require_value(flag, value)?.to_string()),
-            "--mode" => mode = Some(require_value(flag, value)?.to_string()),
-            "--language" => language = Some(require_value(flag, value)?.to_string()),
-            "--styling" => styling = Some(require_value(flag, value)?.to_string()),
-            "--blog" => {
-                reject_value(flag, value)?;
-                blog = Some(true);
-            }
-            "--no-blog" => {
-                reject_value(flag, value)?;
-                blog = Some(false);
-            }
             "--package-manager" => {
                 manager = Some(require_value(flag, value)?.to_string());
             }
@@ -1422,6 +1408,20 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 reject_value(flag, value)?;
                 force = true;
             }
+            // `--<name>=<value>`, `--<name>` (yes) or `--no-<name>` (no).
+            flag if flag.len() > 2 && flag.starts_with("--") => {
+                let name = &flag[2..];
+                let (name, value) = match (value, name.strip_prefix("no-")) {
+                    (Some(value), _) => (name, value),
+                    (None, Some(negated)) => (negated, "no"),
+                    (None, None) => (name, "yes"),
+                };
+                options.push(create::OptionFlag {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                    spelled: arg.clone(),
+                });
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{CREATE_USAGE}"));
             }
@@ -1440,10 +1440,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     Ok(CreateConfig {
         dir: dirs.remove(0),
         template,
-        mode,
-        language,
-        styling,
-        blog,
+        options,
         force,
         manager,
         install,

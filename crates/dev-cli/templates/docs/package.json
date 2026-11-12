@@ -13,6 +13,7 @@
     "@opentf/afw-docs": "{{registry:@opentf/afw-docs}}"
   },
   "devDependencies": {
+    "tailwindcss": "{{registry:tailwindcss}}",
     "@opentf/esdev-plugin-afw": "{{registry:@opentf/esdev-plugin-afw}}",
     "@opentf/afw-cli": "{{registry:@opentf/afw-cli}}",
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"

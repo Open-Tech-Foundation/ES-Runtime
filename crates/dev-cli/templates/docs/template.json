@@ -1,0 +1,63 @@
+{
+  "label": "Docs",
+  "description": "An AFW documentation site — MDX docs, sidebar, search, optional blog",
+  "group": "AFW",
+  "options": [
+    {
+      "name": "language",
+      "question": "Select a Language?",
+      "default": "js",
+      "choices": [
+        {
+          "value": "js",
+          "label": "JS",
+          "description": "JavaScript — .jsx source files"
+        },
+        {
+          "value": "ts",
+          "label": "TS",
+          "description": "TypeScript — .tsx source files and a tsconfig.json",
+          "devDependencies": [
+            "typescript"
+          ],
+          "scripts": [
+            {
+              "name": "typecheck",
+              "run": "esdev typecheck"
+            }
+          ],
+          "omit": [
+            "app/404.jsx",
+            "app/blog/layout.jsx",
+            "app/blog/page.jsx",
+            "app/docs/layout.jsx",
+            "app/layout.jsx",
+            "app/page.jsx",
+            "jsconfig.json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "blog",
+      "kind": "confirm",
+      "question": "Add a blog? (posts with RSS and Atom feeds)",
+      "default": "no",
+      "choices": [
+        {
+          "value": "yes",
+          "label": "Yes",
+          "description": "Posts with RSS and Atom feeds"
+        },
+        {
+          "value": "no",
+          "label": "No",
+          "description": "Docs only",
+          "omit": [
+            "app/blog/"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -8,13 +8,22 @@ export default defineDocsConfig({
   docs: {
     title: "{{name}}",
     dir: "docs",
-    nav: [{ label: "Docs", href: "/docs" }],
+    nav: [
+      { label: "Docs", href: "/docs" },
+      { label: "Blog", href: "/blog" },
+    ],
     footer: { text: "© 2026 {{name}}" },
     // Static search, indexed into dist/_search/ after the release prerender.
     search: { provider: "afw" },
     // Per-page "Last updated" (from git) and "Edit this page" (GitHub). Set repoUrl to
     // your repository root; links use <repoUrl>/edit/main/<source-path>.
     repoUrl: null, // e.g. "https://github.com/you/your-repo"
+    lastUpdated: true,
+  },
+
+  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.
+  blog: {
+    dir: "blog",
     lastUpdated: true,
   },
 });

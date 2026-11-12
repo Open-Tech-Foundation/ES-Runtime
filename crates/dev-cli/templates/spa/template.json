@@ -1,0 +1,60 @@
+{
+  "label": "SPA",
+  "description": "An AFW single-page app — browser-only UI, static deploy, no server",
+  "group": "AFW",
+  "options": [
+    {
+      "name": "language",
+      "question": "Select a Language?",
+      "default": "js",
+      "choices": [
+        {
+          "value": "js",
+          "label": "JS",
+          "description": "JavaScript — .jsx source files"
+        },
+        {
+          "value": "ts",
+          "label": "TS",
+          "description": "TypeScript — .tsx source files and a tsconfig.json",
+          "devDependencies": [
+            "typescript"
+          ],
+          "scripts": [
+            {
+              "name": "typecheck",
+              "run": "esdev typecheck"
+            }
+          ],
+          "omit": [
+            "app/404.jsx",
+            "app/layout.jsx",
+            "app/page.jsx",
+            "jsconfig.json",
+            "tests/counter.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "styling",
+      "question": "Select a Styling Solution?",
+      "unattended": "css",
+      "choices": [
+        {
+          "value": "css",
+          "label": "CSS",
+          "description": "Plain CSS — a small starter stylesheet"
+        },
+        {
+          "value": "tailwind",
+          "label": "Tailwind",
+          "description": "TailwindCSS v4, compiled by the toolchain",
+          "devDependencies": [
+            "tailwindcss"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "label": "Component Library",
+  "description": "An AFW component library — publishable components, esdev-tested",
+  "group": "AFW",
+  "run": "test",
+  "options": [
+    {
+      "name": "language",
+      "question": "Select a Language?",
+      "default": "js",
+      "choices": [
+        {
+          "value": "js",
+          "label": "JS",
+          "description": "JavaScript — .jsx source files"
+        },
+        {
+          "value": "ts",
+          "label": "TS",
+          "description": "TypeScript — .tsx source files and a tsconfig.json",
+          "devDependencies": [
+            "typescript"
+          ],
+          "scripts": [
+            {
+              "name": "typecheck",
+              "run": "esdev typecheck"
+            }
+          ],
+          "omit": [
+            "index.js",
+            "jsconfig.json",
+            "src/Counter.jsx",
+            "tests/counter.test.js"
+          ]
+        }
+      ]
+    }
+  ]
+}

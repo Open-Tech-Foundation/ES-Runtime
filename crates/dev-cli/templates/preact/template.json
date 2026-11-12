@@ -1,0 +1,26 @@
+{
+  "label": "Preact",
+  "description": "Preact on the DOM — React's API in three kilobytes. One dep",
+  "options": [
+    {
+      "name": "styling",
+      "question": "Select a Styling Solution?",
+      "unattended": "css",
+      "choices": [
+        {
+          "value": "css",
+          "label": "CSS",
+          "description": "Plain CSS — no framework, nothing to install"
+        },
+        {
+          "value": "tailwind",
+          "label": "Tailwind",
+          "description": "TailwindCSS v4, compiled by esdev",
+          "devDependencies": [
+            "tailwindcss"
+          ]
+        }
+      ]
+    }
+  ]
+}

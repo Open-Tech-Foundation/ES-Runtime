@@ -44,8 +44,10 @@
 //! leaving the user to delete half is how a starter ends up shipping a server
 //! nobody runs and a permission nobody needs.
 //!
-//! So a template directory may hold `_mode/<name>/`, and what gets written is
-//! everything outside `_mode/` plus one mode's files with that prefix stripped.
+//! A mode is one of the template's options (`mode`), and like every option its
+//! files live in `_option/mode/<name>/`: what gets written is everything
+//! outside `_option/` plus the chosen choices' overlays (D220, see
+//! [`crate::template`]).
 //! A mode may add files the shared part does not have (`src/server.tsx`), and
 //! may replace one it does (`package.json`, `esdev.json`, `README.md`) — the
 //! overlay wins, because that is what makes a mode able to say something
@@ -76,135 +78,127 @@ use es_runtime_default_providers::client::{HttpClient, Outbound};
 
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 
-/// The one-line descriptions `--list` prints.
+/// The templates `create` can write: each one's files and its manifest, and
+/// the catalog of groups some are chosen behind (D220).
 ///
-/// Beside the templates rather than inside them: a description is for somebody
-/// choosing, and what they are choosing between is only visible from here.
-const DESCRIPTIONS: &[(&str, &str)] = &[
-    (
-        "api",
-        "A JSON API — a hello-world server under a narrow grant. No deps",
-    ),
-    (
-        "hono",
-        "A Hono app — routes, validation and pages behind one server. One dep",
-    ),
-    (
-        "elysia",
-        "An Elysia app — typed routes and validation behind one server. One dep",
-    ),
-    (
-        "react",
-        "React — a static site, or an app with a server of its own",
-    ),
-    (
-        "lib",
-        "A publishable TypeScript package — .d.ts included, no runtime deps",
-    ),
-    (
-        "vanilla",
-        "TypeScript and the DOM — no framework, nothing it ships depends on",
-    ),
-    (
-        "micro-ui",
-        "Micro apps with Micro-UI — framework-free UI with a tiny reactive core",
-    ),
-    (
-        "preact",
-        "Preact on the DOM — React's API in three kilobytes. One dep",
-    ),
-    (
-        "lit",
-        "Lit web components — shadow DOM, client-rendered. One dep",
-    ),
-    (
-        "spa",
-        "An AFW single-page app — browser-only UI, static deploy, no server",
-    ),
-    (
-        "fullstack",
-        "An AFW fullstack app — loaders, API routes, SSR on demand",
-    ),
-    (
-        "docs",
-        "An AFW documentation site — MDX docs, sidebar, search, optional blog",
-    ),
-    (
-        "library",
-        "An AFW component library — publishable components, esdev-tested",
-    ),
-];
-
-/// Where a template keeps the files that belong to one mode and not the others.
-///
-/// A directory rather than a naming convention on each file, so a mode is
-/// something you can read by listing one directory — and so adding a file to a
-/// mode is putting it where the others are rather than remembering a suffix.
-const MODE_PREFIX: &str = "_mode/";
-
-/// The templates that come in more than one shape, and what the shapes are.
-///
-/// The first mode listed is the default: what `--mode` unsaid resolves to away
-/// from a terminal, and what the menu starts on when there is one. `static` is
-/// first for `react` deliberately — it is the one with nothing to deploy but
-/// files, so it is the smaller thing to be handed when nobody expressed a
-/// preference.
-const MODES: &[(&str, &[(&str, &str)])] = &[(
-    "react",
-    &[
-        (
-            "static",
-            "No server — prerendered HTML or a single-page app, on any static host",
-        ),
-        (
-            "fullstack",
-            "A server of its own — rendered per request, under named capabilities",
-        ),
-    ],
-)];
-
-/// The modes a template has, or `None` when it has one shape.
-fn modes(template: &str) -> Option<&'static [(&'static str, &'static str)]> {
-    MODES
-        .iter()
-        .find(|(name, _)| *name == template)
-        .map(|(_, modes)| *modes)
+/// Read from what is embedded, once; every manifest is validated when it is
+/// read, and a test reads them all, so a broken one fails the build's tests
+/// rather than somebody's `create`.
+pub(crate) struct Library {
+    templates: Vec<Entry>,
+    catalog: crate::template::Catalog,
 }
 
-/// The mode taken when nothing said and nobody was asked.
-fn default_mode(template: &str) -> Option<&'static str> {
-    modes(template)
-        .and_then(|modes| modes.first())
-        .map(|(name, _)| *name)
+/// One template: its name, its files (manifest and overlays included) and
+/// what its manifest says.
+pub(crate) struct Entry {
+    name: &'static str,
+    files: Vec<(&'static str, &'static [u8])>,
+    manifest: crate::template::Manifest,
 }
 
-/// The files one mode of a template is written from.
-///
-/// Everything outside `_mode/`, plus the chosen mode's files with the prefix
-/// stripped. The overlay is applied second and wins, so a mode can replace a
-/// shared file as well as add one.
-fn files_for<'a>(files: &'a [TemplateFile], mode: Option<&str>) -> Vec<(String, &'a [u8])> {
-    let overlay = mode.map(|mode| format!("{MODE_PREFIX}{mode}/"));
-    let mut written: Vec<(String, &[u8])> = Vec::new();
-
-    for (path, contents) in files {
-        let path = match path.strip_prefix(MODE_PREFIX) {
-            // A mode's file, for whichever mode. It is written only if it is
-            // this one's, and then under the path it has inside the mode.
-            Some(_) => match overlay.as_ref().and_then(|p| path.strip_prefix(p.as_str())) {
-                Some(within) => within.to_string(),
-                None => continue,
-            },
-            None => (*path).to_string(),
-        };
-        match written.iter_mut().find(|(existing, _)| *existing == path) {
-            Some(entry) => entry.1 = contents,
-            None => written.push((path, contents)),
+impl Library {
+    /// The templates built into this binary.
+    fn embedded() -> Result<Library, String> {
+        let mut templates = Vec::with_capacity(TEMPLATES.len());
+        for (name, files) in TEMPLATES {
+            let files: Vec<(&'static str, &'static [u8])> = files.to_vec();
+            let manifest = crate::template::manifest(name, &files)?;
+            templates.push(Entry {
+                name,
+                files,
+                manifest,
+            });
         }
+        let catalog: crate::template::Catalog =
+            serde_json::from_slice(CATALOG).map_err(|e| format!("catalog.json: {e}"))?;
+        for group in &catalog.groups {
+            if templates.iter().any(|entry| entry.name == group.name) {
+                return Err(format!("catalog.json: {} is a template's name", group.name));
+            }
+            for member in &group.templates {
+                let entry = templates
+                    .iter()
+                    .find(|entry| entry.name == member)
+                    .ok_or_else(|| {
+                        format!("catalog.json: {} has no template {member}", group.name)
+                    })?;
+                if entry.manifest.group.as_deref() != Some(group.name.as_str()) {
+                    return Err(format!(
+                        "catalog.json: {member} is in {}, and its template.json does not say so",
+                        group.name
+                    ));
+                }
+            }
+        }
+        for entry in &templates {
+            if let Some(group) = &entry.manifest.group
+                && !catalog
+                    .groups
+                    .iter()
+                    .any(|g| &g.name == group && g.templates.iter().any(|t| t == entry.name))
+            {
+                return Err(format!(
+                    "the {} template names the group {group}, which does not list it",
+                    entry.name
+                ));
+            }
+        }
+        Ok(Library { templates, catalog })
     }
 
-    written.sort_by(|a, b| a.0.cmp(&b.0));
-    written
+    fn get(&self, name: &str) -> Option<&Entry> {
+        self.templates.iter().find(|entry| entry.name == name)
+    }
+}
+
+/// The embedded library, read once.
+fn library() -> &'static Library {
+    static LIBRARY: std::sync::OnceLock<Library> = std::sync::OnceLock::new();
+    LIBRARY.get_or_init(|| {
+        Library::embedded().unwrap_or_else(|e| {
+            panic!("the embedded templates are invalid — `the_embedded_templates_are_valid` says so: {e}")
+        })
+    })
+}
+
+impl Entry {
+    /// The option called `name`, if this template asks it.
+    fn option(&self, name: &str) -> Option<&crate::template::OptionSpec> {
+        self.manifest
+            .options
+            .iter()
+            .find(|option| option.name == name)
+    }
+
+    /// Every option at its fallback, except those `overrides` names.
+    fn answers(&self, overrides: &[(&str, &str)]) -> Vec<(String, String)> {
+        self.manifest
+            .options
+            .iter()
+            .map(|option| {
+                let value = overrides
+                    .iter()
+                    .find(|(name, _)| *name == option.name)
+                    .map_or(option.fallback(), |(_, value)| *value);
+                (option.name.clone(), value.to_string())
+            })
+            .collect()
+    }
+
+    /// The files written for `answers`.
+    fn files(&self, answers: &[(String, String)]) -> Result<Vec<(String, Vec<u8>)>, String> {
+        crate::template::assemble(&self.files, &self.manifest, answers)
+    }
+}
+
+/// An option named on the command line: `--<name>=<value>`, `--<name>` (yes)
+/// or `--no-<name>` (no), as it was spelled, for the message that refuses it.
+#[derive(Debug, Clone)]
+pub struct OptionFlag {
+    pub name: String,
+    pub value: String,
+    pub spelled: String,
 }
 
 /// A file whose name in the template is not the name it is written under.
@@ -223,19 +217,11 @@ pub struct CreateConfig {
     /// Which template, or `None` to ask. There is no default: an unattended
     /// run without `--template` is refused rather than guessed.
     pub template: Option<String>,
-    /// Which mode of that template, or `None` to ask (or take the default).
-    /// Meaningless — and refused — for a template that has only one shape.
-    pub mode: Option<String>,
-    /// Which language an AFW template scaffolds, or `None` to ask (or take
-    /// the default). Meaningless — and refused — for other templates.
-    pub language: Option<String>,
-    /// Plain CSS or Tailwind, or `None` to ask (or take the default). Taken
-    /// by the templates with a page to style — `react`, `vanilla`, `micro-ui`,
-    /// `preact`, `lit`, `spa` and `fullstack` ([`stylings`]); refused everywhere else.
-    pub styling: Option<String>,
-    /// Whether the `docs` template has a blog, or `None` to ask
-    /// (or take the default). Refused for every other template.
-    pub blog: Option<bool>,
+    /// The template's options named on the command line, in order; a later
+    /// one wins. One the template does not ask is refused rather than
+    /// ignored: a flag that silently does nothing is one somebody keeps
+    /// passing, and keeps believing.
+    pub options: Vec<OptionFlag>,
     /// Whether to write into a directory that already holds something.
     pub force: bool,
     /// Which package manager the project uses, or `None` to ask (or take
@@ -277,21 +263,33 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
             return Err(unknown_manager(named));
         }
     }
+    let library = library();
     let mut answers = Answers::default();
     if let Some(named) = &config.template {
         answers.template = Some(named.clone());
     }
-    // Steps that showed a menu, in order. Esc steps back to the nearest one
-    // before the current step; a step answered by a flag never appears here,
-    // so the retreat skips it — and with no prompted step behind, Esc cancels.
+    // Steps that showed a menu. Esc steps back to the nearest one before the
+    // current step; a step answered by a flag never appears here, so the
+    // retreat skips it — and with no prompted step behind, Esc cancels.
     let mut prompted: Vec<Step> = Vec::new();
     let mut step = 0;
-    while step < STEPS.len() {
+    loop {
+        // The questions after the template are that template's own, so the
+        // list is rebuilt whenever the template may have changed.
+        let entry = answers
+            .template
+            .as_deref()
+            .and_then(|name| library.get(name));
+        let steps = steps_for(entry);
+        if step >= steps.len() {
+            break;
+        }
         let ask = Ask {
             scripted,
-            back: STEPS[..step].iter().any(|s| prompted.contains(s)),
+            back: steps[..step].iter().any(|s| prompted.contains(s)),
         };
-        match STEPS[step] {
+        let current = steps[step];
+        match current {
             Step::Template => {
                 if answers.template.is_none() {
                     if scripted {
@@ -303,10 +301,10 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                             list().trim_end()
                         ));
                     } else {
-                        match ask_template() {
+                        match ask_template(library) {
                             Some(template) => {
                                 answers.template = Some(template);
-                                prompted.push(Step::Template);
+                                prompt_once(&mut prompted, Step::Template);
                             }
                             // Esc on the first question, before anything has
                             // been written. Nothing to undo, nothing to
@@ -317,116 +315,34 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                     }
                 }
                 let template = answers.template.as_deref().expect("answered above");
-                if TEMPLATES.iter().all(|(name, _)| *name != template) {
+                let Some(entry) = library.get(template) else {
                     return Err(format!(
                         "there is no {template} template.\n\n{}",
                         list().trim_end()
                     ));
-                }
+                };
+                refuse_foreign_options(library, entry, &config.options)?;
+                answers.options = vec![None; entry.manifest.options.len()];
                 step += 1;
             }
-            Step::Mode => {
-                let template = answers.template.as_deref().expect("template first");
-                match resolve_mode(template, config.mode.as_deref(), ask)? {
-                    Mode::Chosen(mode) => {
-                        answers.mode = Some(mode);
-                        if config.mode.is_none() && !scripted {
-                            prompted.push(Step::Mode);
+            Step::Option(index) => {
+                let entry = entry.expect("the template step resolves it");
+                let option = &entry.manifest.options[index];
+                let asked = config
+                    .options
+                    .iter()
+                    .rev()
+                    .find(|flag| flag.name == option.name)
+                    .map(|flag| flag.value.as_str());
+                match resolve_option(entry.name, option, asked, ask)? {
+                    Some(value) => {
+                        answers.options[index] = Some(value);
+                        if asked.is_none() && !scripted {
+                            prompt_once(&mut prompted, current);
                         }
                         step += 1;
                     }
-                    Mode::None => {
-                        answers.mode = None;
-                        step += 1;
-                    }
-                    Mode::Back => match step_back_index(Step::Mode, &prompted) {
-                        Some(index) => step = index,
-                        None => return Ok(String::new()),
-                    },
-                }
-            }
-            Step::Language => {
-                let template = answers.template.as_deref().expect("template first");
-                match resolve_choice(
-                    template,
-                    "language",
-                    "language",
-                    is_afw(template),
-                    LANGUAGES,
-                    Fallback::Preselected(DEFAULT_LANGUAGE),
-                    config.language.as_deref(),
-                    "Select a Language?",
-                    ask,
-                )? {
-                    Choice::Chosen(language) => {
-                        answers.language = Some(language);
-                        if config.language.is_none() && !scripted {
-                            prompted.push(Step::Language);
-                        }
-                        step += 1;
-                    }
-                    Choice::NotApplicable => {
-                        answers.language = None;
-                        step += 1;
-                    }
-                    Choice::Back => match step_back_index(Step::Language, &prompted) {
-                        Some(index) => step = index,
-                        None => return Ok(String::new()),
-                    },
-                }
-            }
-            Step::Styling => {
-                let template = answers.template.as_deref().expect("template first");
-                match resolve_choice(
-                    template,
-                    "styling",
-                    "styling",
-                    stylings(template).is_some(),
-                    stylings(template).unwrap_or(STYLINGS),
-                    Fallback::Unasked(UNSTYLED),
-                    config.styling.as_deref(),
-                    "Select a Styling Solution?",
-                    ask,
-                )? {
-                    Choice::Chosen(styling) => {
-                        answers.styling = Some(styling);
-                        if config.styling.is_none() && !scripted {
-                            prompted.push(Step::Styling);
-                        }
-                        step += 1;
-                    }
-                    Choice::NotApplicable => {
-                        answers.styling = None;
-                        step += 1;
-                    }
-                    Choice::Back => match step_back_index(Step::Styling, &prompted) {
-                        Some(index) => step = index,
-                        None => return Ok(String::new()),
-                    },
-                }
-            }
-            Step::Blog => {
-                let template = answers.template.as_deref().expect("template first");
-                match resolve_blog(template, config.blog, ask)? {
-                    Blog::On => {
-                        answers.blog = Some(true);
-                        if config.blog.is_none() && !scripted {
-                            prompted.push(Step::Blog);
-                        }
-                        step += 1;
-                    }
-                    Blog::Off => {
-                        answers.blog = Some(false);
-                        if config.blog.is_none() && !scripted {
-                            prompted.push(Step::Blog);
-                        }
-                        step += 1;
-                    }
-                    Blog::NotApplicable => {
-                        answers.blog = None;
-                        step += 1;
-                    }
-                    Blog::Back => match step_back_index(Step::Blog, &prompted) {
+                    None => match step_back_index(&steps, step, &prompted) {
                         Some(index) => step = index,
                         None => return Ok(String::new()),
                     },
@@ -436,11 +352,11 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                 ManagerChoice::Chosen(manager) => {
                     answers.manager = Some(manager);
                     if config.manager.is_none() && !scripted {
-                        prompted.push(Step::Manager);
+                        prompt_once(&mut prompted, Step::Manager);
                     }
                     step += 1;
                 }
-                ManagerChoice::Back => match step_back_index(Step::Manager, &prompted) {
+                ManagerChoice::Back => match step_back_index(&steps, step, &prompted) {
                     Some(index) => step = index,
                     None => return Ok(String::new()),
                 },
@@ -448,7 +364,18 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         }
     }
     let template = answers.template.expect("the loop answers it");
-    let mode = answers.mode;
+    let entry = library.get(&template).expect("validated in the loop");
+    let chosen: Vec<(String, String)> = entry
+        .manifest
+        .options
+        .iter()
+        .zip(answers.options)
+        .map(|(option, value)| (option.name.clone(), value.expect("the loop answers it")))
+        .collect();
+    let mode = chosen
+        .iter()
+        .find(|(name, _)| name == "mode")
+        .map(|(_, value)| value.clone());
     // A flag that names the installer names the project's manager too:
     // installing with bun means the docs name bun. Validated here, before
     // anything is written, so an unknown name fails with no directory behind.
@@ -462,38 +389,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
         Some(manager) => manager.name.to_string(),
         None => answers.manager.expect("the loop answers it"),
     };
-    let tailwind = answers.styling.as_deref() == Some("tailwind");
-    let afw = match answers.language {
-        Some(language) => Some(Afw {
-            language,
-            styling: answers.styling,
-            blog: answers.blog,
-        }),
-        None => None,
-    };
-
-    let files = TEMPLATES
-        .iter()
-        .find(|(name, _)| *name == template)
-        .map(|(_, files)| *files)
-        .expect("validated above");
-    let files = files_for(files, mode.as_deref());
-    // AFW answers rewrite the file list — renames, patches, added and
-    // withheld files — so from here the list is owned either way.
-    let files: Vec<(String, Vec<u8>)> = match &afw {
-        Some(afw) => apply_afw(&template, afw, &files),
-        None => {
-            let files = files
-                .into_iter()
-                .map(|(path, contents)| (path, contents.to_vec()))
-                .collect();
-            if tailwind {
-                apply_tailwind(files)
-            } else {
-                files
-            }
-        }
-    };
+    let files = entry.files(&chosen)?;
 
     let target = PathBuf::from(&config.dir);
     if target.is_file() {
@@ -624,7 +520,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
 
     report.push_str(&next_steps(
         &config.dir,
-        &template,
+        &entry.manifest.run,
         installed,
         &manager,
         paint,
@@ -637,17 +533,13 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
 /// The lines printed after the project is written.
 fn next_steps(
     dir: &str,
-    template: &str,
+    // The script that starts it, which is not the same for every template:
+    // a library has nothing to run. The manifest's `run`.
+    run: &str,
     installed: Option<crate::install::Manager>,
     manager: &str,
     paint: crate::style::Palette,
 ) -> String {
-    // The command that actually starts it, which is not the same for every
-    // template: a library has nothing to run.
-    let run = match template {
-        "lib" | "library" => "test",
-        _ => "dev",
-    };
     // What installed is what runs: only a project nobody installed names the
     // chosen-or-default manager instead.
     let manager = installed.map_or(manager, |m| m.name);
@@ -667,36 +559,38 @@ fn next_steps(
     steps
 }
 
-/// The pre-write questions, in order. Which of them appear depends on the
-/// answers so far — a modeless template has no mode, a non-AFW one no axes.
+/// One pre-write question: the template, one of its options, or the manager.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Step {
     Template,
-    Mode,
-    Language,
-    Styling,
-    Blog,
+    /// The template's option at this index in its manifest.
+    Option(usize),
     Manager,
 }
 
-const STEPS: &[Step] = &[
-    Step::Template,
-    Step::Mode,
-    Step::Language,
-    Step::Styling,
-    Step::Blog,
-    Step::Manager,
-];
+/// The questions in order, for the template chosen so far: before one is,
+/// only the template and the manager.
+fn steps_for(entry: Option<&Entry>) -> Vec<Step> {
+    let mut steps = vec![Step::Template];
+    if let Some(entry) = entry {
+        steps.extend((0..entry.manifest.options.len()).map(Step::Option));
+    }
+    steps.push(Step::Manager);
+    steps
+}
+
+fn prompt_once(prompted: &mut Vec<Step>, step: Step) {
+    if !prompted.contains(&step) {
+        prompted.push(step);
+    }
+}
 
 /// The nearest earlier step that showed a menu, or `None` when Esc cancels.
 /// Pure, so the retreat rule tests without a terminal.
-fn step_back_index(current: Step, prompted: &[Step]) -> Option<usize> {
-    let position = STEPS.iter().position(|step| *step == current)?;
-    prompted
-        .iter()
+fn step_back_index(steps: &[Step], current: usize, prompted: &[Step]) -> Option<usize> {
+    (0..current.min(steps.len()))
         .rev()
-        .filter_map(|step| STEPS.iter().position(|s| *s == *step))
-        .find(|index| *index < position)
+        .find(|&index| prompted.contains(&steps[index]))
 }
 
 /// The answers so far. Every forward pass overwrites each one, so switching
@@ -704,10 +598,8 @@ fn step_back_index(current: Step, prompted: &[Step]) -> Option<usize> {
 #[derive(Default)]
 struct Answers {
     template: Option<String>,
-    mode: Option<String>,
-    language: Option<String>,
-    styling: Option<String>,
-    blog: Option<bool>,
+    /// One per option of the template, in manifest order.
+    options: Vec<Option<String>>,
     manager: Option<String>,
 }
 
@@ -732,326 +624,88 @@ impl Ask {
     }
 }
 
-/// What resolving `--mode` came to.
-enum Mode {
-    /// This template has modes, and this is the one.
-    Chosen(String),
-    /// This template has one shape.
-    None,
-    /// Esc: back to the question before, or out if there is none.
-    Back,
-}
-
-/// The mode to write, from the flag, a question, or the default.
-///
-/// Naming a mode for a template that has none is refused rather than ignored: a
-/// flag that silently does nothing is one somebody will keep passing, and keep
-/// believing.
-fn resolve_mode(template: &str, asked_for: Option<&str>, ask: Ask) -> Result<Mode, String> {
-    let Some(modes) = modes(template) else {
-        return match asked_for {
-            Some(mode) => Err(format!(
-                "the {template} template has no modes, so --mode={mode} means nothing here.\n\n\
-                 Modes exist where one template is really two projects; {}.",
-                what_has_modes()
-            )),
-            None => Ok(Mode::None),
-        };
+/// An option flag the chosen template does not ask is refused before
+/// anything is asked or written, naming the templates that do ask it.
+fn refuse_foreign_options(
+    library: &Library,
+    entry: &Entry,
+    flags: &[OptionFlag],
+) -> Result<(), String> {
+    let Some(flag) = flags.iter().find(|flag| entry.option(&flag.name).is_none()) else {
+        return Ok(());
     };
-
-    if let Some(mode) = asked_for {
-        if !modes.iter().any(|(name, _)| *name == mode) {
-            return Err(format!(
-                "the {template} template has no {mode} mode.\n\n{}",
-                describe_modes(template).trim_end()
-            ));
-        }
-        return Ok(Mode::Chosen(mode.to_string()));
-    }
-
-    if ask.scripted || !crate::prompt::interactive() {
-        return Ok(Mode::Chosen(
-            default_mode(template)
-                .expect("a template with modes has a default")
-                .to_string(),
-        ));
-    }
-
-    let choices: Vec<crate::prompt::Choice<'_>> = modes
+    let having: Vec<&str> = library
+        .templates
         .iter()
-        .map(|(name, description)| crate::prompt::Choice {
-            name,
-            label: display_name(name),
-            description,
-            disabled: false,
-        })
+        .filter(|other| other.option(&flag.name).is_some())
+        .map(|other| other.name)
         .collect();
-    match crate::prompt::select("Which Mode?", &choices, Some(0), ask.esc()) {
-        Some(chosen) => Ok(Mode::Chosen(choices[chosen].name.to_string())),
-        None => Ok(Mode::Back),
-    }
-}
-
-/// The templates that have modes, for an error message that has to name them.
-fn what_has_modes() -> String {
-    let names: Vec<&str> = MODES.iter().map(|(name, _)| *name).collect();
-    match names.as_slice() {
-        [] => "no template here has any".to_string(),
-        [one] => format!("only {one} does"),
-        many => format!("{} do", many.join(", ")),
-    }
-}
-
-/// One template's modes, as a list somebody can choose from.
-fn describe_modes(template: &str) -> String {
-    let Some(modes) = modes(template) else {
-        return String::new();
+    let elsewhere = match having.as_slice() {
+        [] => format!(
+            "No template has a {} option; `esdev create --help` lists create's own flags.",
+            flag.name
+        ),
+        [one] => format!("Only {one} does."),
+        many => format!("{} do.", many.join(", ")),
     };
-    let width = modes.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
-    let mut report = format!("Modes of {template}:\n");
-    for (name, description) in modes {
-        report.push_str(&format!("  {name:<width$}  {description}\n"));
-    }
-    report
+    Err(format!(
+        "the {} template has no {}, so {} means nothing here.\n\n{elsewhere}",
+        entry.name, flag.name, flag.spelled
+    ))
 }
 
-/// The templates that come from the AFW starter set rather than from this
-/// repository's own stack. They build through `@opentf/esdev-plugin-afw`
-/// named in their `esdev.json`, and they take extra axes (language, styling,
-/// blog), which the shared template → mode → install flow does not have.
-const AFW_TEMPLATES: &[&str] = &["spa", "fullstack", "docs", "library"];
-
-fn is_afw(template: &str) -> bool {
-    AFW_TEMPLATES.contains(&template)
-}
-
-/// The languages an AFW template scaffolds. The starters are JavaScript and
-/// convert to TypeScript on request; the embedded files are the JavaScript
-/// half, and the conversion is re-applied here rather than embedded twice.
-const LANGUAGES: &[(&str, &str)] = &[
-    ("js", "JavaScript — .jsx source files"),
-    ("ts", "TypeScript — .tsx source files and a tsconfig.json"),
-];
-
-/// The menu starts on JavaScript, the language the starters are written in.
-const DEFAULT_LANGUAGE: &str = "js";
-
-/// The stylesheets an AFW app template offers. Only `spa` and `fullstack`
-/// ship `app/global.css` (`docs` is always Tailwind, a library has no
-/// styles), so only they ask. Tailwind is a one-line prepend — the toolchain
-/// compiles it — and a dependency, not a second project.
-const STYLINGS: &[(&str, &str)] = &[
-    ("css", "Plain CSS — a small starter stylesheet"),
-    ("tailwind", "TailwindCSS v4, compiled by the toolchain"),
-];
-
-/// What an unattended run without `--styling` writes: the template as it
-/// is, with nothing added.
+/// One option's answer, from the flag, a question, or its fallback. `None`
+/// is Esc: back to the question before, or out if there is none.
 ///
-/// **Styling has no default.** A framework is a dependency the project will
-/// carry, and choosing one is the person's call, so the menu starts on
-/// nothing and has to be answered. Only a run nobody can ask falls back — and
-/// it falls back to adding nothing, not to a framework.
-const UNSTYLED: &str = "css";
-
-/// This repository's own templates that have a page to style. Each ships a
-/// plain `src/styles.css` linked from its `index.html`, so the page shows the
-/// CSS pipeline — bundled by esdev, swapped without reload in the dev loop —
-/// with nothing to install. Tailwind replaces that stylesheet's contents with
-/// its import and adds the dependency that provides it.
-const ESDEV_STYLED: &[&str] = &["react", "vanilla", "micro-ui", "preact", "lit"];
-
-const ESDEV_STYLINGS: &[(&str, &str)] = &[
-    ("css", "Plain CSS — no framework, nothing to install"),
-    ("tailwind", "TailwindCSS v4, compiled by esdev"),
-];
-
-/// The styling choices a template offers, or `None` for one that takes no
-/// styling.
-fn stylings(template: &str) -> Option<&'static [(&'static str, &'static str)]> {
-    if template == "spa" || template == "fullstack" {
-        Some(STYLINGS)
-    } else if ESDEV_STYLED.contains(&template) {
-        Some(ESDEV_STYLINGS)
-    } else {
-        None
-    }
-}
-
-/// Where the Tailwind choice puts its stylesheet in one of [`ESDEV_STYLED`].
-const TAILWIND_STYLESHEET: &str = "src/styles.css";
-
-/// Tailwind for one of this repository's own templates: the shared
-/// stylesheet's contents become its import, and the dependency that provides
-/// it is declared. esdev compiles it (D135); nothing else is configured.
-///
-/// The `<link>` is already in `index.html`, which every one of them builds
-/// from — the `react` modes included, since both render into it — so the
-/// stylesheet is part of the build rather than an import some module has to
-/// remember. Replacing in place, rather than adding beside, is what keeps the
-/// scaffold one stylesheet: a Tailwind project with a plain one beside it
-/// would ship two looks and build neither cleanly.
-fn apply_tailwind(mut files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
-    for (path, bytes) in &mut files {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            continue;
-        };
-        let patched = match path.as_str() {
-            "index.html" if !text.contains(&format!("./{TAILWIND_STYLESHEET}")) => text.replacen(
-                "    <script type=\"module\"",
-                &format!(
-                    "    <link rel=\"stylesheet\" href=\"./{TAILWIND_STYLESHEET}\" />\n    <script type=\"module\""
-                ),
-                1,
-            ),
-            "package.json" => patch_tailwind_dep(text),
-            _ => continue,
-        };
-        *bytes = patched.into_bytes();
-    }
-    match files
-        .iter_mut()
-        .find(|(path, _)| path == TAILWIND_STYLESHEET)
-    {
-        Some((_, bytes)) => *bytes = b"@import \"tailwindcss\";\n".to_vec(),
-        None => files.push((
-            TAILWIND_STYLESHEET.to_string(),
-            b"@import \"tailwindcss\";\n".to_vec(),
-        )),
-    }
-    files
-}
-
-/// Whether the `docs` template has a blog when nobody said. No, as in
-/// create-afw: a docs site is docs, and a blog is something to ask for. The
-/// embedded files are the blog-on-disk state with the config and page
-/// unpatched, so "no" only withholds files and "yes" patches two.
-const DEFAULT_BLOG: bool = false;
-
-/// What an axis falls back to when its flag is absent.
-#[derive(Clone, Copy)]
-enum Fallback {
-    /// A default in the ordinary sense: the menu starts on it, and a run
-    /// nobody can ask takes it.
-    Preselected(&'static str),
-    /// No default: the menu starts on nothing and must be answered. A run
-    /// nobody can ask still needs an answer, and takes this one.
-    Unasked(&'static str),
-}
-
-impl Fallback {
-    fn value(self) -> &'static str {
-        match self {
-            Fallback::Preselected(value) | Fallback::Unasked(value) => value,
-        }
-    }
-}
-
-/// What resolving one named choice came to. `NotApplicable` is a template
-/// that does not take this axis at all.
-#[derive(Debug)]
-enum Choice {
-    Chosen(String),
-    NotApplicable,
-    Back,
-}
-
-/// Flag, question, or default — the same precedence the mode uses, for an
-/// axis only some templates take.
-///
-/// Naming one for a template that does not take it is refused rather than
-/// ignored, for the same reason a stray `--mode` is: a flag that silently
-/// does nothing is one somebody keeps passing, and keeps believing.
-#[allow(clippy::too_many_arguments)]
-fn resolve_choice(
+/// A value that is not one of the option's choices is refused with the
+/// values that are.
+fn resolve_option(
     template: &str,
-    axis: &str,
-    flag: &str,
-    takes: bool,
-    options: &[(&'static str, &'static str)],
-    default: Fallback,
+    option: &crate::template::OptionSpec,
     asked_for: Option<&str>,
-    question: &str,
     ask: Ask,
-) -> Result<Choice, String> {
-    if !takes {
-        return match asked_for {
-            Some(value) => Err(format!(
-                "the {template} template has no {axis}, so --{flag}={value} means nothing here."
-            )),
-            None => Ok(Choice::NotApplicable),
-        };
-    }
+) -> Result<Option<String>, String> {
     if let Some(value) = asked_for {
-        if !options.iter().any(|(name, _)| *name == value) {
-            let valid: Vec<&str> = options.iter().map(|(name, _)| *name).collect();
+        if option.choice(value).is_none() {
+            let valid: Vec<&str> = option.choices.iter().map(|c| c.value.as_str()).collect();
             return Err(format!(
-                "the {template} template has no {axis} {value}.\n\nValid {axis}s: {}.",
+                "the {template} template has no {} {value}.\n\nValid {}s: {}.",
+                option.name,
+                option.name,
                 valid.join(", ")
             ));
         }
-        return Ok(Choice::Chosen(value.to_string()));
+        return Ok(Some(value.to_string()));
     }
     if ask.scripted || !crate::prompt::interactive() {
-        return Ok(Choice::Chosen(default.value().to_string()));
+        return Ok(Some(option.fallback().to_string()));
     }
-    let choices: Vec<crate::prompt::Choice<'_>> = options
+    if option.kind == crate::template::Kind::Confirm {
+        return Ok(
+            crate::prompt::confirm(&option.question, option.fallback() == "yes", ask.esc())
+                .map(|yes| if yes { "yes" } else { "no" }.to_string()),
+        );
+    }
+    let choices: Vec<crate::prompt::Choice<'_>> = option
+        .choices
         .iter()
-        .map(|(name, description)| crate::prompt::Choice {
-            name,
-            label: display_name(name),
-            description,
+        .map(|choice| crate::prompt::Choice {
+            name: &choice.value,
+            label: &choice.label,
+            description: &choice.description,
             disabled: false,
         })
         .collect();
-    // An axis with a real default starts the menu on it; one without starts
-    // on nothing, so Enter alone cannot answer it.
-    let preselect = match default {
-        Fallback::Preselected(value) => choices.iter().position(|choice| choice.name == value),
-        Fallback::Unasked(_) => None,
-    };
-    match crate::prompt::select(question, &choices, preselect, ask.esc()) {
-        Some(chosen) => Ok(Choice::Chosen(choices[chosen].name.to_string())),
-        None => Ok(Choice::Back),
-    }
-}
-
-/// Whether the `docs` template keeps its demo blog, resolved.
-#[derive(Debug)]
-enum Blog {
-    On,
-    Off,
-    NotApplicable,
-    Back,
-}
-
-/// The blog is a yes/no rather than a named choice, but the shape is the
-/// same: flags, a question, a default — and refused outside `docs`.
-fn resolve_blog(template: &str, asked_for: Option<bool>, ask: Ask) -> Result<Blog, String> {
-    if template != "docs" {
-        return match asked_for {
-            Some(_) => Err(format!(
-                "only the docs template has a blog, so --blog means nothing for {template}."
-            )),
-            None => Ok(Blog::NotApplicable),
-        };
-    }
-    if let Some(on) = asked_for {
-        return Ok(if on { Blog::On } else { Blog::Off });
-    }
-    if ask.scripted || !crate::prompt::interactive() {
-        return Ok(if DEFAULT_BLOG { Blog::On } else { Blog::Off });
-    }
-    // Worded as create-afw asks it, so the two scaffolders read the same.
-    match crate::prompt::confirm(
-        "Add a blog? (posts with RSS and Atom feeds)",
-        DEFAULT_BLOG,
-        ask.esc(),
-    ) {
-        Some(true) => Ok(Blog::On),
-        Some(false) => Ok(Blog::Off),
-        None => Ok(Blog::Back),
-    }
+    // An option with a default starts the menu on it; one without starts on
+    // nothing, so Enter alone cannot answer it (D135).
+    let preselect = option
+        .default
+        .as_deref()
+        .and_then(|value| choices.iter().position(|choice| choice.name == value));
+    Ok(
+        crate::prompt::select(&option.question, &choices, preselect, ask.esc())
+            .map(|chosen| choices[chosen].name.to_string()),
+    )
 }
 
 /// What resolving `--package-manager` came to.
@@ -1185,532 +839,77 @@ fn manager_menu(esc: crate::prompt::OnEsc) -> Option<&'static str> {
     entries.get(chosen).map(|entry| entry.name)
 }
 
-/// The extra answers an AFW template resolved to. `None` fields are axes
-/// the template does not take.
-#[derive(Debug)]
-struct Afw {
-    language: String,
-    styling: Option<String>,
-    blog: Option<bool>,
-}
-
-/// Applies the AFW answers to the embedded files: renames, patches, added
-/// and withheld files: the TypeScript conversion, the docs blog and the
-/// Tailwind prepend, applied to embedded bytes rather than to a directory — the transforms are deterministic over file contents,
-/// so they unit-test without touching the filesystem.
-fn apply_afw(template: &str, afw: &Afw, files: &[(String, &[u8])]) -> Vec<(String, Vec<u8>)> {
-    let ts = afw.language == "ts";
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    for (path, contents) in files {
-        // The demo blog is files on disk plus two patches: withholding it is
-        // withholding the files, and nothing else.
-        if template == "docs" && afw.blog == Some(false) && path.starts_with("app/blog/") {
-            continue;
-        }
-        if ts && path == "jsconfig.json" {
-            continue;
-        }
-        let mut new_path = path.clone();
-        let mut bytes = (*contents).to_vec();
-        if ts {
-            if let Some(renamed) = afw_rename(&new_path) {
-                new_path = renamed;
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    let renamed_base = new_path.rsplit('/').next().unwrap_or(&new_path).to_string();
-                    bytes = afw_patch_source(template, &renamed_base, text).into_bytes();
-                }
-            } else if template == "library" && new_path == "index.js" {
-                new_path = "index.ts".to_string();
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = afw_patch_source(template, "index.ts", text).into_bytes();
-                }
-            } else if new_path == "README.md" {
-                // READMEs name the file to edit; TypeScript renames it.
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = afw_patch_source(template, "README.md", text).into_bytes();
-                }
-            } else if new_path.starts_with("tests/") {
-                // A test helper the renames leave alone still imports
-                // sources that moved: its imports follow them too.
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    bytes = afw_patch_source(template, "test.js", text).into_bytes();
-                }
-            }
-        }
-        if afw.styling.as_deref() == Some("tailwind")
-            && new_path == "app/global.css"
-            && let Ok(text) = std::str::from_utf8(&bytes)
-        {
-            bytes = format!("{AFW_TAILWIND_IMPORT}{text}").into_bytes();
-        }
-        if template == "docs" && afw.blog == Some(true) {
-            if new_path == "afw.config.js"
-                && let Ok(text) = std::str::from_utf8(&bytes)
-            {
-                bytes = afw_patch_blog_config(text).into_bytes();
-            } else if new_path == "app/docs/page.mdx"
-                && let Ok(text) = std::str::from_utf8(&bytes)
-            {
-                bytes = afw_patch_blog_page(text).into_bytes();
-            }
-        }
-        // Without the demo blog there is nothing to index: the docs build
-        // drops the blog posts plugin alongside `app/blog/`.
-        if template == "docs"
-            && afw.blog == Some(false)
-            && new_path == "esdev.json"
-            && let Ok(text) = std::str::from_utf8(&bytes)
-        {
-            bytes = afw_patch_docs_esdev(text).into_bytes();
-        }
-        if template == "library"
-            && ts
-            && new_path == "package.json"
-            && let Ok(text) = std::str::from_utf8(&bytes)
-        {
-            bytes = afw_patch_library_manifest(text).into_bytes();
-        }
-        // Tailwind is an `@import` the project resolves, so the project has
-        // to depend on it: relying on npm hoisting to find the toolchain's copy
-        // fails under a strict `node_modules` layout. `docs` always imports it; apps only on the
-        // Tailwind styling.
-        if new_path == "package.json"
-            && (template == "docs" || afw.styling.as_deref() == Some("tailwind"))
-            && let Ok(text) = std::str::from_utf8(&bytes)
-        {
-            bytes = patch_tailwind_dep(text).into_bytes();
-        }
-        // The generated `tsconfig.json` needs something to act on it — the
-        // same compiler dependency and `typecheck` script the esdev-native
-        // templates carry in their own manifests. JavaScript mode keeps
-        // `jsconfig.json` and gains neither.
-        if ts
-            && new_path == "package.json"
-            && let Ok(text) = std::str::from_utf8(&bytes)
-        {
-            bytes = afw_patch_typescript(text).into_bytes();
-        }
-        // The overlay wins, same as modes: a generated file replaces an
-        // embedded one rather than being written beside it.
-        match out.iter_mut().find(|(existing, _)| *existing == new_path) {
-            Some(entry) => entry.1 = bytes,
-            None => out.push((new_path, bytes)),
-        }
-    }
-    if ts {
-        for (path, contents) in afw_typescript_files(template) {
-            match out.iter_mut().find(|(existing, _)| *existing == path) {
-                Some(entry) => entry.1 = contents,
-                None => out.push((path, contents)),
-            }
-        }
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
-/// The TypeScript renames: `.jsx` sources, the test
-/// files that import them, and the server files the toolchain treats as
-/// code rather than components.
-fn afw_rename(path: &str) -> Option<String> {
-    if let Some(stem) = path.strip_suffix(".jsx") {
-        return Some(format!("{stem}.tsx"));
-    }
-    if path.starts_with("tests/") && path.ends_with(".test.js") {
-        return Some(format!(
-            "{}.test.ts",
-            &path[..path.len() - ".test.js".len()]
-        ));
-    }
-    let base = path.rsplit('/').next().unwrap_or(path);
-    if (base == "route.js" && path.contains("/api/"))
-        || base == "_middleware.js"
-        || base == "loader.js"
-        || base.ends_with(".server.js")
-    {
-        return path.strip_suffix(".js").map(|stem| format!("{stem}.ts"));
-    }
-    None
-}
-
-/// The source patches: references follow the renames, layouts type their
-/// props, and the library's counter types its own.
-fn afw_patch_source(template: &str, basename: &str, content: &str) -> String {
-    let mut next = content
-        .replace("app/page.jsx", "app/page.tsx")
-        .replace("app/api/hello/route.js", "app/api/hello/route.ts")
-        .replace("app/_middleware.js", "app/_middleware.ts")
-        .replace("app/loader.js", "app/loader.ts")
-        .replace("route.js", "route.ts")
-        .replace(".server.js\"", ".server.ts\"");
-    if template == "library" {
-        next = next
-            .replace("./src/Counter.jsx", "./src/Counter.tsx")
-            .replace("../src/Counter.jsx", "../src/Counter.tsx");
-    } else {
-        next = next.replace(".jsx", ".tsx");
-    }
-    next = afw_patch_layout_types(&next, basename);
-    next = afw_patch_component_types(&next, basename);
-    next = afw_patch_middleware_types(&next, basename);
-    next = afw_patch_handler_types(&next, basename);
-    next
-}
-
-/// Layouts take children; TypeScript wants to know of what.
-fn afw_patch_layout_types(content: &str, basename: &str) -> String {
-    if !basename.starts_with("layout.") {
-        return content.to_string();
-    }
-    const PREFIX: &str = "export default function ";
-    let Some(start) = content.find(PREFIX) else {
-        return content.to_string();
-    };
-    let head = &content[..start + PREFIX.len()];
-    let after = &content[start + PREFIX.len()..];
-    let name_end = after
-        .find(|c: char| !c.is_alphanumeric() && c != '_')
-        .unwrap_or(after.len());
-    let name = &after[..name_end];
-    let rest = &after[name_end..];
-    let tail = if let Some(after_params) = rest.strip_prefix("({ children })") {
-        format!("({{ children }}: {{ children: unknown }}){after_params}")
-    } else if let Some(after_params) = rest.strip_prefix("(props)") {
-        format!("(props: {{ children: unknown }}){after_params}")
-    } else {
-        return content.to_string();
-    };
-    format!("{head}{name}{tail}")
-}
-
-/// The library's counter types its one prop.
-fn afw_patch_component_types(content: &str, basename: &str) -> String {
-    if basename != "Counter.tsx" {
-        return content.to_string();
-    }
-    content.replace(
-        "export default function Counter({ initial = 0 })",
-        "export default function Counter({ initial = 0 }: { initial?: number })",
-    )
-}
-
-/// Middleware handlers take the pipeline's request, context and next; the
-/// untyped parameters are implicit `any` under `strict`. The types are
-/// type-only — erased before the build — from the server entry the file
-/// already runs under.
-fn afw_patch_middleware_types(content: &str, basename: &str) -> String {
-    if basename != "_middleware.ts" {
-        return content.to_string();
-    }
-    const PARAMS: &str = "export default async function middleware(request, context, next) {";
-    if !content.contains(PARAMS) {
-        return content.to_string();
-    }
-    format!(
-        "import type {{ MiddlewareContext, NextFn }} from \"@opentf/afw/server\";\n\n{}",
-        content.replace(
-            PARAMS,
-            "export default async function middleware(\n  request: Request,\n  context: MiddlewareContext,\n  next: NextFn,\n) {"
-        )
-    )
-}
-
-/// Route and loader handlers take the request pipeline's arguments; the
-/// untyped parameters are implicit `any` under `strict` (TS7006). The
-/// framework calls them with `(request, context)` and `(context)`, which is
-/// also how the template's own tests call them.
-fn afw_patch_handler_types(content: &str, basename: &str) -> String {
-    let mut next = content.to_string();
-    if basename == "route.ts" {
-        next = next.replace(
-            "export function GET(_request)",
-            "export function GET(_request: Request)",
-        );
-    } else if basename == "loader.ts" {
-        next = next
-            .replace(
-                "export default function (_context)",
-                "export default function (_context: {\n  params: Record<string, string>;\n  query: Record<string, string>;\n})",
-            )
-            .replace(
-                "export default async function loader({ locals })",
-                "export default async function loader({ locals }: { locals: Record<string, unknown> })",
-            );
-    } else if basename.ends_with(".server.ts") {
-        // The server-function sample: the list, and the action's argument.
-        next = next
-            .replace("const todos = [", "const todos: string[] = [")
-            .replace(
-                "action(async ({ title })",
-                "action(async ({ title }: { title: string })",
-            );
-    } else if basename == "page.tsx" && next.contains("router.data?.todos") {
-        next = next
-            .replace(
-                "router.data?.todos",
-                "(router.data as { todos?: string[] } | undefined)?.todos",
-            )
-            .replace(
-                "async function add(event)",
-                "async function add(event: SubmitEvent)",
-            )
-            .replace(
-                "oninput={(e) => (title = e.target.value)}",
-                "oninput={(e: Event) => (title = (e.target as HTMLInputElement).value)}",
-            )
-            .replace("todos.map((todo) =>", "todos.map((todo: string) =>");
-    }
-    next
-}
-
-/// The library publishes its entry, and in TypeScript the entry is TypeScript.
-fn afw_patch_library_manifest(content: &str) -> String {
-    content
-        .replace("\"./index.js\"", "\"./index.ts\"")
-        .replace("\"index.js\"", "\"index.ts\"")
-}
-
-/// A project that imports `tailwindcss` depends on it, explicitly.
-fn patch_tailwind_dep(content: &str) -> String {
-    content.replace(
-        "\"devDependencies\": {\n",
-        "\"devDependencies\": {\n    \"tailwindcss\": \"{{registry:tailwindcss}}\",\n",
-    )
-}
-
-/// A `tsconfig.json` without its compiler is a config nothing can act on:
-/// TypeScript mode also gains the `typescript` dependency and the `typecheck`
-/// script every esdev-native template ships. The script runs `esdev typecheck`
-/// — the project's own `tsc` through its package manager, with a actionable
-/// error when the compiler is not installed — rather than a bare `tsc`.
-/// String surgery, like [`patch_tailwind_dep`], so the embedded manifest
-/// keeps its formatting.
-fn afw_patch_typescript(content: &str) -> String {
-    let mut next = content.to_string();
-    if !next.contains("\"typecheck\"") {
-        next = next.replace(
-            "\"scripts\": {\n",
-            "\"scripts\": {\n    \"typecheck\": \"esdev typecheck\",\n",
-        );
-    }
-    if !next.contains("\"typescript\"") {
-        next = next.replace(
-            "\"devDependencies\": {\n",
-            "\"devDependencies\": {\n    \"typescript\": \"{{registry:typescript}}\",\n",
-        );
-    }
-    next
-}
-
-/// The compiler macros are build-time, not runtime: their declarations ship
-/// as a `.d.ts` beside the sources.
-const AFW_ENV_DTS: &str = "/** AFW compiler macros — provided at build time, not runtime. */
-declare const $state: {
-  <T>(initial: T): T;
-  <T>(): T | undefined;
-};
-declare function $derived<T>(fn: () => T): T;
-declare function $effect(fn: () => void | (() => void)): void;
-";
-
-/// The `tsconfig.json` beside it, with the same per-template includes.
-fn afw_typescript_files(template: &str) -> Vec<(String, Vec<u8>)> {
-    let (env_path, include, allow_js): (&str, Vec<&str>, bool) = match template {
-        "spa" | "fullstack" => ("app/afw-env.d.ts", vec!["app", "tests"], false),
-        "library" => (
-            "afw-env.d.ts",
-            vec!["src", "tests", "index.ts", "afw-env.d.ts"],
-            false,
-        ),
-        _ => ("app/afw-env.d.ts", vec!["app", "afw.config.js"], true),
-    };
-    let mut compiler = serde_json::json!({
-        "lib": ["ESNext", "DOM", "DOM.Iterable"],
-        "target": "ESNext",
-        "module": "ESNext",
-        "moduleResolution": "bundler",
-        "jsx": "preserve",
-        "jsxImportSource": "@opentf/afw",
-        "strict": true,
-        "skipLibCheck": true,
-        "noEmit": true,
-        // Libraries publish their sources, and entries import them by
-        // extension (`./src/Counter.tsx`) — which TS5097 refuses without
-        // this. Spas need it too, to consume those libraries.
-        "allowImportingTsExtensions": true,
-        // The `runtime:` modules (`runtime:test` in the template suites)
-        // resolve through the installed type package, as they do for the
-        // esdev-native templates.
-        "types": ["@opentf/esrun-types"],
-        "isolatedModules": true,
-        "moduleDetection": "force",
-    });
-    if allow_js {
-        compiler["allowJs"] = serde_json::Value::Bool(true);
-    }
-    let tsconfig = serde_json::json!({
-        "compilerOptions": compiler,
-        "include": include,
-    });
-    let mut rendered = serde_json::to_string_pretty(&tsconfig).unwrap_or_default();
-    rendered.push('\n');
-    vec![
-        ("tsconfig.json".to_string(), rendered.into_bytes()),
-        (env_path.to_string(), AFW_ENV_DTS.as_bytes().to_vec()),
-    ]
-}
-
-/// The Tailwind choice is a one-line prepend — the toolchain compiles it.
-const AFW_TAILWIND_IMPORT: &str = "@import \"tailwindcss\";\n\n";
-
-/// The demo blog is files on disk plus two patches; this is what "yes" adds.
-const AFW_BLOG_NAV: &str = "nav: [\n      { label: \"Docs\", href: \"/docs\" },\n      { label: \"Blog\", href: \"/blog\" },\n    ],";
-const AFW_BLOG_CONFIG: &str = "\n  // Sample blog — demo post under app/blog/. Remove this block and app/blog/ if unused.\n  blog: {\n    dir: \"blog\",\n    lastUpdated: true,\n  },";
-const AFW_BLOG_DEMO_SECTION: &str = "\n## Blog (demo)\n\nThis starter includes a **demo blog** under `app/blog/` — one sample post plus a\n`/blog` link in the top navbar. Replace the placeholder post with your own MDX, or\nremove `app/blog/`, the `blog` block in `afw.config.js`, and the Blog nav entry\nif you only need docs.\n";
-
-fn afw_patch_blog_config(content: &str) -> String {
-    let mut config = content.to_string();
-    if !config.contains("href: \"/blog\"") {
-        config = config.replace("nav: [{ label: \"Docs\", href: \"/docs\" }],", AFW_BLOG_NAV);
-    }
-    if !config.contains("blog:") {
-        let trimmed = config.trim_end();
-        let head = trimmed.strip_suffix("});").unwrap_or(trimmed);
-        config = format!("{head}{AFW_BLOG_CONFIG}\n}});\n");
-    }
-    config
-}
-
-fn afw_patch_blog_page(content: &str) -> String {
-    if content.contains("## Blog (demo)") {
-        return content.to_string();
-    }
-    content.replace(
-        "\n## Edit Content\n",
-        &format!("{AFW_BLOG_DEMO_SECTION}\n## Edit Content\n"),
-    )
-}
-
-/// The blog posts plugin entry the embedded docs `esdev.json` carries, with
-/// the trailing comma that joins it to the entry after it. Withholding the
-/// blog is withholding the files plus this entry — a plugin indexing posts
-/// that do not exist would fail the release build instead.
-const AFW_BLOG_PLUGIN_ENTRY: &str = "    {\n      \"module\": \"@opentf/afw-docs/build\",\n      \"export\": \"blogPostsPlugin\",\n      \"options\": {\n        \"appDir\": \"app\",\n        \"contentDir\": \"blog\"\n      }\n    },\n";
-
-fn afw_patch_docs_esdev(content: &str) -> String {
-    content.replace(AFW_BLOG_PLUGIN_ENTRY, "")
-}
-
-/// How a menu value reads. Flags stay lowercase — what is chosen must match
-/// what `--template=spa` spells — so the menu shows the proper form beside
-/// the choice it stands for.
-fn display_name(name: &'static str) -> &'static str {
-    match name {
-        "api" => "API",
-        "docs" => "Docs",
-        "elysia" => "Elysia",
-        "fullstack" => "FullStack",
-        "hono" => "Hono",
-        "lib" => "Library",
-        // The AFW starter's display is provisional: `lib` above already
-        // reads "Library", so this needs its own (see AFW_GROUP below).
-        "library" => "Component Library",
-        "lit" => "Lit",
-        "micro-ui" => "Micro-UI",
-        "preact" => "Preact",
-        "react" => "React",
-        "spa" => "SPA",
-        "vanilla" => "Vanilla",
-        "static" => "Static",
-        "js" => "JS",
-        "ts" => "TS",
-        "css" => "CSS",
-        "tailwind" => "Tailwind",
-        _ => name,
-    }
-}
-
-/// The AFW starters in menu order, simplest first — the embedded
-/// `TEMPLATES` list is alphabetical, which is for `--list`, not for choosing.
-const AFW_ORDER: &[&str] = &["spa", "fullstack", "docs", "library"];
-
-/// The group entry that stands in for the four AFW starters in the first
-/// menu. A name no flag spells, so it never leaks into the scriptable path.
-const AFW_GROUP: &str = "AFW";
-const AFW_GROUP_DESCRIPTION: &str = "AFW starters — SPA, fullstack, docs or library";
-
-/// The first menu: this repository's own templates, then the AFW group.
-/// Pure, so a test can read what somebody choosing sees.
-fn template_menu_top() -> Vec<(&'static str, &'static str)> {
-    let mut menu: Vec<(&'static str, &'static str)> = TEMPLATES
+/// The first menu: the templates outside any group, in `--list` order, then
+/// one entry per group. Pure, so a test can read what somebody choosing sees.
+fn template_menu_top(library: &Library) -> Vec<crate::prompt::Choice<'_>> {
+    let mut menu: Vec<crate::prompt::Choice<'_>> = library
+        .templates
         .iter()
-        .filter(|(name, _)| !is_afw(name))
-        .map(|(name, _)| {
-            (
-                *name,
-                DESCRIPTIONS
-                    .iter()
-                    .find(|(template, _)| template == name)
-                    .map_or("", |(_, description)| *description),
-            )
+        .filter(|entry| entry.manifest.group.is_none())
+        .map(|entry| crate::prompt::Choice {
+            name: entry.name,
+            label: &entry.manifest.label,
+            description: &entry.manifest.description,
+            disabled: false,
         })
         .collect();
-    menu.push((AFW_GROUP, AFW_GROUP_DESCRIPTION));
+    menu.extend(
+        library
+            .catalog
+            .groups
+            .iter()
+            .map(|group| crate::prompt::Choice {
+                name: &group.name,
+                label: &group.label,
+                description: &group.description,
+                disabled: false,
+            }),
+    );
     menu
 }
 
-/// The second menu, behind the group entry: the four AFW starters.
-fn template_menu_afw() -> Vec<(&'static str, &'static str)> {
-    AFW_ORDER
+/// The menu behind a group entry: its templates, in the catalog's order.
+fn template_menu_group<'a>(
+    library: &'a Library,
+    group: &'a crate::template::Group,
+) -> Vec<crate::prompt::Choice<'a>> {
+    group
+        .templates
         .iter()
-        .map(|name| {
-            (
-                *name,
-                DESCRIPTIONS
-                    .iter()
-                    .find(|(template, _)| template == name)
-                    .map_or("", |(_, description)| *description),
-            )
+        .filter_map(|name| library.get(name))
+        .map(|entry| crate::prompt::Choice {
+            name: entry.name,
+            label: &entry.manifest.label,
+            description: &entry.manifest.description,
+            disabled: false,
         })
         .collect()
 }
 
 /// Which template, asked on a terminal.
 ///
-/// Two menus rather than nine lines: the AFW starters choose behind their
-/// group entry, simplest first. Neither menu has a default — the
-/// template is the one answer worth choosing explicitly — while flags,
-/// `-y` and unattended runs resolve exactly as before. Esc on the first
-/// menu cancels the run; Esc on the second steps back to the first.
-fn ask_template() -> Option<String> {
-    let top: Vec<crate::prompt::Choice<'_>> = template_menu_top()
-        .into_iter()
-        .map(|(name, description)| crate::prompt::Choice {
-            name,
-            label: display_name(name),
-            description,
-            disabled: false,
-        })
-        .collect();
+/// The grouped templates choose behind their group's entry. Neither menu has
+/// a default — the template is the one answer worth choosing explicitly —
+/// while flags, `-y` and unattended runs resolve exactly as before. Esc on the
+/// first menu cancels the run; Esc on a group's menu steps back to the first.
+fn ask_template(library: &Library) -> Option<String> {
+    let top = template_menu_top(library);
     loop {
         let chosen =
             crate::prompt::select("Which Template?", &top, None, crate::prompt::OnEsc::Cancel)?;
-        if top[chosen].name != AFW_GROUP {
+        let Some(group) = library
+            .catalog
+            .groups
+            .iter()
+            .find(|g| g.name == top[chosen].name)
+        else {
             return Some(top[chosen].name.to_string());
-        }
-        let afw: Vec<crate::prompt::Choice<'_>> = template_menu_afw()
-            .into_iter()
-            .map(|(name, description)| crate::prompt::Choice {
-                name,
-                label: display_name(name),
-                description,
-                disabled: false,
-            })
-            .collect();
+        };
+        let members = template_menu_group(library, group);
         if let Some(chosen) =
-            crate::prompt::select("Which AFW Starter?", &afw, None, crate::prompt::OnEsc::Back)
+            crate::prompt::select(&group.question, &members, None, crate::prompt::OnEsc::Back)
         {
-            return Some(afw[chosen].name.to_string());
+            return Some(members[chosen].name.to_string());
         }
     }
 }
@@ -2138,30 +1337,56 @@ pub(crate) fn package_name(target: &Path) -> String {
 /// The templates, as `--list` prints them.
 pub fn list() -> String {
     let mut report = String::from("Templates:\n");
-    for (name, files) in TEMPLATES {
-        let description = DESCRIPTIONS
-            .iter()
-            .find(|(template, _)| template == name)
-            .map_or("", |(_, description)| *description);
-
+    for entry in &library().templates {
+        let name = entry.name;
+        let description = &entry.manifest.description;
+        let count =
+            |answers: &[(String, String)]| entry.files(answers).map_or(0, |files| files.len());
         // A template with modes has no single file count — the modes have one
-        // each — so it names them instead, on the lines under it.
-        match modes(name) {
+        // each — so it names them instead, on the lines under it. Every other
+        // option counts at its default.
+        match entry.option("mode") {
             None => report.push_str(&format!(
                 "  {name:<10} {description} ({} files)\n",
-                files.len()
+                count(&entry.answers(&[]))
             )),
             Some(modes) => {
                 report.push_str(&format!("  {name:<10} {description}\n"));
-                for (mode, mode_description) in modes {
-                    let count = files_for(files, Some(mode)).len();
-                    let flag = format!("--mode={mode}");
+                for mode in &modes.choices {
+                    let files = count(&entry.answers(&[("mode", &mode.value)]));
+                    let flag = format!("--mode={}", mode.value);
                     report.push_str(&format!(
-                        "  {:<10}   {flag:<18} {mode_description} ({count} files)\n",
-                        ""
+                        "  {:<10}   {flag:<18} {} ({files} files)\n",
+                        "", mode.description
                     ));
                 }
             }
+        }
+        // The rest of its options, as their flags: this list is where a
+        // template's options are documented, since they are the template's.
+        let flags: Vec<String> = entry
+            .manifest
+            .options
+            .iter()
+            .filter(|option| option.name != "mode")
+            .map(|option| match option.kind {
+                crate::template::Kind::Confirm => {
+                    format!("--{0}, --no-{0}", option.name)
+                }
+                crate::template::Kind::Choice => format!(
+                    "--{}={}",
+                    option.name,
+                    option
+                        .choices
+                        .iter()
+                        .map(|c| c.value.as_str())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+            })
+            .collect();
+        if !flags.is_empty() {
+            report.push_str(&format!("  {:<10}   {}\n", "", flags.join("  ")));
         }
     }
     report
@@ -2171,23 +1396,20 @@ pub fn list() -> String {
 mod tests {
     use super::*;
 
+    /// The stylesheet the page templates share, and Tailwind replaces.
+    const STYLESHEET: &str = "src/styles.css";
+
     /// The files of one template in one mode, as `create` would write them.
     fn resolved(template: &str, mode: Option<&str>) -> Vec<String> {
-        let (_, files) = TEMPLATES
-            .iter()
-            .find(|(name, _)| *name == template)
-            .expect("the template is embedded");
-        files_for(files, mode)
+        plain_written(template, mode)
             .into_iter()
             .map(|(path, _)| path)
             .collect()
     }
 
-    /// The point of the build script: a template that is not in the binary is
-    /// a `create` that cannot work, and nothing else would notice.
     #[test]
     fn the_templates_are_in_the_binary() {
-        let paths = resolved("react", default_mode("react"));
+        let paths = resolved("react", Some("static"));
 
         for expected in [
             "package.json",
@@ -2261,8 +1483,10 @@ mod tests {
             );
             // And no overlay path escapes with its prefix still on it.
             assert!(
-                !paths.iter().any(|path| path.starts_with(MODE_PREFIX)),
-                "{mode} leaked a _mode/ path: {paths:?}"
+                !paths
+                    .iter()
+                    .any(|path| path.starts_with(crate::template::OPTION_PREFIX)),
+                "{mode} leaked an _option/ path: {paths:?}"
             );
         }
     }
@@ -2271,13 +1495,18 @@ mod tests {
     /// say what it is and how to build it.
     #[test]
     fn every_mode_of_every_template_is_a_whole_project() {
-        for (template, modes) in MODES {
-            for (mode, _) in *modes {
-                let paths = resolved(template, Some(mode));
+        for entry in &library().templates {
+            let Some(modes) = entry.option("mode") else {
+                continue;
+            };
+            for mode in &modes.choices {
+                let paths = resolved(entry.name, Some(&mode.value));
                 for required in ["package.json", "esdev.json", "README.md"] {
                     assert!(
                         paths.iter().any(|path| path == required),
-                        "{template} ({mode}) has no {required}: {paths:?}"
+                        "{} ({}) has no {required}: {paths:?}",
+                        entry.name,
+                        mode.value
                     );
                 }
             }
@@ -2298,13 +1527,23 @@ mod tests {
     /// Naming a mode a template does not have is refused rather than ignored.
     #[test]
     fn a_mode_that_is_not_one_is_refused() {
-        assert!(resolve_mode("react", Some("ssr"), ASK).is_err());
-        assert!(resolve_mode("api", Some("static"), ASK).is_err());
-        assert!(matches!(
-            resolve_mode("react", Some("static"), ASK),
-            Ok(Mode::Chosen(mode)) if mode == "static"
-        ));
-        assert!(matches!(resolve_mode("api", None, ASK), Ok(Mode::None)));
+        let react = library().get("react").expect("react");
+        let mode = react.option("mode").expect("react has modes");
+        assert!(resolve_option("react", mode, Some("ssr"), ASK).is_err());
+        assert_eq!(
+            resolve_option("react", mode, Some("static"), ASK).unwrap(),
+            Some("static".to_string())
+        );
+        let flag = OptionFlag {
+            name: "mode".to_string(),
+            value: "static".to_string(),
+            spelled: "--mode=static".to_string(),
+        };
+        assert!(refuse_foreign_options(library(), react, std::slice::from_ref(&flag)).is_ok());
+        let api = library().get("api").expect("api");
+        let refused = refuse_foreign_options(library(), api, &[flag]).unwrap_err();
+        assert!(refused.contains("has no mode"), "{refused}");
+        assert!(refused.contains("Only react does"), "{refused}");
     }
 
     /// `-y` takes every default without asking: no menus, even where a
@@ -2312,28 +1551,22 @@ mod tests {
     /// scripted path is what pins this — the interactive one cannot run here.
     #[test]
     fn yes_resolves_every_default() {
-        assert!(matches!(
-            resolve_mode("react", None, SCRIPTED),
-            Ok(Mode::Chosen(mode)) if mode == "static"
-        ));
-        assert!(matches!(
-            resolve_choice(
-                "spa",
-                "language",
-                "language",
-                true,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
+        let fallback = |template: &str, option: &str| {
+            let entry = library().get(template).expect("the template");
+            resolve_option(
+                template,
+                entry.option(option).expect("the option"),
                 None,
-                "Select a Language?",
                 SCRIPTED,
-            ),
-            Ok(Choice::Chosen(language)) if language == DEFAULT_LANGUAGE
-        ));
-        assert!(matches!(
-            resolve_blog("docs", None, SCRIPTED),
-            Ok(Blog::Off) if !DEFAULT_BLOG
-        ));
+            )
+            .unwrap()
+            .expect("an answer")
+        };
+        assert_eq!(fallback("react", "mode"), "static");
+        assert_eq!(fallback("spa", "language"), "js");
+        // No default: an unattended run adds nothing (D135).
+        assert_eq!(fallback("spa", "styling"), "css");
+        assert_eq!(fallback("docs", "blog"), "no");
         assert!(matches!(
             resolve_manager(None, SCRIPTED),
             Ok(ManagerChoice::Chosen(manager)) if manager == DEFAULT_MANAGER
@@ -2623,7 +1856,10 @@ mod tests {
                 !text.contains("target/") && !text.contains(".cache/"),
                 "{template}: nothing here writes those"
             );
-            if is_afw(template) {
+            if library()
+                .get(template)
+                .is_some_and(|entry| entry.manifest.group.as_deref() == Some("AFW"))
+            {
                 continue;
             }
             assert!(
@@ -2651,11 +1887,7 @@ mod tests {
             ("docs", None),
             ("library", None),
         ] {
-            let (_, files) = TEMPLATES
-                .iter()
-                .find(|(name, _)| *name == template)
-                .expect("the template is embedded");
-            let files = files_for(files, mode);
+            let files = plain_written(template, mode);
             let (_, readme) = files
                 .iter()
                 .find(|(path, _)| path == "README.md")
@@ -2701,36 +1933,36 @@ mod tests {
     /// steps answered by flags, and away from the first step, it cancels.
     #[test]
     fn esc_retreats_to_the_last_menu() {
-        use Step::{Blog, Language, Manager, Mode, Styling, Template};
+        use Step::{Manager, Option as Opt, Template};
+        let steps = [Template, Opt(0), Opt(1), Opt(2), Manager];
         // Nothing behind: out.
-        assert_eq!(step_back_index(Template, &[]), None);
-        assert_eq!(step_back_index(Mode, &[]), None);
+        assert_eq!(step_back_index(&steps, 0, &[]), None);
+        assert_eq!(step_back_index(&steps, 1, &[]), None);
         // The nearest menu behind, skipping steps that never asked.
         assert_eq!(
-            step_back_index(Mode, &[Template]),
+            step_back_index(&steps, 1, &[Template]),
             Some(0),
-            "Esc at the mode returns to the template menu"
+            "Esc at the first option returns to the template menu"
         );
         assert_eq!(
-            step_back_index(Blog, &[Template, Language]),
+            step_back_index(&steps, 3, &[Template, Opt(1)]),
             Some(2),
-            "a modeless step never asked, so it is skipped"
+            "an option answered by a flag never asked, so it is skipped"
         );
         assert_eq!(
-            step_back_index(Styling, &[Template, Mode, Language, Styling]),
-            Some(2),
+            step_back_index(&steps, 2, &[Template, Opt(0), Opt(1)]),
+            Some(1),
             "a step's own earlier visit does not count as behind it"
         );
         assert_eq!(
-            step_back_index(Language, &[Template, Template]),
-            Some(0),
-            "re-asked steps retreat the same way"
-        );
-        assert_eq!(
-            step_back_index(Manager, &[Template, Blog]),
-            Some(4),
+            step_back_index(&steps, 4, &[Template, Opt(2)]),
+            Some(3),
             "the manager is the last question"
         );
+        // The questions are the template's own, between the two fixed ones.
+        let docs = library().get("docs").expect("docs");
+        assert_eq!(steps_for(Some(docs)), [Template, Opt(0), Opt(1), Manager]);
+        assert_eq!(steps_for(None), [Template, Manager]);
     }
 
     /// What a *running* template leaves behind is not the template. Embedding
@@ -2812,8 +2044,7 @@ mod tests {
         for template in ["api", "react", "vanilla", "micro-ui", "lib"] {
             // `react` is two projects; the shared files (with the config and
             // the tests) are in both, so either mode proves the point.
-            let mode = default_mode(template);
-            let paths = resolved(template, mode);
+            let paths = resolved(template, None);
             assert!(
                 paths.iter().any(|path| path == "tsconfig.json"),
                 "{template} ships no tsconfig.json, so `npm run typecheck` checks nothing"
@@ -2841,11 +2072,7 @@ mod tests {
             ("react", Some("static")),
             ("react", Some("fullstack")),
         ] {
-            let (_, files) = TEMPLATES
-                .iter()
-                .find(|(name, _)| *name == template)
-                .expect("the template is embedded");
-            let files = files_for(files, mode);
+            let files = plain_written(template, mode);
             let (_, manifest) = files
                 .iter()
                 .find(|(path, _)| path == "package.json")
@@ -2892,64 +2119,105 @@ mod tests {
     /// reads as an option the scaffolder forgot to explain.
     #[test]
     fn every_template_has_a_description() {
-        for (name, _) in TEMPLATES {
-            let description = DESCRIPTIONS
-                .iter()
-                .find(|(template, _)| template == name)
-                .map(|(_, description)| *description)
-                .unwrap_or("");
+        for entry in &library().templates {
             assert!(
-                !description.is_empty(),
-                "{name} has no description in DESCRIPTIONS"
+                !entry.manifest.description.is_empty(),
+                "{} has no description",
+                entry.name
             );
+            assert!(
+                !entry.manifest.label.is_empty(),
+                "{} has no label",
+                entry.name
+            );
+            for option in &entry.manifest.options {
+                assert!(
+                    !option.question.is_empty(),
+                    "{} {}: no question",
+                    entry.name,
+                    option.name
+                );
+                for choice in &option.choices {
+                    assert!(
+                        !choice.label.is_empty() && !choice.description.is_empty(),
+                        "{} {} {}: unexplained",
+                        entry.name,
+                        option.name,
+                        choice.value
+                    );
+                }
+            }
         }
+        // Every template's manifest and the catalog read, and agree.
+        assert!(Library::embedded().is_ok());
     }
 
     /// Menus show the proper form while flags stay lowercase: `SPA`, not
     /// `spa` — and what is chosen still resolves to the flag spelling.
     #[test]
     fn menus_show_proper_names_for_lowercase_flags() {
-        for (flag, label) in [
+        let label = |template: &str| {
+            library()
+                .get(template)
+                .expect("the template")
+                .manifest
+                .label
+                .clone()
+        };
+        for (flag, shown) in [
             ("api", "API"),
             ("docs", "Docs"),
             ("fullstack", "FullStack"),
             ("lib", "Library"),
+            ("library", "Component Library"),
             ("micro-ui", "Micro-UI"),
             ("react", "React"),
             ("spa", "SPA"),
             ("vanilla", "Vanilla"),
-            ("static", "Static"),
-            ("js", "JS"),
-            ("ts", "TS"),
-            ("css", "CSS"),
-            ("tailwind", "Tailwind"),
-            ("AFW", "AFW"),
-            ("npm", "npm"),
         ] {
-            assert_eq!(display_name(flag), label, "{flag} displays wrong");
+            assert_eq!(label(flag), shown, "{flag} displays wrong");
         }
+        let choice = |template: &str, option: &str, value: &str| {
+            library()
+                .get(template)
+                .and_then(|entry| entry.option(option))
+                .and_then(|option| option.choice(value))
+                .expect("the choice")
+                .label
+                .clone()
+        };
+        assert_eq!(choice("react", "mode", "static"), "Static");
+        assert_eq!(choice("spa", "language", "js"), "JS");
+        assert_eq!(choice("spa", "language", "ts"), "TS");
+        assert_eq!(choice("spa", "styling", "css"), "CSS");
+        assert_eq!(choice("vanilla", "styling", "tailwind"), "Tailwind");
+        assert_eq!(library().catalog.groups[0].label, "AFW");
     }
 
     /// The first menu holds this repository's templates plus the AFW group —
     /// four more lines there is the flat list this grouping replaces.
     #[test]
     fn the_template_menu_groups_the_afw_starters() {
-        let top = template_menu_top();
-        let names: Vec<&str> = top.iter().map(|(name, _)| *name).collect();
-        for afw in AFW_ORDER {
-            assert!(!names.contains(afw), "{afw} leaked into the first menu");
+        const AFW: [&str; 4] = ["spa", "fullstack", "docs", "library"];
+        let top = template_menu_top(library());
+        let names: Vec<&str> = top.iter().map(|choice| choice.name).collect();
+        for afw in AFW {
+            assert!(!names.contains(&afw), "{afw} leaked into the first menu");
         }
-        assert_eq!(top.last().map(|(name, _)| *name), Some(AFW_GROUP));
-        for (_, description) in &top {
+        assert_eq!(names.last(), Some(&"AFW"));
+        for choice in &top {
             assert!(
-                !description.is_empty(),
+                !choice.description.is_empty(),
                 "the menu shows an unexplained entry"
             );
         }
         // Behind the group: the four starters, simplest first.
-        let afw = template_menu_afw();
-        let names: Vec<&str> = afw.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, AFW_ORDER);
+        let group = &library().catalog.groups[0];
+        let names: Vec<&str> = template_menu_group(library(), group)
+            .iter()
+            .map(|choice| choice.name)
+            .collect();
+        assert_eq!(names, AFW);
     }
 
     /// The AFW starter set is embedded whole: apps, docs with its demo
@@ -2973,7 +2241,11 @@ mod tests {
                 );
             }
         }
-        let docs = resolved("docs", None);
+        // With its demo blog, which is opt-in.
+        let docs: Vec<String> = written("docs", &[("blog", "yes")])
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
         for expected in [
             "package.json",
             "afw.config.js",
@@ -3012,124 +2284,62 @@ mod tests {
     /// Unit tests never see a TTY, so `None` here is the unattended default.
     #[test]
     fn the_afw_axes_default_and_refuse() {
-        assert!(matches!(
-            resolve_choice(
-                "spa",
-                "language",
-                "language",
-                true,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
-                None,
-                "Select a Language?",
+        let answer = |template: &str, option: &str, asked: Option<&str>| {
+            let entry = library().get(template).expect("the template");
+            resolve_option(
+                template,
+                entry.option(option).expect("the option"),
+                asked,
                 ASK,
-            ),
-            Ok(Choice::Chosen(language)) if language == DEFAULT_LANGUAGE
-        ));
-        assert!(matches!(
-            resolve_choice(
-                "spa",
-                "styling",
-                "styling",
-                true,
-                STYLINGS,
-                Fallback::Unasked(UNSTYLED),
-                None,
-                "Select a Styling Solution?",
-                ASK,
-            ),
-            Ok(Choice::Chosen(styling)) if styling == UNSTYLED
-        ));
-        assert!(matches!(
-            resolve_blog("docs", None, ASK),
-            Ok(Blog::Off) if !DEFAULT_BLOG
-        ));
-        assert!(matches!(
-            resolve_choice(
-                "api",
-                "language",
-                "language",
-                false,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
-                None,
-                "Select a Language?",
-                ASK,
-            ),
-            Ok(Choice::NotApplicable)
-        ));
+            )
+        };
+        // Unit tests never see a terminal, so an unsaid option is its fallback.
+        assert_eq!(answer("spa", "language", None).unwrap(), Some("js".into()));
+        assert_eq!(answer("spa", "styling", None).unwrap(), Some("css".into()));
+        assert_eq!(answer("docs", "blog", None).unwrap(), Some("no".into()));
+        assert_eq!(
+            answer("fullstack", "language", Some("ts")).unwrap(),
+            Some("ts".into())
+        );
+        assert_eq!(
+            answer("docs", "blog", Some("no")).unwrap(),
+            Some("no".into())
+        );
+        let elm = answer("spa", "language", Some("elm")).unwrap_err();
+        assert!(
+            elm.contains("no language elm") && elm.contains("js, ts"),
+            "{elm}"
+        );
 
-        assert!(matches!(
-            resolve_choice(
-                "fullstack",
-                "language",
-                "language",
-                true,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
-                Some("ts"),
-                "Select a Language?",
-                ASK,
-            ),
-            Ok(Choice::Chosen(language)) if language == "ts"
-        ));
-        assert!(matches!(
-            resolve_blog("docs", Some(false), ASK),
-            Ok(Blog::Off)
-        ));
+        // An option the template does not ask is refused, naming who asks it.
+        let refused = |template: &str, name: &str, value: &str, spelled: &str| {
+            let flag = OptionFlag {
+                name: name.into(),
+                value: value.into(),
+                spelled: spelled.into(),
+            };
+            refuse_foreign_options(library(), library().get(template).expect("t"), &[flag])
+        };
+        assert!(refused("api", "language", "elm", "--language=elm").is_err());
         assert!(
-            resolve_choice(
-                "api",
-                "language",
-                "language",
-                false,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
-                Some("elm"),
-                "Select a Language?",
-                ASK,
-            )
-            .is_err()
+            refused("docs", "styling", "css", "--styling=css")
+                .unwrap_err()
+                .contains("has no styling")
         );
         assert!(
-            resolve_choice(
-                "spa",
-                "language",
-                "language",
-                true,
-                LANGUAGES,
-                Fallback::Preselected(DEFAULT_LANGUAGE),
-                Some("elm"),
-                "Select a Language?",
-                ASK,
-            )
-            .is_err()
+            refused("spa", "blog", "yes", "--blog")
+                .unwrap_err()
+                .contains("Only docs does")
         );
-        // Styling is not a docs axis, and the blog is not a spa one.
         assert!(
-            resolve_choice(
-                "docs",
-                "styling",
-                "styling",
-                false,
-                STYLINGS,
-                Fallback::Unasked(UNSTYLED),
-                Some("css"),
-                "Select a Styling Solution?",
-                ASK,
-            )
-            .is_err()
+            refused("fullstack", "blog", "no", "--no-blog")
+                .unwrap_err()
+                .contains("--no-blog")
         );
-        assert!(resolve_blog("spa", Some(true), ASK).is_err());
-        assert!(resolve_blog("fullstack", Some(false), ASK).is_err());
-        assert!(matches!(
-            resolve_blog("spa", None, ASK),
-            Ok(Blog::NotApplicable)
-        ));
-        assert!(matches!(
-            resolve_blog("fullstack", None, ASK),
-            Ok(Blog::NotApplicable)
-        ));
+        assert!(refused("spa", "language", "ts", "--language=ts").is_ok());
+        // A flag no template knows says so, and where create's own are.
+        let typo = refused("api", "forse", "yes", "--forse").unwrap_err();
+        assert!(typo.contains("No template has a forse option"), "{typo}");
     }
 
     /// The AFW answers applied, as `create` would write them.
@@ -3139,20 +2349,23 @@ mod tests {
         styling: Option<&str>,
         blog: Option<bool>,
     ) -> Vec<(String, Vec<u8>)> {
-        let (_, files) = TEMPLATES
-            .iter()
-            .find(|(name, _)| *name == template)
-            .expect("the template is embedded");
-        let files = files_for(files, None);
-        apply_afw(
-            template,
-            &Afw {
-                language: language.to_string(),
-                styling: styling.map(str::to_string),
-                blog,
-            },
-            &files,
-        )
+        let mut overrides = vec![("language", language)];
+        if let Some(styling) = styling {
+            overrides.push(("styling", styling));
+        }
+        if let Some(blog) = blog {
+            overrides.push(("blog", if blog { "yes" } else { "no" }));
+        }
+        written(template, &overrides)
+    }
+
+    /// What `create` writes for `template` with `overrides` and every other
+    /// option at its fallback.
+    fn written(template: &str, overrides: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
+        let entry = library().get(template).expect("the template is embedded");
+        entry
+            .files(&entry.answers(overrides))
+            .expect("the template assembles")
     }
 
     fn afw_text(files: &[(String, Vec<u8>)], path: &str) -> String {
@@ -3639,10 +2852,15 @@ mod tests {
     fn every_template_names_one_dev_port() {
         let mut checked = 0;
         for (template, _) in TEMPLATES {
-            let shapes: Vec<Option<&str>> = match modes(template) {
-                Some(list) => list.iter().map(|(mode, _)| Some(*mode)).collect(),
-                None => vec![None],
-            };
+            let shapes: Vec<Option<&str>> =
+                match library().get(template).and_then(|e| e.option("mode")) {
+                    Some(modes) => modes
+                        .choices
+                        .iter()
+                        .map(|mode| Some(mode.value.as_str()))
+                        .collect(),
+                    None => vec![None],
+                };
             for mode in shapes {
                 let files = plain_written(template, mode);
                 let text = |path: &str| {
@@ -3887,33 +3105,48 @@ mod tests {
     }
 
     fn plain_written(template: &str, mode: Option<&str>) -> Vec<(String, Vec<u8>)> {
-        let (_, files) = TEMPLATES
-            .iter()
-            .find(|(name, _)| *name == template)
-            .expect("the template is embedded");
-        files_for(files, mode)
-            .into_iter()
-            .map(|(path, contents)| (path, contents.to_vec()))
-            .collect()
+        match mode {
+            Some(mode) => written(template, &[("mode", mode)]),
+            None => written(template, &[]),
+        }
     }
 
     /// The templates with a page take a styling; the rest refuse one.
     #[test]
     fn styling_is_offered_where_there_is_a_page() {
-        for template in ["react", "vanilla", "micro-ui", "spa", "fullstack"] {
-            let options = stylings(template).unwrap_or_else(|| panic!("{template}"));
-            let names: Vec<&str> = options.iter().map(|(name, _)| *name).collect();
-            assert_eq!(names, ["css", "tailwind"], "{template}");
-        }
-        for template in ["api", "lib", "docs", "library"] {
-            assert!(stylings(template).is_none(), "{template}");
-        }
-        // Every template the list names is one that is embedded.
-        for template in ESDEV_STYLED {
-            assert!(
-                TEMPLATES.iter().any(|(name, _)| name == template),
+        let styling = |template: &str| {
+            library()
+                .get(template)
+                .expect("the template")
+                .option("styling")
+                .map(|option| {
+                    option
+                        .choices
+                        .iter()
+                        .map(|c| c.value.clone())
+                        .collect::<Vec<_>>()
+                })
+        };
+        for template in [
+            "react",
+            "vanilla",
+            "micro-ui",
+            "preact",
+            "lit",
+            "spa",
+            "fullstack",
+        ] {
+            assert_eq!(
+                styling(template).as_deref(),
+                Some(&["css".to_string(), "tailwind".to_string()][..]),
                 "{template}"
             );
+            // No default: the menu starts on nothing (D135).
+            let option = library().get(template).unwrap().option("styling").unwrap();
+            assert!(option.default.is_none(), "{template} defaults its styling");
+        }
+        for template in ["api", "lib", "docs", "library"] {
+            assert!(styling(template).is_none(), "{template}");
         }
     }
 
@@ -3928,17 +3161,18 @@ mod tests {
             ("react", Some("static")),
             ("react", Some("fullstack")),
         ] {
-            let files = apply_tailwind(plain_written(template, mode));
+            let mut answers = vec![("styling", "tailwind")];
+            if let Some(mode) = mode {
+                answers.push(("mode", mode));
+            }
+            let files = written(template, &answers);
             assert_eq!(
-                afw_text(&files, TAILWIND_STYLESHEET),
+                afw_text(&files, STYLESHEET),
                 "@import \"tailwindcss\";\n",
                 "{template}"
             );
             assert_eq!(
-                files
-                    .iter()
-                    .filter(|(path, _)| path == TAILWIND_STYLESHEET)
-                    .count(),
+                files.iter().filter(|(path, _)| path == STYLESHEET).count(),
                 1,
                 "{template}: two stylesheets"
             );
@@ -3967,7 +3201,7 @@ mod tests {
     #[test]
     fn plain_css_leaves_the_template_as_it_was() {
         let files = plain_written("vanilla", None);
-        let css = afw_text(&files, TAILWIND_STYLESHEET);
+        let css = afw_text(&files, STYLESHEET);
         assert!(
             css.contains("font-family"),
             "the starter styles shipped: {css}"
@@ -3995,7 +3229,7 @@ mod tests {
             ("react", Some("fullstack")),
         ] {
             let files = plain_written(template, mode);
-            contents.push(afw_text(&files, TAILWIND_STYLESHEET));
+            contents.push(afw_text(&files, STYLESHEET));
             let html = afw_text(&files, "index.html");
             assert!(
                 html.contains("<link rel=\"stylesheet\" href=\"./src/styles.css\" />"),

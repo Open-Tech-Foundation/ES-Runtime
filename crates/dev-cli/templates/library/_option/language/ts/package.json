@@ -1,0 +1,28 @@
+{
+  "name": "{{name}}",
+  "version": "0.1.0",
+  "description": "An AFW component library",
+  "type": "module",
+  "scripts": {
+    "test": "esdev test --dom"
+  },
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src"
+  ],
+  "peerDependencies": {
+    "@opentf/afw": "{{registry:@opentf/afw}}"
+  },
+  "devDependencies": {
+    "@opentf/afw": "{{registry:@opentf/afw}}",
+    "@opentf/esdev-plugin-afw": "{{registry:@opentf/esdev-plugin-afw}}",
+    "@opentf/afw-test": "{{registry:@opentf/afw-test}}",
+    "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

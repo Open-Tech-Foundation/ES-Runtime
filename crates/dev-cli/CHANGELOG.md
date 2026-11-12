@@ -38,6 +38,17 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **Templates are data** (DECISIONS D220). Each template is a directory with a
+  `template.json` — its label, description, group and options — and what a
+  choice does is files in `_option/<name>/<value>/` plus three declared edits:
+  files withheld, `devDependencies` and `scripts` added. The TypeScript,
+  Tailwind and blog variants are files instead of patches applied by esdev,
+  and `create` names no template in its code. Every scaffold is byte for byte
+  what it was. A template's options are generic flags, `--<option>=<value>`
+  or `--<option>`/`--no-<option>`, and `esdev create --list` shows each
+  template's. An option a template does not ask is refused naming the
+  templates that do ask it. `--list` counts the files written with every
+  default, so `docs` (no blog by default) shows 16 rather than 19.
 - **A server restart no longer reloads a page whose own output is unchanged**
   (DECISIONS D219). An edit to a loader, a middleware, an API route or a
   server function changes only the server bundle; the page kept being

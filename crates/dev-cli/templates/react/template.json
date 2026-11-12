@@ -1,0 +1,43 @@
+{
+  "label": "React",
+  "description": "React — a static site, or an app with a server of its own",
+  "options": [
+    {
+      "name": "mode",
+      "question": "Which Mode?",
+      "default": "static",
+      "choices": [
+        {
+          "value": "static",
+          "label": "Static",
+          "description": "No server — prerendered HTML or a single-page app, on any static host"
+        },
+        {
+          "value": "fullstack",
+          "label": "FullStack",
+          "description": "A server of its own — rendered per request, under named capabilities"
+        }
+      ]
+    },
+    {
+      "name": "styling",
+      "question": "Select a Styling Solution?",
+      "unattended": "css",
+      "choices": [
+        {
+          "value": "css",
+          "label": "CSS",
+          "description": "Plain CSS — no framework, nothing to install"
+        },
+        {
+          "value": "tailwind",
+          "label": "Tailwind",
+          "description": "TailwindCSS v4, compiled by esdev",
+          "devDependencies": [
+            "tailwindcss"
+          ]
+        }
+      ]
+    }
+  ]
+}

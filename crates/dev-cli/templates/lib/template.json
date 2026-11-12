@@ -1,0 +1,5 @@
+{
+  "label": "Library",
+  "description": "A publishable TypeScript package — .d.ts included, no runtime deps",
+  "run": "test"
+}

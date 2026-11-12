@@ -81,6 +81,16 @@ fn main() {
     }
     generated.push_str("];\n");
 
+    // The groups some templates are chosen behind (D220).
+    let catalog = templates.join("catalog.json");
+    println!("cargo:rerun-if-changed={}", catalog.display());
+    writeln!(
+        generated,
+        "/// The catalog beside the templates.\npub static CATALOG: &[u8] = include_bytes!({:?});",
+        catalog.display().to_string()
+    )
+    .expect("write");
+
     // The bare project `esdev init` writes for a new directory: internal, and
     // deliberately not one of the templates above — `create` lists, validates
     // and tests every entry of `TEMPLATES`, none of which may know this name.

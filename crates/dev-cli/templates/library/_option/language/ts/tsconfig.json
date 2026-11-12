@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "@opentf/afw",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "@opentf/esrun-types"
+    ],
+    "isolatedModules": true,
+    "moduleDetection": "force"
+  },
+  "include": [
+    "src",
+    "tests",
+    "index.ts",
+    "afw-env.d.ts"
+  ]
+}
