@@ -88,6 +88,8 @@ Bare specifiers resolve from `node_modules`, honoring the package `exports` map:
 conditions, subpath patterns such as `"./*"`, array fallbacks, and `null` targets
 that withdraw a subpath. Symlinks are resolved to their real path, so pnpm's
 nested store works as-is. A CommonJS-only package is rejected with a clear error.
+A `.js` file is judged by its nearest `package.json`, so a package that marks
+its ES module directory with `{ "type": "module" }` loads from there.
 
 ### Conditions
 

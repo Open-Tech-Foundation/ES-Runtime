@@ -356,7 +356,9 @@ a matched branch that resolves to nothing falls through to the next key.
 ```
 
 `"."` resolves to `./esm.mjs`: `node` is not asserted, `import` is. A package
-offering only `require` is CommonJS and is rejected saying so.
+offering only `require` is CommonJS and is rejected saying so. A `.js` file is
+read by its nearest `package.json`: `{ "type": "module" }` in a package's
+subdirectory makes the files under it ES modules, whatever the package root says.
 
 Also supported: subpath patterns (`"./fn/*": "./fns/*.mjs"`, longest prefix
 wins), array fallbacks (`["./a.mjs", "./b.mjs"]` — the first *valid* target is

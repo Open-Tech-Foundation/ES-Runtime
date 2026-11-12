@@ -111,6 +111,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A package's `.js` file is judged ES module or CommonJS by its **nearest**
+  `package.json`, not only the package root's (DECISIONS D22 amendment). A
+  package that marks its ES module directory with `{ "type": "module" }` — as
+  `yaml` does — was refused as CommonJS (`package "yaml" is CommonJS
+  (./node_modules/yaml/browser/index.js)`). A nearer manifest naming no type
+  makes its `.js` CommonJS under a `"type": "module"` root, as it should.
 - `fetch` over HTTP/2 refused every request on a connection once as many had
   completed as the server allows at once (`RefusedStream: the server's stream
   limit is reached`): a request whose response ended on a DATA frame or on

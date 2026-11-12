@@ -961,6 +961,20 @@ fn rejects_a_commonjs_package() {
     assert!(stderr(&out).contains("CommonJS"), "{}", stderr(&out));
 }
 
+/// A `.js` file is judged by its nearest `package.json`: a package's ES module
+/// half, marked `{ "type": "module" }` in its own directory, loads even though
+/// the package root names no type (as `yaml` publishes).
+#[test]
+fn loads_the_esm_half_of_a_dual_package_marked_by_a_nested_manifest() {
+    let out = run_file("uses-dual-package.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("dualkit loaded its esm half"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 #[test]
 fn dynamic_import_resolves_relative_and_node_modules() {
     let out = run_file("dynamic.mjs");
