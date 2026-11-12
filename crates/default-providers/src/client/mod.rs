@@ -2,14 +2,19 @@
 //! binary makes — `fetch`, the telemetry exporter, `upgrade`, `esdev create`'s
 //! registry lookups — goes through [`HttpClient`].
 //!
-//! The policy is here and the wire is in [`crate::h1_client`] (the pool and
-//! HTTP/1.1) and [`crate::h2_client`] — ES-Runtime's own (D217), as are the
-//! types between them ([`crate::http_types`]) — and DNS, TCP and Happy
-//! Eyeballs are [`crate::tcp_connect`].
+//! The policy is here; `select` picks the connection a request goes on, and
+//! `h1` and `h2` carry it — ES-Runtime's own (D217, D218), as are the types
+//! between them ([`types`]) — and DNS, TCP and Happy Eyeballs are
+//! `tcp_connect`. HTTP/3 will be one more module beside `h1` and `h2`.
 //! TLS is tokio-rustls over the process trust store (D197).
 //! What is written here is what a client decides rather than parses: which
 //! redirects to follow and what to strip on the way, which content-codings to
 //! decode, and how long a connection may take.
+
+pub(crate) mod h1;
+pub(crate) mod h2;
+pub(crate) mod select;
+pub mod types;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -21,7 +26,7 @@ use es_runtime_common::ErrorCode;
 use es_runtime_providers::{ByteStream, ProviderError};
 use futures_util::{Stream, StreamExt, TryStreamExt};
 
-pub use crate::http_types::{
+pub use crate::client::types::{
     HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version, header,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -31,7 +36,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use url::Url;
 
-use crate::h1_client::{Exchange, Frame, Origin, Pool, Response, ResponseStream};
+use crate::client::select::{Exchange, Frame, Origin, Pool, Response, ResponseStream};
 use crate::proxy::{BoxWire, Proxies, ProxyError};
 use crate::{HostAllowlist, TrustStore};
 
@@ -416,7 +421,7 @@ impl HttpClient {
             port,
         };
         let connector = self.connector.clone();
-        crate::h1_client::send(
+        crate::client::select::send(
             &self.pool,
             &origin,
             Exchange {

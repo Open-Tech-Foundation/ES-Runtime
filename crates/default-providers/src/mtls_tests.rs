@@ -11,7 +11,7 @@ use es_runtime_providers::{
     HttpServerResponse, HttpServerTls, ListenOptions, NetProvider, PeerCertificate, SecureContext,
 };
 
-use crate::http_client::{HttpClient, Outbound};
+use crate::client::{HttpClient, Outbound};
 use crate::trust::test_pki::{Ca, Leaf};
 use crate::{SystemHttpServer, SystemNet, TrustStore};
 

@@ -39,6 +39,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `es-runtime-default-providers`: the HTTP client is the `client` module
+  (DECISIONS D218) — `client::HttpClient`, `client::Outbound`, and the HTTP
+  types under `client::types` — in place of `http_client` and `http_types`.
+  Inside it, connection selection, HTTP/1.1 and HTTP/2 are one module each,
+  where HTTP/3 will be one more. No behaviour changes.
 - **hyper no longer ships** (DECISIONS D217). The HTTP client's methods,
   status codes, versions and header maps are the runtime's own
   (`default-providers`' `http_types`), and the server's `Host` check is

@@ -17,7 +17,7 @@ use tokio::sync::Notify;
 
 use es_runtime_providers::{BoxFuture, TelemetrySink};
 
-use crate::http_client::{Body, HttpClient, Outbound};
+use crate::client::{Body, HttpClient, Outbound};
 
 /// How long one export may take, connect to last byte. An export is
 /// best-effort, and a sink that waits long on a wedged collector holds a
@@ -83,7 +83,7 @@ impl OtlpHttpSink {
 async fn post(client: &HttpClient, url: &str, payload: String) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
     let mut request = Outbound::get(parsed);
-    request.method = crate::http_types::Method::POST;
+    request.method = crate::client::types::Method::POST;
     request.headers = vec![("content-type".to_string(), "application/json".to_string())];
     request.body = Body::Bytes(payload.into());
     let response = client

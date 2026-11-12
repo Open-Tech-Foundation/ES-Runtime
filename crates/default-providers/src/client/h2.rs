@@ -1,6 +1,6 @@
 //! The HTTP client's HTTP/2 (DECISIONS D217, phase 3): one task per
 //! connection drives `es-runtime-http`'s connection state machine, and
-//! requests reach it as commands. The pool ([`crate::h1_client`]) decides
+//! requests reach it as commands. The pool ([`super::select`]) decides
 //! which connection a request goes on; this module carries it there.
 //!
 //! A connection is handed out only once the server's first SETTINGS has
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use crate::http_types::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version};
+use crate::client::types::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version};
 use bytes::Bytes;
 use es_runtime_common::ErrorCode as Code;
 use es_runtime_http::h2::ErrorCode;
@@ -35,8 +35,8 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::h1_client::{BoxError, Exchange, Frame, Response};
-use crate::http_client::{Body, Conn};
+use crate::client::select::{BoxError, Exchange, Frame, Response};
+use crate::client::{Body, Conn};
 
 /// How long a connection with no open stream is kept.
 const IDLE: Duration = Duration::from_secs(90);
@@ -741,7 +741,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use crate::http_types::{Method, StatusCode, Version};
+    use crate::client::types::{Method, StatusCode, Version};
     use es_runtime_http::h2::conn::Config;
     use es_runtime_providers::{HttpServerBody, HttpServerResponse};
     use futures_util::StreamExt;
@@ -752,8 +752,8 @@ mod tests {
     use tokio_rustls::rustls::crypto::aws_lc_rs;
     use url::Url;
 
+    use crate::client::{Body, HttpClient, Outbound};
     use crate::h2_conn::{ConnContext, serve};
-    use crate::http_client::{Body, HttpClient, Outbound};
     use crate::system_http::Pending;
     use crate::trust::test_pki::Ca;
 

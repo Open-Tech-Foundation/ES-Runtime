@@ -72,7 +72,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use es_runtime_default_providers::TrustStore;
-use es_runtime_default_providers::http_client::{HttpClient, Outbound};
+use es_runtime_default_providers::client::{HttpClient, Outbound};
 
 include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 

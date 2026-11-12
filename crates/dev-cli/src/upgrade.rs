@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_default_providers::TrustStore;
-use es_runtime_default_providers::http_client::{HttpClient, Outbound};
+use es_runtime_default_providers::client::{HttpClient, Outbound};
 use es_runtime_providers::ProviderError;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};

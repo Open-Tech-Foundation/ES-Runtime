@@ -475,14 +475,14 @@ impl WebSocketProvider for SystemWebSocket {
                     .map_err(|e| coded(ErrorCode::Tls, format!("TLS: {e}")))?;
                 Ok(Box::new(tls))
             };
-            let wire = tokio::time::timeout(crate::http_client::CONNECT_TIMEOUT, dial)
+            let wire = tokio::time::timeout(crate::client::CONNECT_TIMEOUT, dial)
                 .await
                 .map_err(|_| {
                     coded(
                         ErrorCode::TimedOut,
                         format!(
                             "no connection within {}s",
-                            crate::http_client::CONNECT_TIMEOUT.as_secs()
+                            crate::client::CONNECT_TIMEOUT.as_secs()
                         ),
                     )
                 })??;

@@ -13,7 +13,7 @@ use es_runtime_providers::{
 const MAX_TLS_CLIENTS: usize = 32;
 
 use crate::HostAllowlist;
-use crate::http_client::{Body, HttpClient, Outbound, Redirects};
+use crate::client::{Body, HttpClient, Outbound, Redirects};
 
 /// A [`NetTransport`] over [`HttpClient`]: HTTP/1.1 and HTTP/2, pooled
 /// connections, streamed bodies both ways.
@@ -126,7 +126,7 @@ impl NetTransport for HttpTransport {
             // parsed it), but if it did there would be nothing to send.
             let url = url::Url::parse(&request.url)
                 .map_err(|e| ProviderError::Other(format!("url: {e}")))?;
-            let method = crate::http_types::Method::from_bytes(request.method.as_bytes())
+            let method = crate::client::types::Method::from_bytes(request.method.as_bytes())
                 .map_err(|e| ProviderError::Other(format!("method: {e}")))?;
             let response = client
                 .send(Outbound {

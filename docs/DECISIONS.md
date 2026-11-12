@@ -4589,6 +4589,8 @@ What others ship (official documentation unless noted):
 - **Code layout, before HTTP/3 lands**, as a move with no behaviour change: `client/mod.rs` (`HttpClient`: redirects, decoding, headers, deadlines, proxies), `client/select.rs` (origin records, single flight, the race), and one module per protocol — `client/h1.rs`, `client/h2.rs`, `client/h3.rs` — behind `enum Transport { H1, H2, H3 }`. An enum rather than a trait object or loaded modules: the set is closed and known at build time, and nothing is loaded at run time (supply-chain rule).
 - **Order:** the layout move; the origin record with `Alt-Svc` parsing (tested before any HTTP/3 exists); `quic`; `h3`; the client race; the server's UDP listener and advertisement; HTTPS records through `runtime:dns`'s resolver last, since the system resolver cannot return them.
 
+**Layout done (2026-11-12):** `crates/default-providers/src/client/` — `mod.rs` (`HttpClient`), `select.rs` (pool, origin records, single flight, `send`, and the `Response`/`Frame` a transport hands back), `h1.rs`, `h2.rs`, `types.rs` — moved with `git mv`, no behaviour change. `send` still branches on the protocol rather than dispatching through `enum Transport`: with two transports and no third, the enum would have nothing to abstract over; it arrives with `h3.rs`.
+
 **Open — the maintainer's call:**
 - **Client default.** HTTP/3 on by default once phase 4's gates pass (discovery-driven, as above), or behind an explicit `esrun` flag at first (D-security-over-friction: a flag, never an environment variable).
 - **Server default.** UDP bound and `Alt-Svc` sent by default on a TLS listener, or only when `serve({ http3: true })` asks — a UDP port is a firewall change the TCP server never needed (D217's consequences).

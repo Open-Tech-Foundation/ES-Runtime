@@ -1,6 +1,6 @@
 //! The HTTP client's vocabulary — methods, status codes, versions and header
 //! maps — as the runtime's own types (DECISIONS D217): what crosses between
-//! [`HttpClient`](crate::http_client::HttpClient)'s policy and its transports,
+//! [`HttpClient`](crate::client::HttpClient)'s policy and its transports,
 //! and what its callers read back.
 //!
 //! The shapes follow the `http` crate's, which the client used until it, and

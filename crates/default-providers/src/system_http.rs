@@ -1723,13 +1723,13 @@ mod http2_tests {
         .await;
 
         // Trusts this cert and nothing else.
-        let client = crate::http_client::HttpClient::new(
+        let client = crate::client::HttpClient::new(
             &crate::TrustStore::from_certificates([ck.cert.der().clone()]).unwrap(),
         );
 
         let request = tokio::spawn(async move {
             let resp = client
-                .send(crate::http_client::Outbound::get(
+                .send(crate::client::Outbound::get(
                     url::Url::parse(&format!("https://localhost:{port}/tls")).unwrap(),
                 ))
                 .await
@@ -1747,7 +1747,7 @@ mod http2_tests {
         ok(&http, rid, "secure-h2").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, crate::http_types::Version::Http2);
+        assert_eq!(version, crate::client::types::Version::Http2);
         assert_eq!(body, "secure-h2");
     }
 
@@ -2129,13 +2129,13 @@ mod http2_tests {
         }))
         .await;
 
-        let client = crate::http_client::HttpClient::new(
+        let client = crate::client::HttpClient::new(
             &crate::TrustStore::from_certificates([ck.cert.der().clone()]).unwrap(),
         );
 
         let request = tokio::spawn(async move {
             let resp = client
-                .send(crate::http_client::Outbound::get(
+                .send(crate::client::Outbound::get(
                     url::Url::parse(&format!("https://localhost:{port}/one-one")).unwrap(),
                 ))
                 .await
@@ -2152,7 +2152,7 @@ mod http2_tests {
         ok(&http, rid, "plain").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, crate::http_types::Version::Http11);
+        assert_eq!(version, crate::client::types::Version::Http11);
         assert_eq!(body, "plain");
     }
 }
