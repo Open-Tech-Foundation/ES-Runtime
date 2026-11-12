@@ -31,6 +31,7 @@ use es_runtime_providers::{
     ByteStream, HttpRequestHeaders, HttpServerBody, HttpServerRequest, HttpServerResponse,
     PeerCertificate, ProviderError,
 };
+use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -55,6 +56,19 @@ pub(crate) struct ConnContext {
 }
 
 type Trailers = Vec<(String, String)>;
+
+/// The most ready wakes handled before a write, and the most output held
+/// back for them.
+///
+/// A dial between the CPU a write costs and the overlap a write buys. With
+/// none, every answer was a write of its own: 10.2 µs per request on one
+/// connection carrying 50 streams. Gathering everything ready halved that but
+/// cost throughput: the client then received a whole batch at once and the
+/// two ends worked in lock-step. Measured on that shape (`bench/compare-http2.sh`)
+/// — no gathering 101k req/s, 256 93k, 32 160k, 16 160k, **8 168k at 6.2 µs**,
+/// 4 148k — and the many-connection shapes unchanged at every setting.
+const MAX_GATHER: usize = 8;
+const GATHER_BYTES: usize = 64 * 1024;
 type RequestBodyTx = mpsc::UnboundedSender<Result<Vec<u8>, ProviderError>>;
 
 struct StreamState {
@@ -132,6 +146,7 @@ where
     let mut quiet_since = tokio::time::Instant::now();
     // What arrived with the protocol choice is handled first, as if just read.
     let mut wake = (!buf.is_empty()).then(|| Wake::Read(Ok(buf.len())));
+    let mut gathered = 0usize;
 
     loop {
         if let Some(w) = wake.take() {
@@ -173,6 +188,32 @@ where
                 d.event(event, &mut ctx).await;
             }
         }
+        // Anything else already ready is handled before writing, so a burst of
+        // answers — one batch of the guest's work, on a multiplexed connection
+        // — leaves as one write rather than a write each, and requests that
+        // arrived meanwhile join the guest's next batch. Bounded, so output
+        // never waits long on a run of input.
+        if gathered < MAX_GATHER && d.conn.output().len() < GATHER_BYTES {
+            // Input first: new requests reach the guest in the same batch as
+            // the answers going out, rather than after them. A read that is
+            // not ready is dropped unstarted, which `read_buf` allows.
+            if let Some(n) = read_more(&mut io, &mut buf).now_or_never() {
+                wake = Some(Wake::Read(n));
+                gathered += 1;
+                continue;
+            }
+            if let Some(Some(w)) = d.wakes.next().now_or_never() {
+                wake = Some(w);
+                gathered += 1;
+                continue;
+            }
+            if let Ok((stream, n)) = release_rx.try_recv() {
+                wake = Some(Wake::Released(stream, n));
+                gathered += 1;
+                continue;
+            }
+        }
+        gathered = 0;
         if write_out(&mut io, &mut d.conn).await.is_err() || d.conn.is_failed() {
             return;
         }
