@@ -68,7 +68,10 @@ namespace) is unstable and may change between minor releases until the API freez
   one — and the server's `SETTINGS_MAX_CONCURRENT_STREAMS` is kept, a further
   connection opening once every one is full. A request the server never
   processed (`REFUSED_STREAM`, or above a GOAWAY's last stream) is sent once
-  more on a fresh connection, whatever its method (RFC 9113 §8.7).
+  more on a fresh connection, whatever its method (RFC 9113 §8.7). Against
+  hyper's client, on the same Node HTTP/2 server (`bench/compare-fetch-h2.sh`):
+  3,000 sequential GETs 400 → 377 ms, 30,000 GETs 100 at a time 1,163 → 938 ms
+  (34.0 → 31.4 µs of CPU each), 3,000 64 KiB uploads 598 → 555 ms.
 - **WebSocket framing is the runtime's own** (DECISIONS D217) for the
   `WebSocket` client, `upgradeWebSocket` and `runtime:websocket`'s `serve()`,
   instead of `tokio-tungstenite`'s, which no longer ships. It passes the

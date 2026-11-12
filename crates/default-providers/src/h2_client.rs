@@ -28,6 +28,7 @@ use es_runtime_common::ErrorCode as Code;
 use es_runtime_http::h2::ErrorCode;
 use es_runtime_http::h2::conn::{Config, Connection, Event};
 use es_runtime_providers::{ByteStream, ProviderError};
+use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use hyper::body::Frame;
@@ -46,6 +47,15 @@ const IDLE: Duration = Duration::from_secs(90);
 const SETTINGS_WAIT: Duration = Duration::from_secs(10);
 
 type FrameResult = Result<Frame<Bytes>, BoxError>;
+
+/// The most ready commands and wakes handled before a write, and the most
+/// output held back for them — the server driver's bound. Checked here with
+/// `bench/compare-fetch-h2.sh` (30,000 GETs, 100 at a time): a write per
+/// command 1,037 ms at 35.8 µs of CPU per request (hyper's client: 1,163 ms,
+/// 34.0 µs); 8, 938 ms at 31.4 µs; 32 quicker there (868 ms) but more CPU
+/// per request, and slower on uploads.
+const MAX_GATHER: usize = 8;
+const GATHER_BYTES: usize = 64 * 1024;
 
 /// Why a request failed, and whether the server is known not to have
 /// processed it.
@@ -347,27 +357,46 @@ async fn sleep_or_never(idle: bool) {
 impl Driver {
     async fn run(mut self, mut io: Conn, mut rx: mpsc::UnboundedReceiver<Command>) {
         let mut buf: Vec<u8> = Vec::with_capacity(16 * 1024);
+        let mut gathered = 0usize;
         loop {
-            let n = self.conn.output().len();
-            if n > 0 {
-                let written = io.write_all(self.conn.output()).await;
-                self.conn.consume_output(n);
-                if written.is_err() || io.flush().await.is_err() {
+            // Requests issued together — a `Promise.all` of fetches — and
+            // anything else already ready are taken before writing, so they
+            // leave as one write rather than a write each; bounded as the
+            // server's driver bounds it (`h2_conn::MAX_GATHER`).
+            let ready = if gathered < MAX_GATHER && self.conn.output().len() < GATHER_BYTES {
+                match rx.try_recv() {
+                    Ok(command) => Some(Wake::Cmd(Some(command))),
+                    Err(_) => self.wakes.next().now_or_never().flatten(),
+                }
+            } else {
+                None
+            };
+            let wake = if let Some(wake) = ready {
+                gathered += 1;
+                wake
+            } else {
+                gathered = 0;
+                let n = self.conn.output().len();
+                if n > 0 {
+                    let written = io.write_all(self.conn.output()).await;
+                    self.conn.consume_output(n);
+                    if written.is_err() || io.flush().await.is_err() {
+                        break;
+                    }
+                }
+                if self.conn.is_failed() {
                     break;
                 }
-            }
-            if self.conn.is_failed() {
-                break;
-            }
-            if self.shared.closed.load(Ordering::Acquire) && self.streams.is_empty() {
-                break;
-            }
-            let idle = self.streams.is_empty();
-            let wake = tokio::select! {
-                n = async { buf.reserve(16 * 1024); io.read_buf(&mut buf).await } => Wake::Read(n),
-                c = rx.recv() => Wake::Cmd(c),
-                Some(w) = self.wakes.next() => w,
-                () = sleep_or_never(idle) => Wake::Idle,
+                if self.shared.closed.load(Ordering::Acquire) && self.streams.is_empty() {
+                    break;
+                }
+                let idle = self.streams.is_empty();
+                tokio::select! {
+                    n = async { buf.reserve(16 * 1024); io.read_buf(&mut buf).await } => Wake::Read(n),
+                    c = rx.recv() => Wake::Cmd(c),
+                    Some(w) = self.wakes.next() => w,
+                    () = sleep_or_never(idle) => Wake::Idle,
+                }
             };
             match wake {
                 Wake::Read(Ok(0) | Err(_)) => break,
