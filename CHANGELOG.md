@@ -111,6 +111,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `file().type`, and so the `Content-Type` of `new Response(file(path))`, now
+  knows the files a site's `public/` holds besides pages and images: `.xml`,
+  `.rss`, `.atom`, `.webmanifest`, `.md`, `.csv`, `.pdf`, `.ttf`, `.otf`,
+  `.mp4`, `.webm`, `.mp3`, `.ogg` and `.wav`. They were untyped, so a server
+  sent them as `application/octet-stream` and a browser downloaded an RSS feed
+  or a sitemap instead of displaying it.
 - A package's `.js` file is judged ES module or CommonJS by its **nearest**
   `package.json`, not only the package root's (DECISIONS D22 amendment). A
   package that marks its ES module directory with `{ "type": "module" }` — as

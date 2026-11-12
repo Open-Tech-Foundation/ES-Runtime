@@ -33,6 +33,22 @@ pub fn content_type(path: &str) -> Option<&'static str> {
         "woff" => "font/woff",
         "wasm" => "application/wasm",
         "txt" | "map" => "text/plain; charset=utf-8",
+        // A site's feeds and sitemap: a browser displays these rather than
+        // downloading them, which is what a reader following the link expects.
+        "xml" => "application/xml",
+        "rss" => "application/rss+xml",
+        "atom" => "application/atom+xml",
+        "webmanifest" => "application/manifest+json",
+        "md" => "text/markdown; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "pdf" => "application/pdf",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "wav" => "audio/wav",
         _ => return None,
     })
 }
@@ -53,6 +69,31 @@ mod tests {
         );
         assert_eq!(content_type(r"C:\app\logo.png"), Some("image/png"));
         assert_eq!(content_type("photo.jpeg"), Some("image/jpeg"));
+    }
+
+    /// What a static site's `public/` holds besides pages and images: feeds,
+    /// a sitemap, a manifest, documents, fonts and media.
+    #[test]
+    fn a_sites_public_files_have_types() {
+        for (path, expected) in [
+            ("rss.xml", "application/xml"),
+            ("sitemap.xml", "application/xml"),
+            ("feed.rss", "application/rss+xml"),
+            ("feed.atom", "application/atom+xml"),
+            ("site.webmanifest", "application/manifest+json"),
+            ("llms.md", "text/markdown; charset=utf-8"),
+            ("data.csv", "text/csv; charset=utf-8"),
+            ("guide.pdf", "application/pdf"),
+            ("Inter.ttf", "font/ttf"),
+            ("Inter.otf", "font/otf"),
+            ("intro.mp4", "video/mp4"),
+            ("intro.webm", "video/webm"),
+            ("ping.mp3", "audio/mpeg"),
+            ("ping.ogg", "audio/ogg"),
+            ("ping.wav", "audio/wav"),
+        ] {
+            assert_eq!(content_type(path), Some(expected), "{path}");
+        }
     }
 
     #[test]

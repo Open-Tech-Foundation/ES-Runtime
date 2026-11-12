@@ -693,6 +693,34 @@ fn a_miss_is_a_404_by_default() {
     assert_eq!(get(port, &req("GET", "/sub/", &[])).body, b"<h1>sub</h1>");
 }
 
+/// A site's feeds, sitemap and manifest are typed, so a browser displays them
+/// rather than downloading them as `application/octet-stream`.
+#[test]
+fn feeds_sitemaps_and_manifests_are_typed() {
+    const NAME: &str = "feeds_sitemaps_and_manifests_are_typed";
+    let dir = fixture(NAME);
+    for name in ["rss.xml", "atom.xml", "sitemap.xml"] {
+        std::fs::write(dir.join(name), "<?xml version=\"1.0\"?><x/>").expect("xml file");
+    }
+    std::fs::write(dir.join("site.webmanifest"), "{}").expect("manifest");
+    let (preview, port) = start(&dir);
+    let _preview = preview;
+    for (path, expected) in [
+        ("/rss.xml", "application/xml"),
+        ("/atom.xml", "application/xml"),
+        ("/sitemap.xml", "application/xml"),
+        ("/site.webmanifest", "application/manifest+json"),
+    ] {
+        let answer = get(port, &req("GET", path, &[]));
+        assert_eq!(status(&answer), "200", "{path}");
+        assert_eq!(
+            answer.headers.get("content-type").map(String::as_str),
+            Some(expected),
+            "{path}"
+        );
+    }
+}
+
 #[test]
 fn a_site_404_page_answers_every_miss_with_404() {
     const NAME: &str = "a_site_404_page_answers_every_miss_with_404";

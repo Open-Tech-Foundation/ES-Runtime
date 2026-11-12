@@ -37,6 +37,10 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **`esdev preview` and `esdev start` type a site's feeds and sitemap.**
+  `rss.xml`, `atom.xml`, `sitemap.xml`, a `.webmanifest`, and `.md`, `.csv`,
+  `.pdf`, font and media files were sent as `application/octet-stream`, so the
+  browser downloaded them instead of displaying them.
 - **Tailwind finds a package stylesheet's own imports under pnpm.** A
   stylesheet `@import`ed from a package is now read from its real location,
   symlinks followed, so the packages it imports in turn are found beside it.
