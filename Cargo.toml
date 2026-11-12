@@ -122,18 +122,17 @@ futures-core = "0.3.32"
 futures-channel = { version = "0.3.32", default-features = false, features = ["alloc"] }
 futures-io = { version = "0.3.32", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.32", default-features = false }
-# Shipped only for its re-exported types (the `http` and `http-body` crates:
-# `Response`, `HeaderMap`, body traits) at the HTTP client's seam — every
-# protocol is `es-runtime-http`'s (DECISIONS D217), and the types go when that
-# seam is decided. Its server, client and HTTP/2 features are dev-only: the
-# tests' independent HTTP/2 client, and the `http_floor` baseline. All MIT.
-# Confined to `default-providers`.
+# Never shipped (DECISIONS D217): every protocol is `es-runtime-http`'s and the
+# client's types are `default-providers`' own (`http_types`). Kept for the
+# tests, as an independent HTTP implementation to drive ours with, and for the
+# `http_floor` baseline. All MIT. Dev-dependencies of `default-providers` only.
 hyper = { version = "1.10.1", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 # Streaming decoders for the HTTP client's content-codings (D198): the same
 # three `CompressionStream` implements (SPEC §2.8). `zstd` is left out — the
 # runtime decodes it nowhere else.
 async-compression = { version = "0.4.42", default-features = false, features = ["tokio", "gzip", "brotli", "zlib"] }
+# Test-only, with hyper: the bodies its client sends and collects.
 http-body-util = "0.1.3"
 # TLS for `runtime:net` client sockets (`secureTransport: "on"`, DECISIONS D28).
 # rustls via tokio-rustls with the `aws-lc-rs` provider (selected explicitly —

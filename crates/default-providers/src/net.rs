@@ -126,7 +126,7 @@ impl NetTransport for HttpTransport {
             // parsed it), but if it did there would be nothing to send.
             let url = url::Url::parse(&request.url)
                 .map_err(|e| ProviderError::Other(format!("url: {e}")))?;
-            let method = hyper::Method::from_bytes(request.method.as_bytes())
+            let method = crate::http_types::Method::from_bytes(request.method.as_bytes())
                 .map_err(|e| ProviderError::Other(format!("method: {e}")))?;
             let response = client
                 .send(Outbound {

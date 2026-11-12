@@ -83,7 +83,7 @@ impl OtlpHttpSink {
 async fn post(client: &HttpClient, url: &str, payload: String) -> Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
     let mut request = Outbound::get(parsed);
-    request.method = hyper::Method::POST;
+    request.method = crate::http_types::Method::POST;
     request.headers = vec![("content-type".to_string(), "application/json".to_string())];
     request.body = Body::Bytes(payload.into());
     let response = client

@@ -102,6 +102,68 @@ pub fn is_field_value(s: &[u8]) -> bool {
     s.iter().all(|&b| is_field_value_byte(b))
 }
 
+/// Whether `s` is exactly an authority a `Host` field (RFC 9110 §7.2) or an
+/// HTTP/2 `:authority` may carry: a host and an optional port, nothing more
+/// (RFC 3986 §3.2, without userinfo).
+///
+/// The host is an IPv6 address in brackets, or a name or IPv4 address made of
+/// unreserved characters and sub-delims. Everything that would change what a
+/// URL built from it means is refused — `/`, `?`, `#`, `@` and whitespace — and
+/// so is `%`: a URL parser percent-decodes a host, so an escape here would be
+/// checked as one string and used as another. The port is digits, at most
+/// 65535, written without leading zeros, so that it reads one way only.
+#[must_use]
+pub fn is_authority(s: &str) -> bool {
+    let (host, port) = if let Some(rest) = s.strip_prefix('[') {
+        let Some((v6, after)) = rest.split_once(']') else {
+            return false;
+        };
+        if v6.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        match after {
+            "" => return true,
+            _ => match after.strip_prefix(':') {
+                Some(port) => ("[ok]", Some(port)),
+                None => return false,
+            },
+        }
+    } else {
+        match s.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (s, None),
+        }
+    };
+    let host_ok = host == "[ok]"
+        || (!host.is_empty()
+            && host.bytes().all(|b| {
+                b.is_ascii_alphanumeric()
+                    || matches!(
+                        b,
+                        b'-' | b'.'
+                            | b'_'
+                            | b'~'
+                            | b'!'
+                            | b'$'
+                            | b'&'
+                            | b'\''
+                            | b'('
+                            | b')'
+                            | b'*'
+                            | b'+'
+                            | b','
+                            | b';'
+                            | b'='
+                    )
+            }));
+    let port_ok = port.is_none_or(|p| {
+        !p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u16>().is_ok_and(|n| n.to_string() == p)
+    });
+    host_ok && port_ok
+}
+
 /// `s` without leading and trailing optional whitespace (space and tab).
 #[must_use]
 pub fn trim_ows(s: &[u8]) -> &[u8] {
@@ -166,5 +228,52 @@ mod tests {
     fn list_elements_skip_empties() {
         let got: Vec<&[u8]> = list_elements(b" gzip , ,chunked,").collect();
         assert_eq!(got, [&b"gzip"[..], b"chunked"]);
+    }
+
+    #[test]
+    fn an_authority_is_a_host_and_a_port_and_nothing_else() {
+        for good in [
+            "example.com",
+            "example.com:8080",
+            "127.0.0.1:80",
+            "[::1]:8080",
+            "[::1]",
+            "[2001:db8::7]:443",
+            "sub.example.com.",
+            "localhost:0",
+            "xn--bcher-kva.example",
+            "a_b.example:65535",
+        ] {
+            assert!(is_authority(good), "{good} was refused");
+        }
+        for bad in [
+            // The forgeries: everything after the host is a different request.
+            "example.com/admin",
+            "example.com/admin?x=1",
+            "example.com?x=1",
+            "example.com#f",
+            // Userinfo — illegal in `Host`, and the visible half of the URL.
+            "evil.com@real.host",
+            "evil.com@real.host:443",
+            // Decoded by a URL parser into something this check never saw.
+            "a%2Fb.example",
+            // Not an authority at all.
+            "exa mple.com",
+            "example.com:notaport",
+            "example.com:",
+            "example.com:65536",
+            "example.com:080",
+            "example.com:+80",
+            ":80",
+            "[::1",
+            "[::1]x",
+            "[::1]:",
+            "[zz::1]",
+            "[fe80::1%25eth0]",
+            "a:b:c",
+            "",
+        ] {
+            assert!(!is_authority(bad), "{bad} was accepted");
+        }
     }
 }

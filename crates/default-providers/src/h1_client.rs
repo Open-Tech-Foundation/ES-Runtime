@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use crate::http_types::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version};
 use bytes::Bytes;
 use es_runtime_common::ErrorCode;
 use es_runtime_http::fields::Field;
@@ -38,10 +39,6 @@ use es_runtime_http::h1::{
     encode_request_head, parse_response,
 };
 use es_runtime_providers::ProviderError;
-use http_body_util::BodyExt;
-use hyper::body::Frame;
-use hyper::header::{HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, Response, StatusCode, Version};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::sync::{mpsc, watch};
 
@@ -52,7 +49,23 @@ use crate::http_client::{Body, Conn};
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// A response body, whichever version carried it.
-pub(crate) type ResponseStream = http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>;
+pub(crate) type ResponseStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<Frame, BoxError>> + Send>>;
+
+/// One piece of a response body: data, or the trailer section that ends it.
+pub(crate) enum Frame {
+    Data(Bytes),
+    Trailers(HeaderMap),
+}
+
+/// A response as a transport hands it to the client's policy: the head, and
+/// the body still to come.
+pub(crate) struct Response {
+    pub(crate) status: StatusCode,
+    pub(crate) version: Version,
+    pub(crate) headers: HeaderMap,
+    pub(crate) body: ResponseStream,
+}
 
 /// How long an idle pooled connection is kept.
 const POOL_IDLE: Duration = Duration::from_secs(90);
@@ -268,7 +281,7 @@ pub(crate) async fn send<F, Fut>(
     exchange: Exchange<'_>,
     body: Body,
     connect: F,
-) -> Result<Response<ResponseStream>, ProviderError>
+) -> Result<Response, ProviderError>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<Conn, ProviderError>>,
@@ -363,17 +376,22 @@ fn replay(body: &Body) -> Option<Body> {
 
 /// RFC 9110 §9.2.2: a request that may be repeated with the same effect.
 fn idempotent(method: &Method) -> bool {
-    matches!(
-        *method,
-        Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE | Method::PUT | Method::DELETE
-    )
+    [
+        Method::GET,
+        Method::HEAD,
+        Method::OPTIONS,
+        Method::TRACE,
+        Method::PUT,
+        Method::DELETE,
+    ]
+    .contains(method)
 }
 
 /// The framing a request body goes out with. A method whose request usually
 /// has a body says its empty one is empty, as other clients do.
 fn request_framing(method: &Method, body: &Body) -> Framing {
     match body {
-        Body::Empty if matches!(*method, Method::POST | Method::PUT | Method::PATCH) => {
+        Body::Empty if [Method::POST, Method::PUT, Method::PATCH].contains(method) => {
             Framing::Length(0)
         }
         Body::Empty => Framing::NoBody,
@@ -388,7 +406,7 @@ async fn exchange_h1(
     mut conn: Conn,
     exchange: &Exchange<'_>,
     body: Body,
-) -> Result<Response<ResponseStream>, Failure> {
+) -> Result<Response, Failure> {
     let framing = request_framing(exchange.method, &body);
     let mut head = Vec::with_capacity(512);
     let fields = exchange
@@ -491,7 +509,7 @@ async fn read_response(
     mut io: Halves,
     method: &Method,
     writer: Option<Writer>,
-) -> Result<Response<ResponseStream>, Failure> {
+) -> Result<Response, Failure> {
     let limits = Limits::default();
     let to_head = *method == Method::HEAD;
     let mut buf = Vec::new();
@@ -539,10 +557,12 @@ async fn read_response(
         headers.append(name, value);
     }
     buf.drain(..head.len);
-    let mut response = Response::new(empty_body());
-    *response.status_mut() = status;
-    *response.version_mut() = Version::HTTP_11;
-    *response.headers_mut() = headers;
+    let mut response = Response {
+        status,
+        version: Version::Http11,
+        headers,
+        body: empty_body(),
+    };
 
     // A switch of protocols is not something this client follows: the
     // connection goes with the response and is not pooled.
@@ -572,7 +592,7 @@ async fn read_response(
         {
             pool.put_h1(origin.clone(), conn);
         }
-        *response.body_mut() = ReadyBody { frames }.boxed_unsync();
+        response.body = Box::pin(futures_util::stream::iter(frames.into_iter().map(Ok)));
         return Ok(response);
     }
     let (tx, rx) = mpsc::channel(BODY_CHANNEL);
@@ -598,7 +618,7 @@ async fn read_response(
         };
         pool.put_h1(origin, conn);
     });
-    *response.body_mut() = ChannelBody { rx }.boxed_unsync();
+    response.body = Box::pin(tokio_stream_from(rx));
     Ok(response)
 }
 
@@ -608,13 +628,13 @@ async fn read_response(
 fn buffered_body(
     buf: &[u8],
     framing: ResponseBody,
-) -> Option<(std::collections::VecDeque<Frame<Bytes>>, usize)> {
+) -> Option<(std::collections::VecDeque<Frame>, usize)> {
     let mut frames = std::collections::VecDeque::new();
     match framing {
         ResponseBody::Empty => Some((frames, 0)),
         ResponseBody::Length(n) => {
             let n = usize::try_from(n).ok().filter(|&n| n <= buf.len())?;
-            frames.push_back(Frame::data(Bytes::copy_from_slice(&buf[..n])));
+            frames.push_back(Frame::Data(Bytes::copy_from_slice(&buf[..n])));
             Some((frames, n))
         }
         ResponseBody::Chunked => {
@@ -636,7 +656,7 @@ fn buffered_body(
                 }
             }
             if !data.is_empty() {
-                frames.push_back(Frame::data(Bytes::from(data)));
+                frames.push_back(Frame::Data(Bytes::from(data)));
             }
             let mut trailers = HeaderMap::new();
             for (n, v) in decoder.trailers() {
@@ -645,7 +665,7 @@ fn buffered_body(
                 }
             }
             if !trailers.is_empty() {
-                frames.push_back(Frame::trailers(trailers));
+                frames.push_back(Frame::Trailers(trailers));
             }
             Some((frames, at))
         }
@@ -653,28 +673,7 @@ fn buffered_body(
     }
 }
 
-/// A body that was complete before anyone asked for it.
-struct ReadyBody {
-    frames: std::collections::VecDeque<Frame<Bytes>>,
-}
-
-impl hyper::body::Body for ReadyBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
-        Poll::Ready(self.frames.pop_front().map(Ok))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.frames.is_empty()
-    }
-}
-
-type FrameResult = Result<Frame<Bytes>, BoxError>;
+type FrameResult = Result<Frame, BoxError>;
 
 /// Reads the body after the head, handing frames to `tx`. Returns whether it
 /// ended exactly where its framing said, with nothing read past it — the
@@ -698,7 +697,7 @@ async fn read_body(
                     let data = Bytes::copy_from_slice(&buf[..n]);
                     buf.drain(..n);
                     remaining -= n as u64;
-                    if tx.send(Ok(Frame::data(data))).await.is_err() {
+                    if tx.send(Ok(Frame::Data(data))).await.is_err() {
                         return false; // the reader went away
                     }
                 }
@@ -737,7 +736,7 @@ async fn read_body(
                     }
                 }
                 buf.drain(..at);
-                if !out.is_empty() && tx.send(Ok(Frame::data(Bytes::from(out)))).await.is_err() {
+                if !out.is_empty() && tx.send(Ok(Frame::Data(Bytes::from(out)))).await.is_err() {
                     return false;
                 }
                 if ended {
@@ -749,7 +748,7 @@ async fn read_body(
                             trailers.append(n, v);
                         }
                     }
-                    if !trailers.is_empty() && tx.send(Ok(Frame::trailers(trailers))).await.is_err()
+                    if !trailers.is_empty() && tx.send(Ok(Frame::Trailers(trailers))).await.is_err()
                     {
                         return false;
                     }
@@ -765,7 +764,7 @@ async fn read_body(
         ResponseBody::UntilClose => loop {
             if !buf.is_empty() {
                 let data = Bytes::from(std::mem::take(&mut buf));
-                if tx.send(Ok(Frame::data(data))).await.is_err() {
+                if tx.send(Ok(Frame::Data(data))).await.is_err() {
                     return false;
                 }
             }
@@ -779,26 +778,14 @@ async fn read_body(
 }
 
 fn empty_body() -> ResponseStream {
-    http_body_util::Empty::new()
-        .map_err(|never| match never {})
-        .boxed_unsync()
+    Box::pin(futures_util::stream::empty())
 }
 
 /// A body fed by the task reading the connection.
-struct ChannelBody {
-    rx: mpsc::Receiver<FrameResult>,
-}
-
-impl hyper::body::Body for ChannelBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
-        self.rx.poll_recv(cx)
-    }
+fn tokio_stream_from(
+    mut rx: mpsc::Receiver<FrameResult>,
+) -> impl futures_core::Stream<Item = FrameResult> + Send {
+    futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))
 }
 
 #[cfg(test)]
@@ -807,8 +794,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use crate::http_types::{Method, StatusCode};
     use futures_util::StreamExt;
-    use hyper::{Method, StatusCode};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use url::Url;
@@ -1041,6 +1028,6 @@ mod tests {
         .await
         .expect("the answer must not wait for the upload")
         .unwrap();
-        assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.status, StatusCode::from_u16(413).unwrap());
     }
 }

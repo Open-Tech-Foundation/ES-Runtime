@@ -301,21 +301,16 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
     }
 }
 
-/// `authority` if it is exactly a host and an optional port.
+/// `authority` if it is exactly a host and an optional port
+/// ([`is_authority`](es_runtime_http::fields::is_authority)).
 ///
-/// Rebuilt from the parsed parts and compared, rather than trusted once it
-/// parses: `Authority` also accepts userinfo, and `Host: evil.com@real.host` is
-/// both illegal in a `Host` field and a URL whose *hostname* is `real.host` and
-/// whose visible prefix is `evil.com` — a phishing string in every log line the
-/// application writes.
+/// The authority is spliced into the URL the guest routes on, so anything more
+/// is a forgery: `Host: evil.com@real.host` is a URL whose *hostname* is
+/// `real.host` and whose visible prefix is `evil.com` — a phishing string in
+/// every log line the application writes — and `Host: h/admin?` turns
+/// `GET /public` into a request for `/admin`.
 pub(crate) fn valid_authority(authority: &str) -> Option<String> {
-    let parsed = hyper::http::uri::Authority::try_from(authority).ok()?;
-    let host = parsed.host();
-    let rebuilt = match parsed.port_u16() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
-    };
-    (rebuilt == authority).then_some(rebuilt)
+    es_runtime_http::fields::is_authority(authority).then(|| authority.to_owned())
 }
 
 /// Serves one accepted connection to completion, honouring the drain signal.
@@ -1752,7 +1747,7 @@ mod http2_tests {
         ok(&http, rid, "secure-h2").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, hyper::Version::HTTP_2);
+        assert_eq!(version, crate::http_types::Version::Http2);
         assert_eq!(body, "secure-h2");
     }
 
@@ -2157,7 +2152,7 @@ mod http2_tests {
         ok(&http, rid, "plain").await;
 
         let (version, body) = request.await.unwrap();
-        assert_eq!(version, hyper::Version::HTTP_11);
+        assert_eq!(version, crate::http_types::Version::Http11);
         assert_eq!(body, "plain");
     }
 }

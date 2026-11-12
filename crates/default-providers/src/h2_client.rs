@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::http_types::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version};
 use bytes::Bytes;
 use es_runtime_common::ErrorCode as Code;
 use es_runtime_http::h2::ErrorCode;
@@ -31,13 +32,10 @@ use es_runtime_providers::{ByteStream, ProviderError};
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use hyper::body::Frame;
-use hyper::header::{HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, Response, StatusCode, Version};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::h1_client::{BoxError, Exchange, ResponseStream};
+use crate::h1_client::{BoxError, Exchange, Frame, Response};
 use crate::http_client::{Body, Conn};
 
 /// How long a connection with no open stream is kept.
@@ -46,7 +44,7 @@ const IDLE: Duration = Duration::from_secs(90);
 /// How long the server has to send its first SETTINGS after the preface.
 const SETTINGS_WAIT: Duration = Duration::from_secs(10);
 
-type FrameResult = Result<Frame<Bytes>, BoxError>;
+type FrameResult = Result<Frame, BoxError>;
 
 /// The most ready commands and wakes handled before a write, and the most
 /// output held back for them — the server driver's bound. Checked here with
@@ -185,7 +183,7 @@ impl Reservation {
         exchange: &Exchange<'_>,
         secure: bool,
         body: Body,
-    ) -> Result<Response<ResponseStream>, H2Failure> {
+    ) -> Result<Response, H2Failure> {
         let fields = request_fields(exchange, secure, &body);
         let (reply, reply_rx) = oneshot::channel();
         let (cancel_tx, cancel) = oneshot::channel();
@@ -221,11 +219,12 @@ impl Reservation {
             cmd,
             _cancel: cancel_tx,
         };
-        let mut response = Response::new(http_body_util::BodyExt::boxed_unsync(body));
-        *response.status_mut() = status;
-        *response.version_mut() = Version::HTTP_2;
-        *response.headers_mut() = head.headers;
-        Ok(response)
+        Ok(Response {
+            status,
+            version: Version::Http2,
+            headers: head.headers,
+            body: Box::pin(body),
+        })
     }
 }
 
@@ -266,9 +265,7 @@ fn request_fields(exchange: &Exchange<'_>, secure: bool, body: &Body) -> Vec<(Ve
             Body::Bytes(b) => {
                 fields.push((b"content-length".to_vec(), b.len().to_string().into_bytes()))
             }
-            Body::Empty
-                if matches!(*exchange.method, Method::POST | Method::PUT | Method::PATCH) =>
-            {
+            Body::Empty if [Method::POST, Method::PUT, Method::PATCH].contains(exchange.method) => {
                 fields.push((b"content-length".to_vec(), b"0".to_vec()));
             }
             _ => {}
@@ -288,17 +285,12 @@ struct H2Body {
     _cancel: oneshot::Sender<()>,
 }
 
-impl hyper::body::Body for H2Body {
-    type Data = Bytes;
-    type Error = BoxError;
+impl futures_core::Stream for H2Body {
+    type Item = FrameResult;
 
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<FrameResult>> {
         let polled = self.rx.poll_recv(cx);
-        if let Poll::Ready(Some(Ok(frame))) = &polled
-            && let Some(data) = frame.data_ref()
+        if let Poll::Ready(Some(Ok(Frame::Data(data)))) = &polled
             && !data.is_empty()
         {
             let _ = self.cmd.send(Command::Release(self.stream, data.len()));
@@ -634,7 +626,7 @@ impl Driver {
                     .get(&stream)
                     .and_then(|r| r.body_tx.as_ref())
                     .is_some_and(|tx| {
-                        n == 0 || tx.send(Ok(Frame::data(Bytes::from(data)))).is_ok()
+                        n == 0 || tx.send(Ok(Frame::Data(Bytes::from(data)))).is_ok()
                     });
                 if !delivered && n > 0 {
                     // Nobody reads it: its window comes back now.
@@ -655,7 +647,7 @@ impl Driver {
                             map.append(name, value);
                         }
                     }
-                    let _ = tx.send(Ok(Frame::trailers(map)));
+                    let _ = tx.send(Ok(Frame::Trailers(map)));
                 }
                 self.body_ended(stream);
             }
@@ -749,10 +741,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use crate::http_types::{Method, StatusCode, Version};
     use es_runtime_http::h2::conn::Config;
     use es_runtime_providers::{HttpServerBody, HttpServerResponse};
     use futures_util::StreamExt;
-    use hyper::{Method, StatusCode, Version};
     use tokio::net::TcpListener;
     use tokio::sync::{mpsc, watch};
     use tokio_rustls::TlsAcceptor;
@@ -914,7 +906,7 @@ mod tests {
         assert!(
             answers
                 .iter()
-                .all(|(st, v, b)| *st == StatusCode::OK && *v == Version::HTTP_2 && b == b"GET")
+                .all(|(st, v, b)| *st == StatusCode::OK && *v == Version::Http2 && b == b"GET")
         );
         assert_eq!(
             s.connections.load(Ordering::SeqCst),
@@ -983,7 +975,7 @@ mod tests {
         assert!(
             answers
                 .iter()
-                .all(|(st, v, _)| *st == StatusCode::OK && *v == Version::HTTP_11)
+                .all(|(st, v, _)| *st == StatusCode::OK && *v == Version::Http11)
         );
         assert!(
             s.connections.load(Ordering::SeqCst) >= 2,

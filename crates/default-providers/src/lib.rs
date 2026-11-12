@@ -37,6 +37,7 @@ mod h2_client;
 mod h2_conn;
 mod host_allowlist;
 pub mod http_client;
+pub mod http_types;
 mod jail;
 mod listener;
 mod modules;

@@ -2,9 +2,10 @@
 //! binary makes — `fetch`, the telemetry exporter, `upgrade`, `esdev create`'s
 //! registry lookups — goes through [`HttpClient`].
 //!
-//! The policy is here and the wire is in [`crate::h1_client`]: HTTP/1.1 and
-//! the connection pool are ES-Runtime's own (D217), HTTP/2 is hyper's until
-//! D217's phase 3, and DNS, TCP and Happy Eyeballs are [`crate::tcp_connect`].
+//! The policy is here and the wire is in [`crate::h1_client`] (the pool and
+//! HTTP/1.1) and [`crate::h2_client`] — ES-Runtime's own (D217), as are the
+//! types between them ([`crate::http_types`]) — and DNS, TCP and Happy
+//! Eyeballs are [`crate::tcp_connect`].
 //! TLS is tokio-rustls over the process trust store (D197).
 //! What is written here is what a client decides rather than parses: which
 //! redirects to follow and what to strip on the way, which content-codings to
@@ -20,9 +21,9 @@ use es_runtime_common::ErrorCode;
 use es_runtime_providers::{ByteStream, ProviderError};
 use futures_util::{Stream, StreamExt, TryStreamExt};
 
-use hyper::body::Body as _;
-use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, StatusCode};
+pub use crate::http_types::{
+    HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Version, header,
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -30,7 +31,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use url::Url;
 
-use crate::h1_client::{Exchange, Origin, Pool, ResponseStream};
+use crate::h1_client::{Exchange, Frame, Origin, Pool, Response, ResponseStream};
 use crate::proxy::{BoxWire, Proxies, ProxyError};
 use crate::{HostAllowlist, TrustStore};
 
@@ -121,7 +122,7 @@ pub struct Inbound {
     /// The response status.
     pub status: StatusCode,
     /// The HTTP version the response arrived over.
-    pub version: hyper::Version,
+    pub version: Version,
     /// The URL this response came from, after any redirects, fragment kept
     /// as Fetch's response URL list does not (the caller decides).
     pub url: Url,
@@ -248,7 +249,7 @@ impl HttpClient {
         }
         let port = url.port_or_known_default()?;
         let server = proxies.for_target("http", url.host_str()?, port)?;
-        HeaderValue::from_str(server.authorization()?).ok()
+        server.authorization()?.parse::<HeaderValue>().ok()
     }
 
     /// Sends `request`, following redirects as it asks, and resolves once the
@@ -301,8 +302,8 @@ impl HttpClient {
                     this_body,
                 )
                 .await?;
-            let status = response.status();
-            let location = response.headers().get(header::LOCATION).cloned();
+            let status = response.status;
+            let location = response.headers.get(header::LOCATION).cloned();
             let follow = redirects == Redirects::Follow && is_redirect(status);
             let Some(location) = location.filter(|_| follow) else {
                 return Ok(inbound(&method, url, hops > 0, response, decompress));
@@ -375,7 +376,7 @@ impl HttpClient {
         url: &Url,
         headers: HeaderMap,
         body: Body,
-    ) -> Result<hyper::Response<ResponseStream>, ProviderError> {
+    ) -> Result<Response, ProviderError> {
         let secure = url.scheme() == "https";
         let host = url
             .host_str()
@@ -483,7 +484,8 @@ fn header_map(pairs: &[(String, String)]) -> Result<HeaderMap, ProviderError> {
     for (name, value) in pairs {
         let name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|_| ProviderError::Other(format!("invalid header name: {name}")))?;
-        let value = HeaderValue::from_str(value)
+        let value = value
+            .parse::<HeaderValue>()
             .map_err(|_| ProviderError::Other(format!("invalid value for header {name}")))?;
         map.append(name, value);
     }
@@ -534,7 +536,7 @@ fn coding(method: &Method, status: StatusCode, headers: &HeaderMap) -> Option<Co
     {
         return None;
     }
-    let mut values = headers.get_all(header::CONTENT_ENCODING).iter();
+    let mut values = headers.get_all(header::CONTENT_ENCODING);
     let value = values.next()?;
     if values.next().is_some() {
         return None;
@@ -551,14 +553,18 @@ fn inbound(
     method: &Method,
     url: Url,
     redirected: bool,
-    response: hyper::Response<ResponseStream>,
+    response: Response,
     decompress: bool,
 ) -> Inbound {
-    let (parts, incoming) = response.into_parts();
-    let mut headers = parts.headers;
+    let Response {
+        status,
+        version,
+        mut headers,
+        body: incoming,
+    } = response;
     let (trailer_tx, trailers) = tokio::sync::oneshot::channel();
     let raw = frames(incoming, trailer_tx);
-    let coding = coding(method, parts.status, &headers).filter(|_| decompress);
+    let coding = coding(method, status, &headers).filter(|_| decompress);
     let body: ByteStream = match coding {
         Some(coding) => {
             headers.remove(header::CONTENT_ENCODING);
@@ -568,8 +574,8 @@ fn inbound(
         None => Box::pin(raw.map(|chunk| chunk.map(|bytes| bytes.to_vec()).map_err(body_error))),
     };
     Inbound {
-        status: parts.status,
-        version: parts.version,
+        status,
+        version,
         url,
         redirected,
         headers,
@@ -588,24 +594,20 @@ fn frames(
     let mut trailer_tx = Some(trailer_tx);
     futures_util::stream::poll_fn(move |cx| {
         loop {
-            return match Pin::new(&mut incoming).poll_frame(cx) {
+            return match incoming.as_mut().poll_next(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => {
                     trailer_tx.take();
                     Poll::Ready(None)
                 }
                 Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(std::io::Error::other(e)))),
-                Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
-                    Ok(bytes) => Poll::Ready(Some(Ok(bytes))),
-                    Err(frame) => {
-                        if let Ok(map) = frame.into_trailers()
-                            && let Some(tx) = trailer_tx.take()
-                        {
-                            let _ = tx.send(pairs(&map));
-                        }
-                        continue;
+                Poll::Ready(Some(Ok(Frame::Data(bytes)))) => Poll::Ready(Some(Ok(bytes))),
+                Poll::Ready(Some(Ok(Frame::Trailers(map)))) => {
+                    if let Some(tx) = trailer_tx.take() {
+                        let _ = tx.send(pairs(&map));
                     }
-                },
+                    continue;
+                }
             };
         }
     })

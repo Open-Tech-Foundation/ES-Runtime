@@ -39,6 +39,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **hyper no longer ships** (DECISIONS D217). The HTTP client's methods,
+  status codes, versions and header maps are the runtime's own
+  (`default-providers`' `http_types`), and the server's `Host` check is
+  `es-runtime-http`'s; hyper, `http`, `http-body` and `http-body-util` left
+  `esrun`, and remain only as the tests' independent HTTP implementation. A
+  `Host` (or HTTP/2 `:authority`) holding a percent-escape is now refused: a
+  URL parser decodes a host, so it would have been checked as one name and
+  routed as another.
 - **`runtime:http` serves HTTP/1.1 and HTTP/2 with its own connection code**
   (DECISIONS D217) instead of hyper's. HTTP/2 passes h2spec (146 of 146 over
   TLS; `scripts/h2spec.sh`), bounds Rapid Reset until the handler has let go
