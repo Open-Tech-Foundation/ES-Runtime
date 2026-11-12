@@ -26,7 +26,10 @@ namespace) is unstable and may change between minor releases until the API freez
   roles — streams, flow control both ways, settings, message validation
   (§8), and bounds on Rapid Reset (CVE-2023-44487), CONTINUATION, PING,
   SETTINGS and empty-frame floods and oversized header lists, which now
-  serves `runtime:http`'s HTTP/2.
+  serves `runtime:http`'s HTTP/2; and WebSocket framing (RFC 6455), each
+  violation refused with the close code §7.4.1 names for it, text checked as
+  UTF-8 as it arrives, and one rule for which requests may be upgraded (§4.2.1:
+  `Sec-WebSocket-Version: 13` and a key that is base64 of 16 bytes).
 
 ### Changed
 

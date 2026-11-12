@@ -1,6 +1,6 @@
 [package]
 name = "es-runtime-http"
-description = "ES-Runtime's HTTP protocol cores (DECISIONS D217): sans-I/O state machines for HTTP/1.1, shared by the server and the client. No I/O, no dependencies."
+description = "ES-Runtime's HTTP protocol cores (DECISIONS D217): sans-I/O state machines for HTTP/1.1, HTTP/2 and WebSocket, shared by the server and the client. No I/O, no dependencies."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
