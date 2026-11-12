@@ -96,7 +96,7 @@ for await (const ws of server) {
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. |
 | `maxConnections` | unlimited | The most connections to hold at once; over the cap they wait rather than being refused. |
 | `maxConnectionsPerIp` | unlimited | The most one peer address may hold; over this they are **refused**. Leave off behind a proxy. |
-| `maxBufferedAmount` | `8 MiB` | Bytes that may sit queued for one connection before it is closed with `1013`. **On** by default; `0` removes it. |
+| `maxBufferedAmount` | `8 MiB` | Bytes that may sit queued for one connection: a send that finds this much already queued closes it with `1013`. One larger message on a connection with less queued still goes out. **On** by default; `0` removes it. |
 
 ```js
 const server = serve({
@@ -184,8 +184,9 @@ for await (const chunk of source) {
 }
 ```
 
-`maxBufferedAmount` is what happens when nobody looks: past it the host closes
-that connection with `1013` (Try Again Later) rather than hold more, so one slow
+`maxBufferedAmount` is what happens when nobody looks: a send that finds that
+much already queued makes the host close the connection with `1013` (Try Again
+Later) rather than hold more. It bounds a backlog, not a message, so one slow
 peer costs a connection instead of the process. It applies per connection,
 including the ones `broadcast()` fans out to. Unlike the connection caps it is
 **on** by default, because the number does not depend on what the deployment

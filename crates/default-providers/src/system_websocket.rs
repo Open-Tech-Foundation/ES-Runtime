@@ -99,13 +99,20 @@ impl WsSlot {
     fn queue(&self, msg: &WsMessage) -> Queued {
         let bytes = message_len(msg);
         if let Some(max) = self.max_buffered {
+            // Admitted while what is *already* queued is under the bound — the
+            // check Bun's `backpressureLimit` makes — so a connection holds at
+            // most the bound plus one message. The bound is for a peer that
+            // has fallen behind; one large message on an idle connection is
+            // not that, and closing for it would send 1013 "try again later"
+            // for a message that could never go, however often it was tried.
+            //
             // `fetch_update` rather than load-then-add: two concurrent sends
             // that each read the same value below the bound would both be
             // admitted, and the bound would be a suggestion.
             let admitted =
                 self.buffered
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
-                        (held.saturating_add(bytes) <= max).then(|| held + bytes)
+                        (held < max).then(|| held.saturating_add(bytes))
                     });
             if admitted.is_err() {
                 // `notify_one`, not `notify_waiters`: the actor is only
@@ -1782,6 +1789,51 @@ mod bounds_tests {
         );
 
         drop(silent);
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// The bound is on a backlog, not on a message: one message larger than
+    /// it, sent on a connection with nothing queued, goes out whole (as Bun's
+    /// `backpressureLimit` admits one past its limit). Autobahn's 9.1.6 —
+    /// 16 MiB echoed against the 8 MiB default — is this case.
+    #[tokio::test]
+    async fn one_message_larger_than_the_bound_goes_out_on_an_idle_connection() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys
+            .serve(WsServeOptions {
+                host: "127.0.0.1".to_string(),
+                tls: None,
+                port: 0,
+                timeouts: WsTimeouts::default(),
+                max_connections: None,
+                max_connections_per_ip: None,
+                max_buffered_amount: Some(64 * 1024),
+            })
+            .await
+            .unwrap();
+        let port = info.local_port;
+        let (client, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let (id, _) = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // Sixteen times the bound, in one message.
+        sys.send(id, WsMessage::Binary(vec![3u8; 1024 * 1024]))
+            .await
+            .expect("the send is accepted");
+        let got = tokio::time::timeout(Duration::from_secs(10), sys.recv(client))
+            .await
+            .expect("the message arrives")
+            .unwrap();
+        assert!(
+            matches!(got, Some(WsIncoming::Binary(b)) if b.len() == 1024 * 1024),
+            "a single large message closed the connection instead of going out"
+        );
         sys.close_server(server_id).await.unwrap();
     }
 

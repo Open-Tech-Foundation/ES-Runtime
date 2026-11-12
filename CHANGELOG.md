@@ -86,6 +86,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- A single WebSocket message larger than `maxBufferedAmount` (8 MiB by
+  default) closed the connection with `1013` "Try Again Later" even with
+  nothing else queued — a message that could never be sent, reported as one
+  to retry. The bound is now checked against what is already queued, as Bun's
+  `backpressureLimit` is: a connection holds at most the bound plus one
+  message.
 - `upgradeWebSocket` answered a request that never asked to be upgraded with
   a `101` and no WebSocket behind it; it now throws a `TypeError`, as Deno's
   does, using the same RFC 6455 §4.2.1 check the host applies.

@@ -107,7 +107,7 @@ http({ hostname: "$BIND", port: $UPGRADE_PORT }, (request) => {
   echo(socket);
   return response;
 });
-const server = serve({ hostname: "$BIND", port: $SERVE_PORT, maxBufferedAmount: 0 });
+const server = serve({ hostname: "$BIND", port: $SERVE_PORT });
 for await (const socket of server) echo(socket);
 JS
   (cd "$tmp/site" && exec "$ESRUN" --allow-all server.js) > "$tmp/esrun-server.log" 2>&1 &

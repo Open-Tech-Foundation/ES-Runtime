@@ -2949,7 +2949,7 @@ for await (const ws of server) {
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. RFC 6455's handshake is an HTTP request head, so this is the slowloris bound on the same bytes. It never touches an **established** connection — a socket that has said nothing for a week is idle, not stalled. |
 | `maxConnections` | unlimited | The most connections to hold at once. A connection over the cap is **held, not refused**: it waits in the kernel backlog and is served once a slot frees. Worth setting on a public port — WebSocket connections are long-lived by design, so unlike an HTTP server's the count does not fall back down on its own. |
 | `maxConnectionsPerIp` | unlimited | The most connections **one peer address** may hold. Without it, `maxConnections` says nothing about whose connections fill it — one peer can take every slot. A connection over this is **refused**, not held. Leave it off behind a proxy or a NAT, where every connection shares one source address. |
-| `maxBufferedAmount` | `8388608` (8 MiB) | The most bytes that may sit queued for one connection before it is closed with `1013`. **On by default**, unlike the caps above: the number does not depend on what the deployment knows. `0` removes it. |
+| `maxBufferedAmount` | `8388608` (8 MiB) | The most bytes that may sit queued for one connection: a send that finds this much already queued closes it with `1013`. A single larger message on a connection with less queued still goes out, so a connection holds at most this plus one message. **On by default**, unlike the caps above: the number does not depend on what the deployment knows. `0` removes it. |
 
 The connection spellings match `runtime:http`'s `serve()`, and the numbers live
 only in the host — the prelude sends "unset", so there is one copy to keep true.
@@ -2971,8 +2971,9 @@ for await (const chunk of source) {
 }
 ```
 
-And **`maxBufferedAmount`** is what happens when nobody looks: past it the host
-closes that connection with `1013` (Try Again Later) rather than hold more, so
+And **`maxBufferedAmount`** is what happens when nobody looks: a send that finds
+that much already queued makes the host close the connection with `1013` (Try
+Again Later) rather than hold more — it bounds a backlog, not a message, so
 one slow peer costs a connection instead of the process. It applies per
 connection, including the ones `broadcast()` fans out to — a broadcast is a list
 of sends, and the one peer that has stopped reading is the one that is closed for
