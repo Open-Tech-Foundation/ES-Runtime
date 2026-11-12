@@ -35,6 +35,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   client is one task for both directions and answers the browser's pings
   while it waits.
 
+### Fixed
+
+- **Tailwind finds a package stylesheet's own imports under pnpm.** A
+  stylesheet `@import`ed from a package is now read from its real location,
+  symlinks followed, so the packages it imports in turn are found beside it.
+  The `docs` template failed to build when installed with pnpm (`cannot find
+  the stylesheet "@opentf/syntax-highlighter/themes/shared.css"`).
+
 ## [0.27.0] - 2026-11-11
 
 ### Added

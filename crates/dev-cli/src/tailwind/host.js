@@ -14,7 +14,7 @@
 //   2. build — `candidates` on the context. Returns the CSS.
 
 import { host } from "runtime:build";
-import { exists, file } from "runtime:fs";
+import { exists, file, realPath } from "runtime:fs";
 import { dirname, fromFileURL, isAbsolute, join, toFileURL } from "runtime:path";
 
 const { compile } = await import(__ESDEV_TAILWIND__);
@@ -97,7 +97,11 @@ async function resolveStylesheet(request, base) {
       if (target === null) {
         throw new Error(`${request}: ${name} does not export a stylesheet at "${subpath}"`);
       }
-      return join(root, target);
+      // Where the file really is, symlinks followed: the stylesheet's own
+      // `@import`s resolve from there. Under pnpm a package is a link into
+      // `node_modules/.pnpm`, and its dependencies sit beside the real
+      // location — from the link they cannot be found.
+      return await realPath(join(root, target));
     }
     const parent = dirname(dir);
     if (parent === dir) break;

@@ -58,11 +58,21 @@ fn built_css(dir: &Path) -> String {
 /// does, and generates one rule per candidate starting `tw-` — so a test can
 /// read off exactly which candidates reached `build()`.
 const STAND_IN: &str = r#"
-export async function compile(css, { base, loadStylesheet, loadModule }) {
-  let imported = "";
-  for (const match of css.matchAll(/@import "(tailwindcss[^"]*)"[^;]*;/g)) {
-    imported += (await loadStylesheet(match[1], base)).content;
+// A package stylesheet's own package `@import`s are loaded against the `base`
+// it came back with, as the real compiler loads them.
+const PACKAGE_IMPORT = /@import "([^./"][^"]*)"[^;]*;/g;
+async function inline(css, base, loadStylesheet) {
+  let out = "";
+  for (const match of css.matchAll(PACKAGE_IMPORT)) {
+    const sheet = await loadStylesheet(match[1], base);
+    out += await inline(sheet.content, sheet.base, loadStylesheet);
+    out += sheet.content.replace(PACKAGE_IMPORT, "");
   }
+  return out;
+}
+
+export async function compile(css, { base, loadStylesheet, loadModule }) {
+  const imported = await inline(css, base, loadStylesheet);
   const plugins = [];
   for (const match of css.matchAll(/@plugin "([^"]+)";/g)) {
     plugins.push((await loadModule(match[1], base, "plugin")).module);
@@ -76,7 +86,7 @@ export async function compile(css, { base, loadStylesheet, loadModule }) {
     negated: match[1] !== undefined,
   }));
   const rest = css
-    .replace(/@import "tailwindcss[^"]*"[^;]*;/g, "")
+    .replace(PACKAGE_IMPORT, "")
     .replace(/@(source|plugin)[^;]*;/g, "");
   return {
     sources,
@@ -401,6 +411,58 @@ fn a_created_tailwind_project_builds() {
         );
     }
     let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// pnpm's layout: a package is a symlink into `node_modules/.pnpm`, and its
+/// own dependencies sit beside its real location, not in the project's
+/// `node_modules`. A stylesheet it imports from one of them is found from
+/// where the package really is, as Node finds a module.
+#[cfg(unix)]
+#[test]
+fn a_package_stylesheet_imports_its_own_dependency_under_pnpm() {
+    use std::os::unix::fs::symlink;
+
+    let dir = project("pnpm-nested");
+    install_tailwind(&dir, "4.3.3");
+    html_project(&dir, "@import \"tailwindcss\";\n@import \"theme\";\n");
+    let store = "node_modules/.pnpm";
+    write(
+        &dir,
+        &format!("{store}/theme@1.0.0/node_modules/theme/package.json"),
+        r#"{ "name": "theme", "version": "1.0.0", "exports": { ".": { "style": "./index.css" } } }"#,
+    );
+    write(
+        &dir,
+        &format!("{store}/theme@1.0.0/node_modules/theme/index.css"),
+        "@import \"tokens/shared.css\";\n.themed { --theme: 1 }\n",
+    );
+    write(
+        &dir,
+        &format!("{store}/tokens@1.0.0/node_modules/tokens/package.json"),
+        r#"{ "name": "tokens", "version": "1.0.0", "exports": { "./shared.css": "./shared.css" } }"#,
+    );
+    write(
+        &dir,
+        &format!("{store}/tokens@1.0.0/node_modules/tokens/shared.css"),
+        ".token { --token: 1 }\n",
+    );
+    symlink(
+        "../../tokens@1.0.0/node_modules/tokens",
+        dir.join(format!("{store}/theme@1.0.0/node_modules/tokens")),
+    )
+    .expect("link tokens beside theme");
+    symlink(
+        ".pnpm/theme@1.0.0/node_modules/theme",
+        dir.join("node_modules/theme"),
+    )
+    .expect("link theme into the project");
+
+    let out = esdev(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", output(&out));
+    let css = built_css(&dir.join("dist"));
+    assert!(css.contains(".themed"), "{css}");
+    assert!(css.contains(".token"), "{css}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `@plugin` naming a package loads it through the module loader — a
