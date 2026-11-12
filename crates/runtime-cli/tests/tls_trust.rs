@@ -97,11 +97,18 @@ impl Ca {
     }
 }
 
-/// Writes `contents` to a file of this test's own and returns its path.
+/// Writes `contents` to a file of this call's own and returns its path.
+///
+/// Its own per call, not per process: the tests run in parallel, and a path
+/// shared between them is rewritten — truncated first — while another test's
+/// esrun is reading it, which runs an empty module that exits 0 and prints
+/// nothing.
 fn file(name: &str, contents: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = common::tmpdir().join("tls-trust");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{}-{name}", std::process::id()));
+    let path = dir.join(format!("{}-{n}-{name}", std::process::id()));
     std::fs::write(&path, contents).unwrap();
     path
 }
