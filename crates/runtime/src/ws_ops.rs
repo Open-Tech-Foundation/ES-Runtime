@@ -64,6 +64,18 @@ pub(crate) fn install(
     // the guest already bound under `NetListen`, and taking that same connection
     // over reaches nothing new. What it does need is the *request* to be this
     // agent's, which `http_ops` recorded when it handed the id out (D50).
+    // Whether the request asked for a WebSocket in a form the host can
+    // answer: `upgradeWebSocket` refuses up front rather than send a `101`
+    // with no WebSocket behind it.
+    let h = http.clone();
+    let owned_requests = requests.clone();
+    engine.register_op(OpDecl::sync("ws_can_upgrade", move |args| {
+        let rid = owned_requests.check(arg_u64(&args, 0))?;
+        Ok(Value::Bool(
+            h.as_ref().is_some_and(|http| http.can_upgrade(rid)),
+        ))
+    }))?;
+
     let w = ws.clone();
     let h = http.clone();
     let owned = connections.clone();

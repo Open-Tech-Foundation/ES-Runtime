@@ -296,6 +296,12 @@ fn upgrades_a_websocket_on_the_http_server_that_is_serving_requests() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let stdout = stdout(&out);
     assert!(stdout.contains("http 200 api:/hello"), "{stdout}");
+    // upgradeWebSocket refuses a request that did not ask, instead of
+    // answering it with a 101 nothing follows.
+    assert!(
+        stdout.contains("plain 200 not-upgradable TypeError"),
+        "{stdout}"
+    );
     assert!(stdout.contains("ws room:one"), "{stdout}");
     assert!(stdout.contains("broadcast room:two|room:two"), "{stdout}");
     // A Request the guest built has no connection behind it to take over.

@@ -86,6 +86,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `upgradeWebSocket` answered a request that never asked to be upgraded with
+  a `101` and no WebSocket behind it; it now throws a `TypeError`, as Deno's
+  does, using the same RFC 6455 §4.2.1 check the host applies.
 - A flaky `tls_trust` test: its tests ran in parallel against one script file
   per process, rewritten (truncated first) while another test's `esrun` read
   it, which ran an empty module that printed nothing.

@@ -316,6 +316,16 @@ function upgradeWebSocket(request, options = {}) {
         "no connection to take over",
     );
   }
+  // The host's verdict, by RFC 6455 §4.2.1's rule — one rule, kept there —
+  // before anything is built: a 101 answering a request that did not ask for
+  // one switches the client to a protocol it is not speaking.
+  if (!ops.ws_can_upgrade(requestId)) {
+    throw new TypeError(
+      "upgradeWebSocket: this request did not ask to become a WebSocket (it needs GET, " +
+        "Upgrade: websocket, Connection: upgrade, Sec-WebSocket-Version: 13 and a " +
+        "Sec-WebSocket-Key)",
+    );
+  }
   const protocol = selectProtocol(request, options);
   // Started before the 101 is returned and settles after it: the host resolves
   // this once the response is on the wire. Awaiting it here would deadlock on a

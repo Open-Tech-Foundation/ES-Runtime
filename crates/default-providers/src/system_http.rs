@@ -867,6 +867,16 @@ impl HttpServerProvider for SystemHttpServer {
         })
     }
 
+    fn can_upgrade(&self, request_id: u64) -> bool {
+        // An upgrade is captured only for a request `ws::check_upgrade`
+        // accepted, so its presence is that verdict.
+        self.in_flight
+            .lock()
+            .unwrap()
+            .get(&request_id)
+            .is_some_and(|e| e.upgrade.is_some())
+    }
+
     fn upgrade(&self, request_id: u64) -> BoxFuture<Result<UpgradedIo, ProviderError>> {
         let in_flight = self.in_flight.clone();
         Box::pin(async move {

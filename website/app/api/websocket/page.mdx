@@ -148,7 +148,10 @@ The `socket` is usable immediately; sends before the handover completes are
 queued. It is an ordinary connection — `broadcast()` reaches it alongside sockets
 from `serve()`, and `maxBufferedAmount` applies at its default. The handshake
 headers are the host's: `Sec-WebSocket-Accept` is a digest of a key your handler
-never sees. A `Request` that did not come from a handler is a `TypeError`.
+never sees. A `Request` that did not come from a handler is a `TypeError`, and
+so is one that did not ask to become a WebSocket (a `GET` with `Upgrade:
+websocket`, `Connection: upgrade`, `Sec-WebSocket-Version: 13` and a
+`Sec-WebSocket-Key`).
 
 Answer a subprotocol by naming one the client offered — anything else is a
 `TypeError` here rather than a handshake the client silently rejects:

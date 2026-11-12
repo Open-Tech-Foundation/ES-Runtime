@@ -764,7 +764,10 @@ yields, so `broadcast()` reaches upgraded and dedicated-port sockets alike, and
 host's — `Sec-WebSocket-Accept` is a digest of a key the handler never sees.
 
 `upgradeWebSocket` throws a `TypeError` for a `Request` that did not come from a
-`serve()` handler; there is no connection behind it to take over.
+`serve()` handler, since there is no connection behind it to take over, and for
+one that did not ask to become a WebSocket — a `GET` with `Upgrade: websocket`,
+`Connection: upgrade`, `Sec-WebSocket-Version: 13` and a `Sec-WebSocket-Key`
+(RFC 6455 §4.2.1).
 
 **Subprotocols.** The client's offer is an ordinary header, so read it and answer
 with one of them:

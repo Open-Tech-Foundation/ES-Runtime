@@ -2577,6 +2577,16 @@ pub trait HttpServerProvider: Send + Sync {
         Box::pin(std::future::ready(false))
     }
 
+    /// Whether request `request_id` asked to become a WebSocket in a form
+    /// that can be answered (RFC 6455 §4.2.1) — so a caller can refuse before
+    /// it builds a `101` that nothing would follow.
+    ///
+    /// The default is `false`, matching [`upgrade`](Self::upgrade)'s refusal.
+    fn can_upgrade(&self, request_id: u64) -> bool {
+        let _ = request_id;
+        false
+    }
+
     /// Takes over the connection request `request_id` arrived on, once its
     /// response has gone out, and hands back the raw stream (D55).
     ///

@@ -4,6 +4,15 @@ import { upgradeWebSocket, broadcast } from "runtime:websocket";
 
 const room = new Set();
 const server = serve({ port: 0, hostname: "127.0.0.1" }, (request) => {
+  // A request that never asked to be upgraded: refused before any 101.
+  if (new URL(request.url).pathname === "/not-a-websocket") {
+    try {
+      upgradeWebSocket(request);
+      return new Response("NO THROW not-a-websocket");
+    } catch (e) {
+      return new Response(`not-upgradable ${e.constructor.name}`);
+    }
+  }
   if (request.headers.get("upgrade") === "websocket") {
     // Answer the client's second choice when it offers a list, and refuse one
     // it never offered.
@@ -32,6 +41,10 @@ const { port } = await server.addr;
 // The same port answers an ordinary request.
 const res = await fetch(`http://127.0.0.1:${port}/hello`);
 console.log("http", res.status, await res.text());
+
+// An ordinary request cannot be made a WebSocket: a TypeError, not a 101.
+const plain = await fetch(`http://127.0.0.1:${port}/not-a-websocket`);
+console.log("plain", plain.status, await plain.text());
 
 // …and upgrades one that asks.
 const a = new WebSocket(`ws://127.0.0.1:${port}/socket`);
