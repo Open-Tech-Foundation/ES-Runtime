@@ -1,6 +1,6 @@
 ---
 title: esdev create
-description: Scaffold a project that already builds, runs and deploys — templates baked into the binary.
+description: Scaffold a project that already builds, runs and deploys, from verified templates.
 ---
 
 import { Callout } from "@opentf/afw-docs";
@@ -49,10 +49,18 @@ esdev create my-app --template=react --mode=fullstack
 | `docs` | An AFW documentation site — MDX docs, sidebar, search, optional blog |
 | `library` | An AFW component library — publishable components, `esdev`-tested |
 
-Template files are **baked into esdev**. During scaffolding, `create` looks up
-each dependency's current `latest` version on the npm registry and writes that
-exact version to `package.json`. It prints each resolved version. These lookups
-need registry access, even when you pass `--no-install`.
+The templates are the **`@opentf/esdev-templates`** package, released on their
+own so a template fix does not wait for an esdev release. `create` fetches the
+newest release that supports the esdev you run, checks it against the sha512
+the registry published for it, and reads it in memory; a release that needs a
+newer esdev is named, with `esdev upgrade` as the way to it. `--templates=<version>`
+pins a release, and `--from=<dir>` reads a local copy laid out as the package
+is, for writing templates.
+
+During scaffolding, `create` also looks up each dependency's current `latest`
+version on the npm registry and writes that exact version to `package.json`. It
+prints each resolved version. These lookups need registry access, even when you
+pass `--no-install`.
 
 If a lookup fails, esdev retries it three times with increasing delays. If the
 registry is still unavailable, it reports the package and stops before writing
@@ -241,15 +249,14 @@ other's flags by name. Nothing is ever overwritten.
 | | |
 | --- | --- |
 | `--template=<name>` | Which template, no default |
-| `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
-| `--language=<name>` | AFW templates: `js` (default) or `ts` |
-| `--styling=<name>` | `css` or `tailwind`, for `react`, `vanilla`, `micro-ui`, `preact`, `lit`, `spa` and `fullstack` |
-| `--blog`, `--no-blog` | `docs`: add a blog, or not (default) |
+| `--<option>=<value>` | One of the template's options: `--mode=fullstack`, `--language=ts`, `--styling=tailwind`. A yes/no is `--<option>` or `--no-<option>` (`--blog`). `--list` shows each template's; one it does not ask is refused |
 | `--package-manager=<name>` | The project's manager: `npm`, `bun`, `pnpm`, `yarn` — the docs name it |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |
 | `-y`, `--yes` | Take every default; never ask |
-| `--list` | List the templates and exit |
+| `--list` | List the templates, their modes and options, and exit |
+| `--templates=<version>` | Use this release of `@opentf/esdev-templates` |
+| `--from=<dir>` | Read the templates from a local directory laid out as the package is |
 | `--force` | Write into a directory that already holds something |
 
 <Callout type="note" title="The name comes from the directory">

@@ -38,6 +38,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **`esdev create` reads its templates from `@opentf/esdev-templates`**
+  (DECISIONS D220), a package released on its own, instead of templates built
+  into esdev: a template fix no longer waits for an esdev release. esdev takes
+  the newest stable release whose `engines.esdev` range includes it, refuses a
+  tarball that is not on the registry's own origin or does not match the
+  registry's published sha512, and reads it in memory — regular files only,
+  nothing outside the package. `--templates=<version>` pins a release;
+  `--from=<dir>` reads a local copy, for writing templates. A newer release
+  this esdev cannot read is named, with `esdev upgrade` as the way to it.
 - **Templates are data** (DECISIONS D220). Each template is a directory with a
   `template.json` — its label, description, group and options — and what a
   choice does is files in `_option/<name>/<value>/` plus three declared edits:

@@ -81,9 +81,8 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 /// The templates `create` can write: each one's files and its manifest, and
 /// the catalog of groups some are chosen behind (D220).
 ///
-/// Read from what is embedded, once; every manifest is validated when it is
-/// read, and a test reads them all, so a broken one fails the build's tests
-/// rather than somebody's `create`.
+/// Read from the `@opentf/esdev-templates` package, or from a directory laid
+/// out the same way (`--from`); every manifest is validated when it is read.
 pub(crate) struct Library {
     templates: Vec<Entry>,
     catalog: crate::template::Catalog,
@@ -92,26 +91,70 @@ pub(crate) struct Library {
 /// One template: its name, its files (manifest and overlays included) and
 /// what its manifest says.
 pub(crate) struct Entry {
-    name: &'static str,
-    files: Vec<(&'static str, &'static [u8])>,
+    name: String,
+    files: Vec<(String, Vec<u8>)>,
     manifest: crate::template::Manifest,
 }
 
+/// What a working copy can hold that is never part of a template.
+const SKIPPED: &[&str] = &[
+    "node_modules",
+    "dist",
+    "target",
+    ".git",
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    ".DS_Store",
+];
+
 impl Library {
-    /// The templates built into this binary.
-    fn embedded() -> Result<Library, String> {
-        let mut templates = Vec::with_capacity(TEMPLATES.len());
-        for (name, files) in TEMPLATES {
-            let files: Vec<(&'static str, &'static [u8])> = files.to_vec();
-            let manifest = crate::template::manifest(name, &files)?;
+    /// The templates in a package's files: `templates/<name>/…` and
+    /// `templates/catalog.json`, paths relative to the package root.
+    fn from_files(files: Vec<(String, Vec<u8>)>) -> Result<Library, String> {
+        let mut by_name: std::collections::BTreeMap<String, Vec<(String, Vec<u8>)>> =
+            std::collections::BTreeMap::new();
+        let mut catalog = None;
+        for (path, bytes) in files {
+            let Some(within) = path.strip_prefix("templates/") else {
+                continue;
+            };
+            if within == "catalog.json" {
+                catalog = Some(bytes);
+                continue;
+            }
+            if let Some((name, rest)) = within.split_once('/') {
+                by_name
+                    .entry(name.to_string())
+                    .or_default()
+                    .push((rest.to_string(), bytes));
+            }
+        }
+        let mut templates = Vec::with_capacity(by_name.len());
+        for (name, mut files) in by_name {
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            let view: Vec<(&str, &[u8])> = files
+                .iter()
+                .map(|(p, b)| (p.as_str(), b.as_slice()))
+                .collect();
+            let manifest = crate::template::manifest(&name, &view)?;
             templates.push(Entry {
                 name,
                 files,
                 manifest,
             });
         }
-        let catalog: crate::template::Catalog =
-            serde_json::from_slice(CATALOG).map_err(|e| format!("catalog.json: {e}"))?;
+        if templates.is_empty() {
+            return Err("there are no templates in it".to_string());
+        }
+        let catalog: crate::template::Catalog = match catalog {
+            Some(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|e| format!("catalog.json: {e}"))?
+            }
+            None => crate::template::Catalog::default(),
+        };
         for group in &catalog.groups {
             if templates.iter().any(|entry| entry.name == group.name) {
                 return Err(format!("catalog.json: {} is a template's name", group.name));
@@ -119,7 +162,7 @@ impl Library {
             for member in &group.templates {
                 let entry = templates
                     .iter()
-                    .find(|entry| entry.name == member)
+                    .find(|entry| &entry.name == member)
                     .ok_or_else(|| {
                         format!("catalog.json: {} has no template {member}", group.name)
                     })?;
@@ -136,7 +179,7 @@ impl Library {
                 && !catalog
                     .groups
                     .iter()
-                    .any(|g| &g.name == group && g.templates.iter().any(|t| t == entry.name))
+                    .any(|g| &g.name == group && g.templates.iter().any(|t| t == &entry.name))
             {
                 return Err(format!(
                     "the {} template names the group {group}, which does not list it",
@@ -147,19 +190,100 @@ impl Library {
         Ok(Library { templates, catalog })
     }
 
+    /// A package laid out on disk — `--from`, for whoever is writing a
+    /// template, and the tests. What a working copy leaves behind is skipped.
+    fn from_dir(root: &Path) -> Result<Library, String> {
+        fn walk(root: &Path, dir: &Path, into: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+            let entries = std::fs::read_dir(dir)
+                .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if SKIPPED.contains(&name.as_str()) {
+                    continue;
+                }
+                let kind = entry
+                    .file_type()
+                    .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+                if kind.is_dir() {
+                    walk(root, &path, into)?;
+                } else if kind.is_file() {
+                    let relative = path
+                        .strip_prefix(root)
+                        .map_err(|_| format!("{} is outside {}", path.display(), root.display()))?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let bytes = std::fs::read(&path)
+                        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+                    into.push((relative, bytes));
+                }
+            }
+            Ok(())
+        }
+        let mut files = Vec::new();
+        walk(root, &root.join("templates"), &mut files)?;
+        Library::from_files(files).map_err(|e| format!("{}: {e}", root.display()))
+    }
+
     fn get(&self, name: &str) -> Option<&Entry> {
         self.templates.iter().find(|entry| entry.name == name)
     }
 }
 
-/// The embedded library, read once.
-fn library() -> &'static Library {
-    static LIBRARY: std::sync::OnceLock<Library> = std::sync::OnceLock::new();
-    LIBRARY.get_or_init(|| {
-        Library::embedded().unwrap_or_else(|e| {
-            panic!("the embedded templates are invalid — `the_embedded_templates_are_valid` says so: {e}")
-        })
+/// Where `create` reads its templates from.
+#[derive(Debug, Clone)]
+pub enum TemplateSource {
+    /// `@opentf/esdev-templates` from the registry: the newest release this
+    /// esdev reads, or the version `--templates` pins.
+    Registry { pinned: Option<String> },
+    /// A package laid out on disk (`--from`).
+    Dir(PathBuf),
+}
+
+/// The templates, from wherever `source` says (D220).
+pub(crate) async fn load_library(
+    source: &TemplateSource,
+    proxies: Option<std::sync::Arc<es_runtime_default_providers::Proxies>>,
+) -> Result<Library, String> {
+    use crate::template_fetch::{PACKAGE, TARBALL_LIMIT};
+    let pinned = match source {
+        TemplateSource::Dir(root) => return Library::from_dir(root),
+        TemplateSource::Registry { pinned } => pinned.as_deref(),
+    };
+    let registry = configured_registry()?;
+    let client = HttpClient::new(&TrustStore::bundled()).with_proxy(proxies);
+    let metadata_url = registry_url(&registry, PACKAGE);
+    let metadata = with_retries(PACKAGE, || fetch(&client, &metadata_url, REGISTRY_LIMIT)).await?;
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata)
+        .map_err(|e| format!("the registry's answer for {PACKAGE} is not JSON: {e}"))?;
+    let release = crate::template_fetch::choose(&metadata, env!("CARGO_PKG_VERSION"), pinned)?;
+    if let Some((version, range)) = &release.newer {
+        crate::prompt::warn(&format!(
+            "{PACKAGE}@{version} needs esdev {range}; using {}. `esdev upgrade` reads the newer templates.",
+            release.version
+        ));
+    }
+    let registry_origin =
+        url::Url::parse(&registry).map_err(|e| format!("invalid npm registry URL: {e}"))?;
+    let tarball_url = url::Url::parse(&release.tarball)
+        .map_err(|e| format!("{PACKAGE}@{}: invalid tarball URL: {e}", release.version))?;
+    if !crate::template_fetch::same_origin(&registry_origin, &tarball_url) {
+        return Err(format!(
+            "{PACKAGE}@{} is served from {}, not from the registry it was looked up on ({registry});              nothing was read from it",
+            release.version,
+            tarball_url.origin().ascii_serialization()
+        ));
+    }
+    let tarball = with_retries(PACKAGE, || {
+        fetch(&client, tarball_url.as_str(), TARBALL_LIMIT)
     })
+    .await?;
+    crate::template_fetch::verify(&tarball, &release.integrity)?;
+    let files = crate::template_fetch::unpack(&tarball)?;
+    crate::prompt::log(&format!("Templates: {PACKAGE}@{}", release.version));
+    Library::from_files(files).map_err(|e| format!("{PACKAGE}@{}: {e}", release.version))
 }
 
 impl Entry {
@@ -188,7 +312,12 @@ impl Entry {
 
     /// The files written for `answers`.
     fn files(&self, answers: &[(String, String)]) -> Result<Vec<(String, Vec<u8>)>, String> {
-        crate::template::assemble(&self.files, &self.manifest, answers)
+        let view: Vec<(&str, &[u8])> = self
+            .files
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect();
+        crate::template::assemble(&view, &self.manifest, answers)
     }
 }
 
@@ -235,6 +364,10 @@ pub struct CreateConfig {
     pub yes: bool,
     /// The outbound proxy for the registry lookups (D205).
     pub proxies: Option<std::sync::Arc<es_runtime_default_providers::Proxies>>,
+    /// Where the templates come from: the registry, or `--from`'s directory.
+    pub source: TemplateSource,
+    /// `--list`: print the templates and stop.
+    pub list: bool,
 }
 
 /// What a bare `--install` means.
@@ -263,7 +396,11 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
             return Err(unknown_manager(named));
         }
     }
-    let library = library();
+    let library = load_library(&config.source, config.proxies.clone()).await?;
+    if config.list {
+        return Ok(list(&library));
+    }
+    let library = &library;
     let mut answers = Answers::default();
     if let Some(named) = &config.template {
         answers.template = Some(named.clone());
@@ -298,7 +435,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                         // `--template` stops before writing anything.
                         return Err(format!(
                             "no template chosen.\n\nThere is no default template: pass --template=<name>, or choose on a terminal.\n\n{}",
-                            list().trim_end()
+                            list(library).trim_end()
                         ));
                     } else {
                         match ask_template(library) {
@@ -318,7 +455,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                 let Some(entry) = library.get(template) else {
                     return Err(format!(
                         "there is no {template} template.\n\n{}",
-                        list().trim_end()
+                        list(library).trim_end()
                     ));
                 };
                 refuse_foreign_options(library, entry, &config.options)?;
@@ -334,7 +471,7 @@ pub async fn create(config: &CreateConfig) -> Result<String, String> {
                     .rev()
                     .find(|flag| flag.name == option.name)
                     .map(|flag| flag.value.as_str());
-                match resolve_option(entry.name, option, asked, ask)? {
+                match resolve_option(&entry.name, option, asked, ask)? {
                     Some(value) => {
                         answers.options[index] = Some(value);
                         if asked.is_none() && !scripted {
@@ -638,7 +775,7 @@ fn refuse_foreign_options(
         .templates
         .iter()
         .filter(|other| other.option(&flag.name).is_some())
-        .map(|other| other.name)
+        .map(|other| other.name.as_str())
         .collect();
     let elsewhere = match having.as_slice() {
         [] => format!(
@@ -847,7 +984,7 @@ fn template_menu_top(library: &Library) -> Vec<crate::prompt::Choice<'_>> {
         .iter()
         .filter(|entry| entry.manifest.group.is_none())
         .map(|entry| crate::prompt::Choice {
-            name: entry.name,
+            name: &entry.name,
             label: &entry.manifest.label,
             description: &entry.manifest.description,
             disabled: false,
@@ -878,7 +1015,7 @@ fn template_menu_group<'a>(
         .iter()
         .filter_map(|name| library.get(name))
         .map(|entry| crate::prompt::Choice {
-            name: entry.name,
+            name: &entry.name,
             label: &entry.manifest.label,
             description: &entry.manifest.description,
             disabled: false,
@@ -1062,17 +1199,17 @@ const REGISTRY_TIMEOUT: Duration = Duration::from_secs(10);
 /// metadata runs to megabytes; this is far beyond any of them.
 const REGISTRY_LIMIT: usize = 64 * 1024 * 1024;
 
-async fn registry_version(
-    client: &HttpClient,
-    registry: &str,
-    package: &str,
-) -> Result<String, RegistryFailure> {
+/// One GET against the registry, body capped at `limit`. A server error, 408
+/// and 429 are worth another try; anything else is the answer.
+async fn fetch(client: &HttpClient, url: &str, limit: usize) -> Result<Vec<u8>, RegistryFailure> {
     let failure = |message: String| RegistryFailure {
         message,
         retryable: true,
     };
-    let url = url::Url::parse(&registry_url(registry, package))
-        .map_err(|error| failure(format!("invalid registry URL: {error}")))?;
+    let url = url::Url::parse(url).map_err(|error| RegistryFailure {
+        message: format!("invalid registry URL: {error}"),
+        retryable: false,
+    })?;
     let mut request = Outbound::get(url);
     request.headers = vec![(
         "user-agent".to_string(),
@@ -1094,15 +1231,26 @@ async fn registry_version(
             });
         }
         response
-            .bytes(REGISTRY_LIMIT)
+            .bytes(limit)
             .await
             .map_err(|error| failure(error.to_string()))
     };
-    let body = tokio::time::timeout(REGISTRY_TIMEOUT, lookup)
+    tokio::time::timeout(REGISTRY_TIMEOUT, lookup)
         .await
-        .map_err(|_| failure(format!("no answer within {}s", REGISTRY_TIMEOUT.as_secs())))??;
-    let metadata: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|error| failure(format!("invalid registry response: {error}")))?;
+        .map_err(|_| failure(format!("no answer within {}s", REGISTRY_TIMEOUT.as_secs())))?
+}
+
+async fn registry_version(
+    client: &HttpClient,
+    registry: &str,
+    package: &str,
+) -> Result<String, RegistryFailure> {
+    let body = fetch(client, &registry_url(registry, package), REGISTRY_LIMIT).await?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|error| RegistryFailure {
+            message: format!("invalid registry response: {error}"),
+            retryable: true,
+        })?;
     scaffold_version(&metadata).ok_or_else(|| RegistryFailure {
         message: "registry response has no dist-tags.latest version".to_string(),
         retryable: false,
@@ -1168,11 +1316,20 @@ async fn registry_version_with_retries(
     registry: &str,
     package: &str,
 ) -> Result<String, String> {
-    for attempt in 0..=REGISTRY_BACKOFFS.len() {
-        match registry_version(client, registry, package).await {
-            Ok(version) => return Ok(version),
+    with_retries(package, || registry_version(client, registry, package)).await
+}
+
+/// `attempt`, again after each backoff while its failure is retryable.
+async fn with_retries<T, F, Fut>(package: &str, mut attempt: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, RegistryFailure>>,
+{
+    for tried in 0..=REGISTRY_BACKOFFS.len() {
+        match attempt().await {
+            Ok(value) => return Ok(value),
             Err(failure) => {
-                let Some(backoff) = registry_backoff(attempt, failure.retryable) else {
+                let Some(backoff) = registry_backoff(tried, failure.retryable) else {
                     let attempts = if failure.retryable {
                         format!(" after {} attempts", REGISTRY_BACKOFFS.len() + 1)
                     } else {
@@ -1185,7 +1342,7 @@ async fn registry_version_with_retries(
                 };
                 crate::prompt::warn(&format!(
                     "npm registry lookup for {package} failed on attempt {}/{}, {}; retrying in {} ms",
-                    attempt + 1,
+                    tried + 1,
                     REGISTRY_BACKOFFS.len() + 1,
                     failure.message,
                     backoff.as_millis()
@@ -1335,10 +1492,10 @@ pub(crate) fn package_name(target: &Path) -> String {
 }
 
 /// The templates, as `--list` prints them.
-pub fn list() -> String {
+pub fn list(library: &Library) -> String {
     let mut report = String::from("Templates:\n");
-    for entry in &library().templates {
-        let name = entry.name;
+    for entry in &library.templates {
+        let name = entry.name.as_str();
         let description = &entry.manifest.description;
         let count =
             |answers: &[(String, String)]| entry.files(answers).map_or(0, |files| files.len());
@@ -1395,6 +1552,40 @@ pub fn list() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One template's files as stored: path and bytes.
+    type RawFiles = Vec<(&'static str, &'static [u8])>;
+
+    /// Every template's raw files, overlays and manifest included, by name —
+    /// for the tests that read what a template holds rather than writes.
+    fn templates() -> Vec<(&'static str, RawFiles)> {
+        library()
+            .templates
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.as_str(),
+                    entry
+                        .files
+                        .iter()
+                        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// The templates as the repository holds them: the package's directory,
+    /// read the way `--from` reads it.
+    fn library() -> &'static Library {
+        static LIBRARY: std::sync::OnceLock<Library> = std::sync::OnceLock::new();
+        LIBRARY.get_or_init(|| {
+            Library::from_dir(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/esdev-templates"),
+            )
+            .unwrap_or_else(|e| panic!("the templates are invalid: {e}"))
+        })
+    }
 
     /// The stylesheet the page templates share, and Tailwind replaces.
     const STYLESHEET: &str = "src/styles.css";
@@ -1500,7 +1691,7 @@ mod tests {
                 continue;
             };
             for mode in &modes.choices {
-                let paths = resolved(entry.name, Some(&mode.value));
+                let paths = resolved(&entry.name, Some(&mode.value));
                 for required in ["package.json", "esdev.json", "README.md"] {
                     assert!(
                         paths.iter().any(|path| path == required),
@@ -1742,8 +1933,8 @@ mod tests {
 
     #[test]
     fn registry_placeholders_cover_every_embedded_dependency() {
-        for (template, files) in TEMPLATES {
-            for (path, contents) in *files {
+        for (template, files) in templates() {
+            for (path, contents) in files.iter().copied() {
                 if !path.ends_with("package.json") {
                     continue;
                 }
@@ -1815,9 +2006,9 @@ mod tests {
             "yarn run",
             "npx ",
         ];
-        for (template, files) in TEMPLATES {
-            for (path, contents) in *files {
-                let is_readme = *path == "README.md";
+        for (template, files) in templates() {
+            for (path, contents) in files.iter().copied() {
+                let is_readme = path == "README.md";
                 let is_prose = path.ends_with(".mdx");
                 let is_manifest = path.ends_with("package.json");
                 if !(is_readme || is_prose || is_manifest) {
@@ -1845,7 +2036,7 @@ mod tests {
     /// ignores a directory no tool here writes (`target/`, `.cache/`).
     #[test]
     fn gitignores_agree_on_what_the_toolchain_leaves_behind() {
-        for (template, files) in TEMPLATES {
+        for (template, files) in templates() {
             let Some((_, contents)) = files.iter().find(|(path, _)| *path == "_gitignore") else {
                 panic!("{template} ships no ignore file");
             };
@@ -1908,8 +2099,8 @@ mod tests {
     fn documents_title_themselves_with_the_project() {
         const BRANDS: &[&str] = &["My Docs", "My Project", "AFW App"];
         let mut documents = 0;
-        for (template, files) in TEMPLATES {
-            for (path, contents) in *files {
+        for (template, files) in templates() {
+            for (path, contents) in files.iter().copied() {
                 let text = String::from_utf8_lossy(contents);
                 for brand in BRANDS {
                     assert!(
@@ -1917,7 +2108,7 @@ mod tests {
                         "{template}/{path} ships a leftover brand: {brand}"
                     );
                 }
-                if *path == "index.html" {
+                if path == "index.html" {
                     documents += 1;
                     assert!(
                         text.contains(PLACEHOLDER),
@@ -1970,8 +2161,8 @@ mod tests {
     /// else's code in this binary, and nothing about the build would complain.
     #[test]
     fn nothing_a_local_build_left_behind_is_embedded() {
-        for (_, files) in TEMPLATES {
-            for (path, _) in *files {
+        for (_, files) in templates() {
+            for (path, _) in &files {
                 assert!(
                     !path.starts_with("node_modules/")
                         && !path.starts_with("dist/")
@@ -1997,8 +2188,8 @@ mod tests {
     /// project's manifest.
     #[test]
     fn the_types_package_is_never_pinned_in_a_template() {
-        for (name, files) in TEMPLATES {
-            for (path, contents) in *files {
+        for (name, files) in templates() {
+            for (path, contents) in files.iter().copied() {
                 if !path.ends_with("package.json") {
                     continue;
                 }
@@ -2024,7 +2215,7 @@ mod tests {
     /// rather than by whoever scaffolds it and finds no `runtime:` completions.
     #[test]
     fn every_template_depends_on_the_type_definitions() {
-        for (name, files) in TEMPLATES {
+        for (name, files) in templates() {
             let found = files.iter().any(|(path, contents)| {
                 path.ends_with("package.json")
                     && String::from_utf8_lossy(contents).contains("@opentf/esrun-types")
@@ -2092,8 +2283,8 @@ mod tests {
     /// template's word.
     #[test]
     fn no_template_names_a_license() {
-        for (template, files) in TEMPLATES {
-            for (path, contents) in *files {
+        for (template, files) in templates() {
+            for (path, contents) in files.iter().copied() {
                 if !path.ends_with("package.json") {
                     continue;
                 }
@@ -2109,8 +2300,8 @@ mod tests {
 
     #[test]
     fn the_list_names_every_embedded_template() {
-        let listed = list();
-        for (name, _) in TEMPLATES {
+        let listed = list(library());
+        for (name, _) in templates() {
             assert!(listed.contains(name), "{name} is missing from:\n{listed}");
         }
     }
@@ -2149,7 +2340,12 @@ mod tests {
             }
         }
         // Every template's manifest and the catalog read, and agree.
-        assert!(Library::embedded().is_ok());
+        assert!(
+            Library::from_dir(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/esdev-templates")
+            )
+            .is_ok()
+        );
     }
 
     /// Menus show the proper form while flags stay lowercase: `SPA`, not
@@ -2851,7 +3047,7 @@ mod tests {
     #[test]
     fn every_template_names_one_dev_port() {
         let mut checked = 0;
-        for (template, _) in TEMPLATES {
+        for (template, _) in templates() {
             let shapes: Vec<Option<&str>> =
                 match library().get(template).and_then(|e| e.option("mode")) {
                     Some(modes) => modes

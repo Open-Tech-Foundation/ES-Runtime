@@ -14,6 +14,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Templates from the repository's own package, read as `--from` reads it:
+/// the tests never reach a registry for them (DECISIONS D220).
+const TEMPLATES: &str = concat!(
+    "--from=",
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/esdev-templates"
+);
+
 /// A registry that names `1.2.3` as every package's latest version.
 fn test_registry() -> &'static str {
     static REGISTRY: OnceLock<String> = OnceLock::new();
@@ -61,6 +69,7 @@ fn create(label: &str, args: &[&str]) -> PathBuf {
     std::fs::create_dir_all(&parent).expect("create parent");
     let out = Command::new(env!("CARGO_BIN_EXE_esdev"))
         .arg("create")
+        .arg(TEMPLATES)
         .arg("app")
         .args(args)
         .arg("--no-install")

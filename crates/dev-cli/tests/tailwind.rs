@@ -12,6 +12,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Templates from the repository's own package, read as `--from` reads it:
+/// the tests never reach a registry for them (DECISIONS D220).
+const TEMPLATES: &str = concat!(
+    "--from=",
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/esdev-templates"
+);
+
 fn project(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("tailwind-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -371,6 +379,7 @@ fn a_created_tailwind_project_builds() {
         let out = esdev(&parent)
             .args([
                 "create",
+                TEMPLATES,
                 template,
                 &format!("--template={template}"),
                 "--styling=tailwind",

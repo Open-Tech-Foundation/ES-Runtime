@@ -63,14 +63,14 @@ bench/dist/
 bench/dev-server/apps/
 
 # The templates `esdev create` scaffolds are real, runnable projects, developed
-# and tested in place (crates/dev-cli/templates). What running them leaves
+# and tested in place (packages/esdev-templates/templates). What running them leaves
 # behind is not part of the template: a scaffolded project resolves and builds
 # its own.
-crates/dev-cli/templates/*/dist/
-crates/dev-cli/templates/*/bun.lock
-crates/dev-cli/templates/*/package-lock.json
-crates/dev-cli/templates/*/yarn.lock
-crates/dev-cli/templates/*/pnpm-lock.yaml
+packages/esdev-templates/templates/*/dist/
+packages/esdev-templates/templates/*/bun.lock
+packages/esdev-templates/templates/*/package-lock.json
+packages/esdev-templates/templates/*/yarn.lock
+packages/esdev-templates/templates/*/pnpm-lock.yaml
 
 # The Valkey tests run against staged copies of the built packages.
 packages/valkey/test/.stage/

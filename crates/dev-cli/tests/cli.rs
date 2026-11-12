@@ -19,6 +19,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+/// Templates from the repository's own package, read as `--from` reads it:
+/// the tests never reach a registry for them (DECISIONS D220).
+const TEMPLATES: &str = concat!(
+    "--from=",
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/esdev-templates"
+);
+
 fn temp(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
 }
@@ -12499,7 +12507,7 @@ fn create_writes_a_project_that_builds_and_runs() {
     let dir = parent.join("weather-app");
 
     let out = esdev_in(&parent)
-        .args(["create", "weather-app", "--template=react"])
+        .args(["create", TEMPLATES, "weather-app", "--template=react"])
         .output()
         .expect("spawn esdev create");
     assert!(out.status.success(), "{}", stderr(&out));
@@ -12563,7 +12571,13 @@ fn create_reports_and_retries_a_transient_registry_failure() {
     let parent = watch_dir("c_registry_retry");
     let (registry, attempts) = retry_registry();
     let created = esdev_in(&parent)
-        .args(["create", "retry-app", "--template=api", "--no-install"])
+        .args([
+            "create",
+            TEMPLATES,
+            "retry-app",
+            "--template=api",
+            "--no-install",
+        ])
         .env("npm_config_registry", registry)
         .env("NPM_CONFIG_REGISTRY", registry)
         .output()
@@ -12594,7 +12608,13 @@ fn create_pins_the_newest_stable_release_over_a_prerelease_latest() {
     let parent = watch_dir("c_registry_prerelease");
     let registry = prerelease_registry();
     let created = esdev_in(&parent)
-        .args(["create", "rc-app", "--template=elysia", "--no-install"])
+        .args([
+            "create",
+            TEMPLATES,
+            "rc-app",
+            "--template=elysia",
+            "--no-install",
+        ])
         .env("npm_config_registry", registry)
         .env("NPM_CONFIG_REGISTRY", registry)
         .output()
@@ -12669,7 +12689,7 @@ fn create_refuses_a_directory_that_holds_something() {
     write_in(&dir, "package.json", "{ \"name\": \"mine\" }\n");
 
     let refused = esdev_in(&parent)
-        .args(["create", "taken", "--template=react"])
+        .args(["create", TEMPLATES, "taken", "--template=react"])
         .output()
         .expect("spawn esdev create");
     assert!(!refused.status.success());
@@ -12680,7 +12700,7 @@ fn create_refuses_a_directory_that_holds_something() {
     );
 
     let forced = esdev_in(&parent)
-        .args(["create", "taken", "--template=react", "--force"])
+        .args(["create", TEMPLATES, "taken", "--template=react", "--force"])
         .output()
         .expect("spawn esdev create");
     assert!(forced.status.success(), "{}", stderr(&forced));
@@ -12717,7 +12737,12 @@ fn every_dependency_free_template_passes_its_own_tests() {
     for template in ["api", "lib", "vanilla", "micro-ui"] {
         let dir = parent.join(template);
         let created = esdev_in(&parent)
-            .args(["create", template, &format!("--template={template}")])
+            .args([
+                "create",
+                TEMPLATES,
+                template,
+                &format!("--template={template}"),
+            ])
             .output()
             .expect("spawn esdev create");
         assert!(
@@ -12786,7 +12811,7 @@ fn a_bare_build_in_a_lib_project_names_the_flag() {
     let dir = parent.join("libbed");
 
     let created = esdev_in(&parent)
-        .args(["create", "libbed", "--template=lib"])
+        .args(["create", TEMPLATES, "libbed", "--template=lib"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12821,6 +12846,7 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
         let out = esdev_in(&parent)
             .args([
                 "create",
+                TEMPLATES,
                 mode,
                 "--template=react",
                 &format!("--mode={mode}"),
@@ -12891,7 +12917,13 @@ fn a_mode_that_does_not_exist_is_refused() {
     let parent = watch_dir("c_bad_mode");
 
     let unknown = esdev_in(&parent)
-        .args(["create", "nope", "--template=react", "--mode=ssr"])
+        .args([
+            "create",
+            TEMPLATES,
+            "nope",
+            "--template=react",
+            "--mode=ssr",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12906,7 +12938,13 @@ fn a_mode_that_does_not_exist_is_refused() {
     assert!(!parent.join("nope").exists(), "it wrote a project anyway");
 
     let modeless = esdev_in(&parent)
-        .args(["create", "nope", "--template=api", "--mode=static"])
+        .args([
+            "create",
+            TEMPLATES,
+            "nope",
+            "--template=api",
+            "--mode=static",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12930,7 +12968,7 @@ fn create_never_asks_when_nobody_is_there() {
     // No flags at all: there is no default template, so this stops rather
     // than guessing — without asking, and without writing anything.
     let out = esdev_in(&parent)
-        .args(["create", "quiet"])
+        .args(["create", TEMPLATES, "quiet"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12962,7 +13000,13 @@ fn every_question_has_a_flag() {
     let parent = watch_dir("c_flags");
 
     let out = esdev_in(&parent)
-        .args(["create", "flagged", "--template=lib", "--no-install"])
+        .args([
+            "create",
+            TEMPLATES,
+            "flagged",
+            "--template=lib",
+            "--no-install",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12980,7 +13024,13 @@ fn every_question_has_a_flag() {
     // either — even where a terminal would have been available. The template
     // has no default, so it still has to be named.
     let yes = esdev_in(&parent)
-        .args(["create", "defaulted", "--yes", "--template=react"])
+        .args([
+            "create",
+            TEMPLATES,
+            "defaulted",
+            "--yes",
+            "--template=react",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -12994,7 +13044,7 @@ fn every_question_has_a_flag() {
     // Without it, `--yes` stops before writing anything rather than
     // guessing a project nobody chose.
     let none = esdev_in(&parent)
-        .args(["create", "undecided", "--yes"])
+        .args(["create", TEMPLATES, "undecided", "--yes"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13013,7 +13063,7 @@ fn every_question_has_a_flag() {
 
     // A package manager that is not one is named as such, before anything runs.
     let unknown = esdev_in(&parent)
-        .args(["create", "nope", "--install=cargo"])
+        .args(["create", TEMPLATES, "nope", "--install=cargo"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13032,7 +13082,7 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let dir = watch_dir("c_list");
 
     let listed = esdev_in(&dir)
-        .args(["create", "--list"])
+        .args(["create", TEMPLATES, "--list"])
         .output()
         .expect("spawn esdev create");
     assert!(listed.status.success(), "{}", stderr(&listed));
@@ -13040,7 +13090,7 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
     assert!(stdout(&listed).contains("micro-ui"), "{}", stdout(&listed));
 
     let unknown = esdev_in(&dir)
-        .args(["create", "app", "--template=svelte"])
+        .args(["create", TEMPLATES, "app", "--template=svelte"])
         .output()
         .expect("spawn esdev create");
     assert!(!unknown.status.success());
@@ -13066,6 +13116,7 @@ fn afw_templates_scaffold_from_flags() {
     let ts = esdev_in(&parent)
         .args([
             "create",
+            TEMPLATES,
             "shop-ts",
             "--template=spa",
             "--language=ts",
@@ -13102,7 +13153,7 @@ fn afw_templates_scaffold_from_flags() {
     // Unattended, the language takes its default and styling adds nothing:
     // a framework is only ever added because somebody chose it.
     let js = esdev_in(&parent)
-        .args(["create", "shop-js", "--template=fullstack"])
+        .args(["create", TEMPLATES, "shop-js", "--template=fullstack"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13128,7 +13179,13 @@ fn afw_templates_scaffold_from_flags() {
 
     // The blog is files plus two patches — or neither.
     let bare = esdev_in(&parent)
-        .args(["create", "manual", "--template=docs", "--no-blog"])
+        .args([
+            "create",
+            TEMPLATES,
+            "manual",
+            "--template=docs",
+            "--no-blog",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13139,7 +13196,7 @@ fn afw_templates_scaffold_from_flags() {
     assert!(!config.contains("blog:"), "{config}");
 
     let blogged = esdev_in(&parent)
-        .args(["create", "journal", "--template=docs", "--blog"])
+        .args(["create", TEMPLATES, "journal", "--template=docs", "--blog"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13154,7 +13211,7 @@ fn afw_templates_scaffold_from_flags() {
 
     // Unattended and unasked, a docs site is docs: the blog is opt-in.
     let unasked = esdev_in(&parent)
-        .args(["create", "handbook", "--template=docs"])
+        .args(["create", TEMPLATES, "handbook", "--template=docs"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13173,7 +13230,13 @@ fn afw_templates_scaffold_from_flags() {
     // CSR compiler plugin with routes off, the DOM cleanup setup, and the
     // `--dom` script that selects it.
     let lib = esdev_in(&parent)
-        .args(["create", "widgets", "--template=library", "--language=ts"])
+        .args([
+            "create",
+            TEMPLATES,
+            "widgets",
+            "--template=library",
+            "--language=ts",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13210,6 +13273,7 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
     let pnpm = esdev_in(&parent)
         .args([
             "create",
+            TEMPLATES,
             "shop-pnpm",
             "--template=spa",
             "--package-manager=pnpm",
@@ -13237,7 +13301,7 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
 
     // Unsaid and unattended: npm, matching the install default.
     let plain = esdev_in(&parent)
-        .args(["create", "shop-npm", "--template=api"])
+        .args(["create", TEMPLATES, "shop-npm", "--template=api"])
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn esdev create");
@@ -13251,6 +13315,7 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
     let unknown = esdev_in(&parent)
         .args([
             "create",
+            TEMPLATES,
             "nope",
             "--template=api",
             "--package-manager=cargo",
@@ -13288,6 +13353,7 @@ fn afw_axes_are_refused_where_they_do_not_apply() {
         let refused = esdev_in(&parent)
             .args([
                 "create",
+                TEMPLATES,
                 dir.file_name().unwrap().to_str().unwrap(),
                 &format!("--template={template}"),
                 flag,
@@ -13306,7 +13372,7 @@ fn afw_axes_are_refused_where_they_do_not_apply() {
 
     // The list names the new templates, so the error above is actionable.
     let listed = esdev_in(&parent)
-        .args(["create", "--list"])
+        .args(["create", TEMPLATES, "--list"])
         .output()
         .expect("spawn esdev create");
     for template in ["spa", "fullstack", "docs", "library"] {

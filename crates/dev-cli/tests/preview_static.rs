@@ -22,6 +22,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+/// Templates from the repository's own package, read as `--from` reads it:
+/// the tests never reach a registry for them (DECISIONS D220).
+const TEMPLATES: &str = concat!(
+    "--from=",
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/esdev-templates"
+);
+
 /// Deterministic fixture bytes: 0..255 four times over.
 fn bytes() -> Vec<u8> {
     (0..1024u32).map(|i| (i % 256) as u8).collect()
@@ -870,7 +878,13 @@ fn a_scaffolded_project_previews_what_it_built() {
     std::fs::create_dir_all(&parent).expect("scaffold parent");
 
     let created = Command::new(env!("CARGO_BIN_EXE_esdev"))
-        .args(["create", "shop", "--template=vanilla", "--no-install"])
+        .args([
+            "create",
+            TEMPLATES,
+            "shop",
+            "--template=vanilla",
+            "--no-install",
+        ])
         .current_dir(&parent)
         .stdin(Stdio::null())
         .env("npm_config_registry", test_registry())

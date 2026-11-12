@@ -88,6 +88,7 @@ mod style;
 mod tags;
 mod tailwind;
 mod template;
+mod template_fetch;
 mod test;
 mod trace;
 mod transform;
@@ -501,13 +502,18 @@ OPTIONS:
     --proxy=<url>               Reach the registry through this proxy
                                 (default: HTTPS_PROXY)
     --no-proxy=<list>           Hosts reached directly (default: NO_PROXY)
+    --templates=<version>       Use this release of @opentf/esdev-templates
+                                rather than the newest this esdev reads
+    --from=<dir>                Read the templates from a directory laid out
+                                as the package is: for writing a template
 
 What you get is a project that runs and one page — its name, what it was built
 with, and the file to edit — with its esdev.json written, its entry named by
 the script tag in its index.html, and a permission line that is narrow from the
-first run. Template files are baked into this binary; package versions are
-resolved from the npm registry while scaffolding, so create needs registry
-access even with --no-install.
+first run. The templates are the @opentf/esdev-templates package, fetched from
+the npm registry and checked against its published sha512 before anything is
+read; the package versions a project pins are resolved there too, so create
+needs registry access even with --no-install.
 
 On a terminal it asks which template and which of its options to use, which
 package manager the project uses, and whether to install. In a pipe or CI job it
@@ -1356,6 +1362,9 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     // Every other `--<name>` is one of the template's options, checked once
     // the template is known: what a template asks is its own (D220).
     let mut options: Vec<create::OptionFlag> = Vec::new();
+    let mut list = false;
+    let mut from: Option<std::path::PathBuf> = None;
+    let mut pinned: Option<String> = None;
     let mut manager: Option<String> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
@@ -1376,9 +1385,10 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 .push(require_value(flag, value)?.to_string()),
             "--list" => {
                 reject_value(flag, value)?;
-                print!("{}", create::list());
-                std::process::exit(0);
+                list = true;
             }
+            "--from" => from = Some(std::path::PathBuf::from(require_value(flag, value)?)),
+            "--templates" => pinned = Some(require_value(flag, value)?.to_string()),
             "--template" => template = Some(require_value(flag, value)?.to_string()),
             "--package-manager" => {
                 manager = Some(require_value(flag, value)?.to_string());
@@ -1428,6 +1438,29 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             dir => dirs.push(dir.to_string()),
         }
     }
+    if from.is_some() && pinned.is_some() {
+        return Err(format!(
+            "--from and --templates both say where the templates come from; give one.\n\n{CREATE_USAGE}"
+        ));
+    }
+    let source = match from {
+        Some(dir) => create::TemplateSource::Dir(dir),
+        None => create::TemplateSource::Registry { pinned },
+    };
+    if list {
+        return Ok(CreateConfig {
+            dir: String::new(),
+            template: None,
+            options: Vec::new(),
+            force: false,
+            manager: None,
+            install: Some(None),
+            yes: true,
+            proxies: outbound_proxies(proxy.as_deref(), no_proxy.as_deref())?,
+            source,
+            list,
+        });
+    }
     if dirs.is_empty() {
         return Err(format!("missing directory argument\n\n{CREATE_USAGE}"));
     }
@@ -1446,6 +1479,8 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         install,
         yes,
         proxies: outbound_proxies(proxy.as_deref(), no_proxy.as_deref())?,
+        source,
+        list,
     })
 }
 

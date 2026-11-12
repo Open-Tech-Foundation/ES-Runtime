@@ -1,0 +1,23 @@
+{
+  "name": "@opentf/esdev-templates",
+  "version": "0.1.0",
+  "description": "The project templates `esdev create` writes — data, fetched and verified by esdev, released on their own.",
+  "_engines": "engines.esdev is the range of esdev versions that read this package's template format (DECISIONS D220). esdev takes the newest stable release whose range includes itself.",
+  "engines": {
+    "esdev": ">=0.27.0"
+  },
+  "files": [
+    "templates"
+  ],
+  "keywords": ["esdev", "es-runtime", "opentf", "templates", "scaffold"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/esdev-templates"
+  },
+  "homepage": "https://esrun.opentechf.org/esdev/create",
+  "publishConfig": {
+    "access": "public"
+  }
+}
