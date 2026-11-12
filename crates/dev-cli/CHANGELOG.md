@@ -28,6 +28,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **Server templates develop on port 3000**, the port Bun.serve, Hono and
+  Next.js default to: `api`, `hono`, `elysia` and `react --mode=fullstack`
+  move from 8080, in `dev.app.port`, the `start` script's `--allow-listen`, the
+  code's `PORT` fallback and the README, as `fullstack` already did. Frontends
+  keep the dev loop's default, 5173. The `docs` template no longer pins port
+  3005, so it takes that default and moves when it is taken, and the
+  `micro-ui` README names 5173, where it runs, instead of 8080.
+
 - **esdev's WebSockets are the runtime's own** (DECISIONS D217): the live
   update channel, the `--inspect` endpoint and the WebDriver BiDi client of
   `esdev test --browser` run on the same RFC 6455 framing as `esrun`'s

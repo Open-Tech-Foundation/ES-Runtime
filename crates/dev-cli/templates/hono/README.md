@@ -7,7 +7,7 @@ An HTTP app on [Hono](https://hono.dev), running on
 
 ```sh
 {{pm}} install
-{{pm}} run dev     # http://localhost:8080
+{{pm}} run dev     # http://localhost:3000
 {{pm}} run test    # routes tested through app.request, no server needed
 {{pm}} run build   # dist/server.js
 {{pm}} run start   # runs the build with only the permissions it needs

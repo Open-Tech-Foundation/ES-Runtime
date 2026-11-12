@@ -3625,20 +3625,86 @@ mod tests {
         }
     }
 
+    /// Every template's development port is the one it says everywhere.
+    ///
+    /// A template with a server of its own uses **3000** — what Bun.serve,
+    /// Hono and Next.js default to, so it is the number a developer coming to
+    /// a server app expects — in `dev.app.port`, in the README's URL, in the
+    /// `start` script's `--allow-listen`, and as the `PORT` fallback in its
+    /// code: four places, one number, or the README sends you to a port
+    /// nothing listens on. A frontend pins nothing, so it gets the dev loop's
+    /// default (5173, Vite's) and moves when that is taken, and its README
+    /// says 5173.
     #[test]
-    fn static_template_readmes_show_their_default_dev_ports() {
-        for (template, mode, port) in [
-            ("vanilla", None, 5173),
-            ("react", Some("static"), 5173),
-            ("react", Some("fullstack"), 8080),
-        ] {
-            let files = plain_written(template, mode);
-            let readme = afw_text(&files, "README.md");
-            assert!(
-                readme.contains(&format!("http://localhost:{port}")),
-                "{template} {mode:?}: README has the wrong dev URL: {readme}"
-            );
+    fn every_template_names_one_dev_port() {
+        let mut checked = 0;
+        for (template, _) in TEMPLATES {
+            let shapes: Vec<Option<&str>> = match modes(template) {
+                Some(list) => list.iter().map(|(mode, _)| Some(*mode)).collect(),
+                None => vec![None],
+            };
+            for mode in shapes {
+                let files = plain_written(template, mode);
+                let text = |path: &str| {
+                    files
+                        .iter()
+                        .find(|(written, _)| written == path)
+                        .map(|(_, contents)| String::from_utf8_lossy(contents).into_owned())
+                };
+                let Some(config) = text("esdev.json") else {
+                    continue;
+                };
+                let config: serde_json::Value =
+                    serde_json::from_str(&config).expect("esdev.json is JSON");
+                let app_port = config["dev"]["app"]["port"].as_u64();
+                let readme = text("README.md").unwrap_or_default();
+                let shown = readme.split("http://localhost:").nth(1).map(|rest| {
+                    rest.chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                });
+                let at = format!("{template} {mode:?}");
+                match app_port {
+                    Some(port) => {
+                        assert_eq!(port, 3000, "{at}: a server's dev port");
+                        if let Some(shown) = &shown {
+                            assert_eq!(shown, "3000", "{at}: the README's URL");
+                        }
+                        let manifest: serde_json::Value = serde_json::from_str(
+                            &text("package.json").expect("a server template has a manifest"),
+                        )
+                        .expect("package.json is JSON");
+                        if let Some(start) = manifest["scripts"]["start"].as_str()
+                            && let Some(grant) = start.split("--allow-listen=").nth(1)
+                        {
+                            assert!(grant.starts_with("3000"), "{at}: start grants {start}");
+                        }
+                        for (path, contents) in &files {
+                            let source = String::from_utf8_lossy(contents);
+                            if let Some(rest) = source.split("env.PORT ??").nth(1) {
+                                let fallback: String = rest
+                                    .chars()
+                                    .skip_while(|c| !c.is_ascii_digit())
+                                    .take_while(char::is_ascii_digit)
+                                    .collect();
+                                assert_eq!(fallback, "3000", "{at}: {path}'s PORT fallback");
+                            }
+                        }
+                    }
+                    None => {
+                        assert!(
+                            config["dev"]["server"]["port"].is_null(),
+                            "{at}: a frontend pins no dev port"
+                        );
+                        if let Some(shown) = &shown {
+                            assert_eq!(shown, "5173", "{at}: the README's URL");
+                        }
+                    }
+                }
+                checked += 1;
+            }
         }
+        assert!(checked >= 12, "only {checked} templates checked");
     }
 
     #[test]

@@ -58,7 +58,7 @@ command that deploys the built program.
 Declare the app's default port under `dev.app.port`:
 
 ```json
-"dev": { "run": "server", "app": { "port": 8080 } }
+"dev": { "run": "server", "app": { "port": 3000 } }
 ```
 
 The server should read `PORT` and use this value as its fallback. If that port
@@ -154,7 +154,7 @@ pin the endpoint.
 | `--no-proxy=<list>` | Targets it reaches directly, as [esrun's](/api/cli#outbound-proxy). Default: `NO_PROXY` |
 
 ```json
-"dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 8080 }, "outDir": ".dev" }
+"dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 3000 }, "outDir": ".dev" }
 ```
 
 These `dev` settings control what the loop rebuilds and serves:

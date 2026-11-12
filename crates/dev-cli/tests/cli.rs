@@ -12867,7 +12867,7 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
     let full = std::fs::read_to_string(parent.join("fullstack/esdev.json")).expect("read");
     assert!(full.contains("\"run\": \"server\""), "{full}");
     assert!(
-        full.contains("\"app\":") && full.contains("\"port\": 8080"),
+        full.contains("\"app\":") && full.contains("\"port\": 3000"),
         "{full}"
     );
 

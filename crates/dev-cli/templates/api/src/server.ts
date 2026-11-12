@@ -2,7 +2,7 @@ import { serve } from "runtime:http";
 import { env, unmask } from "runtime:process";
 import { hello } from "./hello.ts";
 
-const port = Number(unmask(env.PORT ?? "8080"));
+const port = Number(unmask(env.PORT ?? "3000"));
 
 const server = serve({ port }, () => Response.json(hello("world")));
 

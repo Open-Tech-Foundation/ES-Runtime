@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build --minify",
-    "start": "esrun --allow-imports --allow-listen=8080 --allow-env=PORT dist/server.js",
+    "start": "esrun --allow-imports --allow-listen=3000 --allow-env=PORT dist/server.js",
     "test": "esdev test",
     "typecheck": "esdev typecheck"
   },

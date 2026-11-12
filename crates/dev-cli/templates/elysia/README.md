@@ -11,7 +11,7 @@ the socket.
 
 ```sh
 {{pm}} install
-{{pm}} run dev     # http://localhost:8080
+{{pm}} run dev     # http://localhost:3000
 {{pm}} run test    # routes tested through app.handle, no server needed
 {{pm}} run build   # dist/server.js
 {{pm}} run start   # runs the build with only the permissions it needs
