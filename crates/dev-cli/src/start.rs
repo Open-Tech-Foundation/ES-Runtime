@@ -230,6 +230,7 @@ fn cycle_summary(update: &Update, replaced_the_server: bool) -> String {
         // Never routed here: failures send before the cycle line. Named
         // anyway, so the vocabulary stays total if that ever changes.
         Update::Error { .. } | Update::ServerError { .. } => "errored".to_string(),
+        Update::Event { .. } => "told the page".to_string(),
     };
     match (update, replaced_the_server) {
         (Update::Reload, _) => summary,
@@ -480,8 +481,13 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     // The first build is allowed to fail like any other: the loop below is what
     // a developer fixes it in.
+    // What the server targets wrote, which the page does not load (D219).
+    let mut server_files = std::collections::HashSet::new();
     let built = match rebuild(&project, &watched, port, config.hot).await {
-        Ok(()) => true,
+        Ok(servers) => {
+            server_files = files_of(&project, servers);
+            true
+        }
         Err(err) => {
             eprintln!("esdev: {err}");
             error.send_replace(Some(crate::devserver::strip_ansi(&err)));
@@ -604,7 +610,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // And what the page was, with whether it is showing a failed build:
         // a fix that rebuilds to the last good output still has to clear the
         // overlay.
-        let page_before = output_fingerprint(&devdir);
+        let page_before = page_fingerprint(&devdir, &server_files);
         let was_failing = error.borrow().is_some();
 
         // **Before the rebuild, not after.** A hot update is computed by
@@ -635,13 +641,17 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // the most ordinary event there is, and the server you were about to
         // fix it on should still be answering — including while the build runs,
         // which is why the stop is here and not above.
-        if let Err(err) = rebuild(&project, &watched, port, config.hot).await {
-            eprintln!("esdev: {err}");
-            // Keep this as current state as well as notifying connected pages:
-            // clients that open or reconnect during the failure need the same
-            // message. No cycle line: the codeframe above is the message.
-            error.send_replace(Some(crate::devserver::strip_ansi(&err)));
-            continue;
+        match rebuild(&project, &watched, port, config.hot).await {
+            Ok(servers) => server_files = files_of(&project, servers),
+            Err(err) => {
+                eprintln!("esdev: {err}");
+                // Keep this as current state as well as notifying connected
+                // pages: clients that open or reconnect during the failure need
+                // the same message. No cycle line: the codeframe above is the
+                // message.
+                error.send_replace(Some(crate::devserver::strip_ansi(&err)));
+                continue;
+            }
         }
 
         // **Restarted only if the build changed something it reads.** Editing a
@@ -703,8 +713,11 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // The patch is still sent after the restart, because the page fetches it
         // from the application's own server and a server still coming back
         // refuses the connection.
+        // What the page loads, after: the dev output without the servers' own
+        // files.
+        let page_after = page_fingerprint(&devdir, &server_files);
         let update = match hot {
-            Some(hot) => Update::Patch {
+            Some(hot) => Some(Update::Patch {
                 // Relative, so it is fetched from whatever origin the page is
                 // on. Absolute-to-esdev was tried and is worse: a module script
                 // is fetched under CORS *and* under the page's CSP, and the
@@ -713,31 +726,96 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 // should. What the application serves, the application serves.
                 url: format!("/{}/{}", crate::html::ASSET_DIR, hot.filename),
                 changed_ids: hot.changed_ids,
-            },
-            // A server that was replaced and no patch to offer: the browser has
-            // new bundles to fetch either way.
-            None if replaced_the_server => Update::Reload,
-            // Nothing the page loads changed — a new file nothing imports, a
-            // note, an editor's swap file. Nothing to tell it, and no line:
-            // the save did nothing visible, and saying "reloaded" would be
-            // false (D166).
-            None if !was_failing && output_fingerprint(&devdir) == page_before => continue,
+            }),
+            // The page is showing the failure, so it is told something whatever
+            // the output did (D166).
+            None if was_failing => Some(if replaced_the_server {
+                Update::Reload
+            } else {
+                update_for(&changed)
+            }),
+            // Nothing the page loads changed. A new file nothing imports, a
+            // note, an editor's swap file (D166) — or an edit to server code
+            // alone, a loader or an API route, whose restart leaves the page
+            // and its state where they are; the event below tells it (D219).
+            None if page_after == page_before => None,
+            // A replaced server and new bundles with no patch to offer.
+            None if replaced_the_server => Some(Update::Reload),
             // rolldown could not express this change as a patch, or there is no
             // graph to compute one against yet.
-            None => update_for(&changed),
+            None => Some(update_for(&changed)),
         };
+        // **A restart is announced to the page** unless the page is reloading
+        // anyway: once, after the servers are listening (D207 waited for
+        // that above), so a framework that refetches does not meet the
+        // restart's refused connections (D219).
+        let announce = replaced_the_server && !matches!(update, Some(Update::Reload));
+        if update.is_none() && !announce {
+            continue;
+        }
         // One line per pass, like the banner: what the save did and how long
         // it took. Untagged, like the banner — the loop's older event lines
         // keep their `esdev:` tags; these two lines are the new vocabulary.
+        let summary = match &update {
+            Some(update) => cycle_summary(update, replaced_the_server),
+            None => "restarted server".to_string(),
+        };
         eprintln!(
             "{} {} in {}",
             paint.green("✓"),
-            cycle_summary(&update, replaced_the_server),
+            summary,
             format_duration(cycle.elapsed())
         );
         error.send_replace(None);
-        let _ = reload.send(update);
+        if let Some(update) = update {
+            let _ = reload.send(update);
+        }
+        if announce {
+            let servers = restarted
+                .iter()
+                .map(|&i| running[i].spec.name.clone())
+                .collect();
+            let _ = reload.send(server_update(&root, servers, &changed));
+        }
     }
+}
+
+/// The event a page's `import.meta.hot.on` hears after a server restart.
+pub(crate) const SERVER_UPDATE: &str = "esdev:server-update";
+
+/// [`SERVER_UPDATE`] for this restart: which servers came back, and the
+/// sources that changed, root-relative with a leading `/` as Vite writes a
+/// module's path. What they mean is the framework's question (D219).
+fn server_update(root: &Path, servers: Vec<String>, changed: &[PathBuf]) -> Update {
+    // Once each, in order: one save can reach the watcher as more than one
+    // event inside the debounce, and a listener counting files should not
+    // count it twice.
+    let files: std::collections::BTreeSet<String> = changed
+        .iter()
+        .filter_map(|path| path.strip_prefix(root).ok())
+        .map(|relative| {
+            format!(
+                "/{}",
+                es_runtime_default_providers::path::to_slash(relative)
+            )
+        })
+        .collect();
+    Update::Event {
+        name: SERVER_UPDATE.to_string(),
+        data: serde_json::json!({ "servers": servers, "files": files }).to_string(),
+    }
+}
+
+/// The server targets' files, as absolute paths the fingerprint can skip.
+fn files_of(
+    project: &Settings,
+    servers: Vec<crate::build::ServerOutput>,
+) -> std::collections::HashSet<PathBuf> {
+    servers
+        .into_iter()
+        .flat_map(|server| server.files)
+        .map(|file| project.source.root.join(file))
+        .collect()
 }
 
 /// The banner: ready, how long it took, and where to open it.
@@ -809,7 +887,7 @@ async fn rebuild(
     watched: &[String],
     port: u16,
     hot: bool,
-) -> Result<(), String> {
+) -> Result<Vec<crate::build::ServerOutput>, String> {
     let targets = if watched.is_empty() {
         None
     } else {
@@ -1143,8 +1221,8 @@ fn fingerprint(output: &Path) -> u64 {
     }
 }
 
-/// A fingerprint of everything the dev build wrote, which is everything the
-/// page can load (D166).
+/// A fingerprint of what the page loads: everything the dev build wrote
+/// except the files the server targets wrote (D166, D219).
 ///
 /// The page is told to reload only when this moves. A file created in the
 /// project that nothing imports rebuilds to the same bytes, and reloading for
@@ -1152,9 +1230,22 @@ fn fingerprint(output: &Path) -> u64 {
 /// the output rather than asking whether the file is in the module graph is
 /// what keeps it right for every plugin: a glob, a file-based route or a
 /// copied asset that does pick the new file up changes the output, and that
-/// reloads.
-fn output_fingerprint(devdir: &Path) -> u64 {
-    tree_fingerprint(devdir, false)
+/// reloads. The servers' own files are left out, so an edit to server code
+/// alone restarts the server and leaves the page and its state alone.
+///
+/// A project with no browser build has nothing left here, and nothing to
+/// lose by it: no build injects esdev's client into a page its server renders
+/// whole, so there is no page listening to tell.
+fn page_fingerprint(devdir: &Path, server_files: &std::collections::HashSet<PathBuf>) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    collect(devdir, false, &mut entries);
+    entries.retain(|(path, _)| !server_files.contains(path));
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Every file under `dir`, path and contents, hashed in path order.
@@ -1490,6 +1581,60 @@ mod tests {
     /// *contained* something else — swapping only the styles there would leave
     /// a page half updated, which is worse than reloading it, because it looks
     /// like it worked.
+    /// What the server targets wrote is not the page's: a changed server
+    /// bundle leaves the page's fingerprint where it was (D219).
+    #[test]
+    fn the_page_fingerprint_leaves_out_the_servers_files() {
+        let dir = std::env::temp_dir().join(format!("esdev-fp-server-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(crate::html::ASSET_DIR)).unwrap();
+        std::fs::write(dir.join("index.html"), "<p>one</p>").unwrap();
+        std::fs::write(dir.join("server.js"), "one").unwrap();
+        std::fs::write(dir.join("server.js.map"), "{}").unwrap();
+        let servers: std::collections::HashSet<PathBuf> =
+            [dir.join("server.js"), dir.join("server.js.map")].into();
+        let first = page_fingerprint(&dir, &servers);
+        std::fs::write(dir.join("server.js"), "two").unwrap();
+        std::fs::write(dir.join("server.js.map"), "{\"v\":3}").unwrap();
+        assert_eq!(
+            page_fingerprint(&dir, &servers),
+            first,
+            "a server edit moved the page"
+        );
+        std::fs::write(dir.join(crate::html::ASSET_DIR).join("main.js"), "1").unwrap();
+        assert_ne!(
+            page_fingerprint(&dir, &servers),
+            first,
+            "a page edit did not"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `esdev:server-update` names the servers and the changed sources,
+    /// root-relative with a leading `/`; a path outside the root is left out
+    /// rather than leaked whole.
+    #[test]
+    fn the_server_update_names_servers_and_root_relative_files() {
+        let root = Path::new("/work/app");
+        let update = server_update(
+            root,
+            vec!["api".to_string()],
+            &[
+                root.join("app/todos/loader.js"),
+                PathBuf::from("/elsewhere/x.js"),
+                // One save, reported twice inside the debounce.
+                root.join("app/todos/loader.js"),
+            ],
+        );
+        let Update::Event { name, data } = update else {
+            panic!("not an event");
+        };
+        assert_eq!(name, "esdev:server-update");
+        let data: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(data["servers"], serde_json::json!(["api"]));
+        assert_eq!(data["files"], serde_json::json!(["/app/todos/loader.js"]));
+    }
+
     /// The page's fingerprint moves with what the build wrote — a new file
     /// or a changed byte — and with nothing else (D166).
     #[test]
@@ -1498,20 +1643,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(crate::html::ASSET_DIR)).unwrap();
         std::fs::write(dir.join("index.html"), "<p>one</p>").unwrap();
-        let first = output_fingerprint(&dir);
+        let first = page_fingerprint(&dir, &std::collections::HashSet::new());
         // Rewritten with the same bytes, as every rebuild does.
         std::fs::write(dir.join("index.html"), "<p>one</p>").unwrap();
-        assert_eq!(output_fingerprint(&dir), first);
+        assert_eq!(
+            page_fingerprint(&dir, &std::collections::HashSet::new()),
+            first
+        );
         // The client assets are the page's, so they count here — and only
         // here: the server's fingerprint leaves them out.
         let server = fingerprint(&dir.join("index.html"));
         std::fs::write(dir.join(crate::html::ASSET_DIR).join("main.js"), "1").unwrap();
-        assert_ne!(output_fingerprint(&dir), first);
+        assert_ne!(
+            page_fingerprint(&dir, &std::collections::HashSet::new()),
+            first
+        );
         assert_eq!(fingerprint(&dir.join("index.html")), server);
         std::fs::write(dir.join("robots.txt"), "User-agent: *").unwrap();
-        let with_new = output_fingerprint(&dir);
+        let with_new = page_fingerprint(&dir, &std::collections::HashSet::new());
         std::fs::write(dir.join("robots.txt"), "User-agent: x").unwrap();
-        assert_ne!(output_fingerprint(&dir), with_new);
+        assert_ne!(
+            page_fingerprint(&dir, &std::collections::HashSet::new()),
+            with_new
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

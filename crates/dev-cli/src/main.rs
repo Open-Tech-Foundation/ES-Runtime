@@ -3275,7 +3275,7 @@ async fn run() -> ExitCode {
         Ok(Command::Build(request)) => {
             // Written even when the build failed: a policy that refuses what
             // shipped is when the draft is most wanted (D193).
-            let built = build::run(request).await;
+            let built = build::run(request).await.map(drop);
             match (built, policy::write_inventory()) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(e), _) | (Ok(()), Err(e)) => Err(e),

@@ -2352,7 +2352,15 @@ pub fn output_path(target: &crate::config::Target) -> PathBuf {
 /// of four entries takes long enough that silence until the end is silence
 /// about which of them is slow, and the first failure should name the target it
 /// happened in while the others are still visibly pending.
-pub async fn run(request: BuildRequest) -> Result<(), String> {
+/// The files a server target wrote, where they finally are: what the dev loop
+/// leaves out when it asks whether the page's own output changed (D219).
+#[derive(Debug, Clone, Default)]
+pub struct ServerOutput {
+    /// Every file, project-root-relative as the build placed it.
+    pub files: Vec<PathBuf>,
+}
+
+pub async fn run(request: BuildRequest) -> Result<Vec<ServerOutput>, String> {
     let project = match request {
         BuildRequest::Single(entry) => {
             let EntryBuild {
@@ -2375,7 +2383,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             let written = build_single(config).await?;
             let paint = crate::style::Palette::stdout();
             println!("{} {} {written}", paint.green(verb), paint.dim("→"));
-            return Ok(());
+            return Ok(Vec::new());
         }
         BuildRequest::Project(project) => project,
     };
@@ -2430,7 +2438,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
     match build_targets(&project, &selected, &staging).await {
         // Everything worked, so everything moves. Until this line the output on
         // disk is the last build that worked.
-        Ok(()) => staging.commit(),
+        Ok(servers) => staging.commit().map(|()| servers),
         // A staged build drops its temporary output here; a dev build writes
         // to its separate dev directory as it goes. Say which happened so a
         // developer knows whether that output can contain partial results.
@@ -2455,7 +2463,7 @@ async fn build_targets(
     project: &ProjectBuild,
     selected: &[&crate::config::Target],
     staging: &crate::staging::Staging,
-) -> Result<(), String> {
+) -> Result<Vec<ServerOutput>, String> {
     // Started once, on the first build that needs it, and kept for the run:
     // a dev loop rebuilds on every save, and evaluating a plugin's module —
     // and whatever it initialises — per keystroke would be paying a startup
@@ -2474,6 +2482,8 @@ async fn build_targets(
 
     // What each target produced, for the plugins' `finish` (D153).
     let mut finished = Vec::with_capacity(selected.len());
+    // And what each server target wrote, for the dev loop (D219).
+    let mut servers = Vec::new();
     for target in selected {
         // Where this build is, for the plugins to read (D148). Hot only for a
         // browser build in a hot loop: that is the one a page is running and
@@ -2559,6 +2569,13 @@ async fn build_targets(
 
         // The directory the bundler writes into, which is what the listing's
         // names are relative to: an `out` file's own directory, or `outdir`.
+        let placed_dir = match &target.output {
+            crate::config::Output::File(out) => place(Path::new(out))
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            crate::config::Output::Dir(dir) => place(Path::new(dir)),
+        };
         let (out, out_dir, written_into) = match &target.output {
             crate::config::Output::File(out) => {
                 let out = staging.path(place(Path::new(out)));
@@ -2612,6 +2629,25 @@ async fn build_targets(
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
+        if platform.name() == "server" {
+            // A chunk's map is written beside it whether or not the bundler
+            // lists it, and it changes whenever the chunk does.
+            let files = built
+                .produced
+                .iter()
+                .flat_map(|output| {
+                    let name = match output {
+                        crate::contract::Output::Chunk { file_name, .. }
+                        | crate::contract::Output::Asset { file_name } => file_name,
+                    };
+                    [
+                        placed_dir.join(name),
+                        placed_dir.join(format!("{name}.map")),
+                    ]
+                })
+                .collect();
+            servers.push(ServerOutput { files });
+        }
         finished.push(crate::contract::Finished {
             name: target.name.clone(),
             platform: platform.name(),
@@ -2683,7 +2719,7 @@ async fn build_targets(
             .await
             .map_err(|e| staging.reveal(&e))?;
     }
-    Ok(())
+    Ok(servers)
 }
 
 /// Calls every plugin's `finish`: `pre`, then unordered, then `post`, each

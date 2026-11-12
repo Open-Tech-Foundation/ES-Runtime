@@ -110,6 +110,15 @@ pub enum Update {
         /// The report as the server printed it, without colour.
         message: String,
     },
+    /// A named event for the page's `import.meta.hot.on(name, cb)` listeners
+    /// — `esdev:server-update` after a restart (D219). Changes nothing on its
+    /// own: what it means is the listener's.
+    Event {
+        /// The event's name.
+        name: String,
+        /// Its payload, already JSON.
+        data: String,
+    },
 }
 
 impl Update {
@@ -154,6 +163,10 @@ impl Update {
                     escape_json(message)
                 )
             }
+            Self::Event { name, data } => format!(
+                "{{\"type\":\"event\",\"name\":\"{}\",\"data\":{data}}}",
+                escape_json(name)
+            ),
         }
     }
 }
@@ -1119,6 +1132,23 @@ mod tests {
         );
         // And it parses as the object the client reads.
         assert!(message.starts_with("{\"type\":\"error\","));
+    }
+
+    /// An event names itself and carries its payload as JSON, for the page's
+    /// `import.meta.hot.on` (D219).
+    #[test]
+    fn an_event_update_carries_its_name_and_payload() {
+        let message = Update::Event {
+            name: "esdev:server-update".to_string(),
+            data: r#"{"servers":["server"],"files":["/src/a.js"]}"#.to_string(),
+        }
+        .as_message();
+        assert_eq!(
+            message,
+            r#"{"type":"event","name":"esdev:server-update","data":{"servers":["server"],"files":["/src/a.js"]}}"#
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&message).expect("JSON");
+        assert_eq!(parsed["data"]["files"][0], "/src/a.js");
     }
 
     /// Paint out, text intact: SGR colours and the reset go, everything else

@@ -20,9 +20,12 @@ so [`environment()`](/api/process#environment-where-the-program-is-deployed)
 reports where it runs; see [The RUNTIME_ENV convention](/docs/deployment/runtime-env).
 
 On a change: rebuild, restart the server if its bundle moved, and patch the
-page — or reload it if nothing accepted the change. A change that leaves the
-build's output as it was, such as a new file nothing imports, leaves the page
-alone. Read the details in [Hot module replacement](/esdev/start/hmr).
+page — or reload it if nothing accepted the change. A change that leaves what
+the page loads as it was leaves the page alone: a new file nothing imports, or
+an edit to server code alone, such as a loader or an API route — the server
+restarts and the page keeps its state, and is told with
+[`esdev:server-update`](/esdev/start/hmr#when-the-server-restarts). Read the
+details in [Hot module replacement](/esdev/start/hmr).
 
 ## What it prints
 
@@ -97,6 +100,12 @@ before the server is stopped, so it also answers while the build runs.
 The error is sent to the browser and shown in an overlay until a successful
 update clears it. A page that opens or reconnects during the failure receives
 the current error too.
+
+When the first build fails, esdev prints `the build failed; fix it and save`
+instead of the banner, and the banner once a save fixes it. Until then a page
+request with nothing built to load is answered with the error, status 500, on
+a page that reloads itself when the build succeeds. A missing asset is still a
+404.
 
 Development outputs are written in place: a failed build may already have
 updated some files. The loop's output directory is separate from the release

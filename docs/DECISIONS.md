@@ -4602,3 +4602,22 @@ What others ship (official documentation unless noted):
 - **A persisted `Alt-Svc` cache.** See the origin record.
 - **Queueing on a full HTTP/2 connection** — already rejected in D217 phase 3.
 - **A plug-in protocol interface or run-time loading.** See the code layout.
+
+### D219 — A server restart leaves the page alone when what the page loads is unchanged, and tells it with `esdev:server-update` · *Proposed (2026-11-12)* · *amends D166*
+
+**Context:** in a fullstack project, an edit to a loader, a middleware, an API route or a server function changes only the server bundle. The loop restarts the server and then, with no hot patch to send, reloads the page (D166 exempts "a replaced server" from its unchanged-output rule) — though the browser bundle is byte for byte what the page already runs. The reload throws away form input, component state, scroll position and open dialogs for code the browser never executes. Reported by AFW, whose router can refetch a route's data in place if it knows the server changed, and which has no way to know.
+
+Others: Vite reloads nothing for a module that is only in the server's graph; a framework that wants the page told sends its own event over `server.ws`, and a page listens with `import.meta.hot.on(event, cb)`. Vite's own events use a `vite:` prefix (`vite:beforeUpdate`, `vite:afterUpdate`).
+
+**Decision (proposed):**
+- **After a server restart with no hot patch, the page reloads only if what it loads changed.** "What it loads" is the dev output without the running servers' own bundles — the same fingerprint D166 takes, minus `running[i].output`. Unchanged: no reload, no patch. Changed: as today — patched if the change has a patch, reloaded otherwise.
+- **A project with no browser build is unaffected.** When the servers' bundles are the whole dev output — `api`, `hono`, `elysia`: HTML rendered by the server, nothing built for the browser — no build injects esdev's client into its pages, so no page was listening for a reload before and none is now.
+- **`import.meta.hot.on(event, cb)` and `off(event, cb)`,** Vite's names. A module's listeners are removed when it is replaced, as Vite removes them, so twenty saves do not leave twenty listeners.
+- **`esdev:server-update`, once per restart,** to every connected page, with `{ servers, files }`: the names of the servers that restarted (D208) and the changed sources, root-relative with a leading `/` as Vite writes module paths. Sent **after** the restarted servers report they are listening (D207), so a page reacting to it does not meet the restart's refused connections; sent whether or not a patch went with it.
+
+**Rejected:**
+- **A reload only when no module listens for the event.** The loop would have to know what every page subscribed to, across tabs, and the answer would change with code the developer did not write; "unchanged output means no reload" is one rule that holds for every framework.
+- **Module-level hot swapping of server code.** A restart takes tens of milliseconds and carries nothing forward (D62); swapping modules in a live server is where stale state comes from.
+- **Framework knowledge in esdev** (which files are loaders). esdev reports what changed; the framework decides what that means.
+
+**Consequences:** a server-only edit in a project with a browser build keeps the page's state, and a framework that listens refetches what it needs. A framework that does not listen shows server-rendered changes on the next navigation or manual reload — Vite's behaviour. A project rendered entirely by its server has no esdev client in its pages, before and after.

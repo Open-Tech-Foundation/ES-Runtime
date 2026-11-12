@@ -26,7 +26,25 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Added
+
+- **`import.meta.hot.on(event, cb)` and `off(event, cb)`,** Vite's names. A
+  module's listeners are removed when it is replaced, so a save does not add
+  a second one.
+- **`esdev:server-update`,** sent to every open page once a restarted server
+  is listening, with `{ servers, files }`: the servers that restarted and the
+  changed sources, root-relative with a leading `/` (DECISIONS D219). A
+  framework can refetch a route's data in place instead of losing the page.
+
 ### Changed
+
+- **A server restart no longer reloads a page whose own output is unchanged**
+  (DECISIONS D219). An edit to a loader, a middleware, an API route or a
+  server function changes only the server bundle; the page kept being
+  reloaded, throwing away form input, component state and scroll position for
+  code the browser never runs. It is now left alone and told with
+  `esdev:server-update`. An edit to what the page loads still patches it, or
+  reloads it when nothing accepts the change.
 
 - **Server templates develop on port 3000**, the port Bun.serve, Hono and
   Next.js default to: `api`, `hono`, `elysia` and `react --mode=fullstack`

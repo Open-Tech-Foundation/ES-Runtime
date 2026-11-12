@@ -13,6 +13,12 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `import.meta.hot.on(event, cb)` and `off(event, cb)`, and the
+  `EsdevServerUpdate` payload of `esdev:server-update`, which `esdev start`
+  sends after a server restart (DECISIONS D219).
+
 ## [0.22.0] - 2026-11-11
 
 ### Added

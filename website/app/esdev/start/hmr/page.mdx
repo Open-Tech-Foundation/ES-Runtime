@@ -37,6 +37,8 @@ If nothing on the way up accepts a change, the page reloads.
 | `data` | An object that survives replacement |
 | `decline()` | Refuse replacement — any change reaching here reloads |
 | `invalidate()` | Hand the update up to this module's importers |
+| `on(event, cb)` | Call `cb(data)` each time esdev sends `event`; removed when this module is replaced |
+| `off(event, cb)` | Remove a listener `on` added |
 
 `import.meta.hot` is `undefined` in a production build, so `if (import.meta.hot)`
 is how a module says “dev only” and still typechecks.
@@ -70,6 +72,25 @@ const cache = import.meta.hot
 
 In a hot build, made once and returned on every replacement. In production,
 the module creates its own map.
+
+## When the server restarts
+
+An edit to code only the server runs — a loader, a middleware, an API route —
+restarts the server and leaves the page alone, since nothing the page loads
+changed. Once the new server is listening, esdev sends `esdev:server-update`
+to every open page:
+
+```js
+import.meta.hot?.on("esdev:server-update", ({ servers, files }) => {
+  // servers: ["server"]          the servers that restarted
+  // files:   ["/app/loader.js"]  the changed sources, from the project root
+  refetchRouteData();
+});
+```
+
+What it means is the listener's to decide: a router can refetch the current
+route's data, or skip a change that renders nothing. Without a listener, a
+server-rendered change shows on the next navigation or reload.
 
 ## Component refresh is a plugin
 

@@ -169,6 +169,59 @@ impl Fixture {
             ),
         );
 
+        Some(Fixture::launch(name, dir, port, browser))
+    }
+
+    /// A project with a server of its own beside its page (D219): `server`
+    /// serves the built page and answers `/api` from `src/data.mjs`, which only
+    /// the server imports. The page is opened on the app's port.
+    fn start_with_server(name: &str, main: &str) -> Option<Fixture> {
+        let browser = chromium()?;
+        let dir = std::env::temp_dir().join(format!("esdev-hot-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("create the fixture");
+        write(&dir, "src/data.mjs", "export const message = \"ONE\";\n");
+        write(&dir, "src/main.mjs", main);
+        write(
+            &dir,
+            "src/server.mjs",
+            "import { serve } from \"runtime:http\";\n\
+             import { file } from \"runtime:fs\";\n\
+             import { env } from \"runtime:process\";\n\
+             import { message } from \"./data.mjs\";\n\
+             const dir = new URL(\"./\", import.meta.url);\n\
+             serve({ port: Number(env.PORT) }, async (request) => {\n\
+               const { pathname } = new URL(request.url);\n\
+               if (pathname === \"/api\") return Response.json({ message });\n\
+               const asset = file(new URL(\".\" + (pathname === \"/\" ? \"/index.html\" : pathname), dir));\n\
+               const isFile = await asset.stat().then((stat) => stat.isFile, () => false);\n\
+               if (!isFile) return new Response(\"no\", { status: 404 });\n\
+               return new Response(asset.stream(), { headers: { \"content-type\": asset.type } });\n\
+             });\n",
+        );
+        write(
+            &dir,
+            "index.html",
+            "<!doctype html><html><head><script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+             <body><div id=out>pending</div></body></html>\n",
+        );
+        let port = port_for(name);
+        write(
+            &dir,
+            "esdev.json",
+            &format!(
+                r#"{{ "build": {{ "targets": {{
+                        "web": {{ "entry": "index.html", "outdir": "dist" }},
+                        "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
+                     "dev": {{ "run": "server", "app": {{ "port": {port} }},
+                               "watch": {{ "targets": ["web", "server"] }} }} }}"#
+            ),
+        );
+        Some(Fixture::launch(name, dir, port, browser))
+    }
+
+    /// Starts esdev in `dir` and a headless browser beside it.
+    fn launch(name: &str, dir: PathBuf, port: u16, browser: &str) -> Fixture {
         let log = std::env::temp_dir().join(format!("esdev-hot-{name}-{}.log", std::process::id()));
         let output = std::fs::File::create(&log).expect("create the esdev log");
         let esdev = Command::new(env!("CARGO_BIN_EXE_esdev"))
@@ -197,14 +250,14 @@ impl Fixture {
             .spawn()
             .expect("spawn the browser");
 
-        Some(Fixture {
+        Fixture {
             dir,
             log,
             profile,
             esdev: Some(esdev),
             browser: Some(browser),
             port,
-        })
+        }
     }
 
     fn edit(&self, path: &str, contents: &str) {
@@ -584,6 +637,8 @@ fn every_fixture_gets_a_port_of_its_own() {
         "keep",
         "overlay",
         "plugin-error",
+        "server-update",
+        "server-page-edit",
     ];
 
     let mut taken: Vec<(u16, &str)> = Vec::new();
@@ -776,5 +831,75 @@ export default {
         page.eval("window.__esdev_test_marker").await,
         "here",
         "the edit after the fix reloaded the page instead of patching it"
+    );
+}
+
+/// **D219.** An edit to code only the server runs restarts the server and
+/// leaves the page alone — the marker survives — and a listener on
+/// `esdev:server-update` hears which server came back and which file changed,
+/// once the new server answers.
+#[tokio::test]
+async fn a_server_only_edit_leaves_the_page_and_tells_it() {
+    let Some(fixture) = Fixture::start_with_server(
+        "server-update",
+        "document.getElementById(\"out\").textContent = \"client\";\n\
+         window.__updates = [];\n\
+         import.meta.hot.on(\"esdev:server-update\", (data) => {\n\
+           fetch(\"/api\").then((r) => r.json()).then((body) => {\n\
+             window.__updates.push({ data, message: body.message });\n\
+           });\n\
+         });\n",
+    ) else {
+        eprintln!("skipping: no chromium");
+        return;
+    };
+    let mut page = Page::open(&fixture).await;
+    page.eval(MARK).await;
+
+    fixture.edit("src/data.mjs", "export const message = \"TWO\";\n");
+    assert!(
+        page.until("window.__updates.length === 1").await,
+        "the page was never told the server restarted"
+    );
+    assert_eq!(
+        page.eval("window.__esdev_test_marker").await,
+        "here",
+        "a server-only edit reloaded the page"
+    );
+    // Sent once the new server answers: the fetch it triggered saw the edit.
+    assert_eq!(page.eval("window.__updates[0].message").await, "TWO");
+    assert_eq!(
+        page.eval("window.__updates[0].data.servers.join(',')")
+            .await,
+        "server"
+    );
+    assert_eq!(
+        page.eval("window.__updates[0].data.files.join(',')").await,
+        "/src/data.mjs"
+    );
+}
+
+/// The other half: in the same project, an edit to what the page loads still
+/// reaches it — nothing here accepts it, so the page reloads with it.
+#[tokio::test]
+async fn a_page_edit_beside_a_server_still_reaches_the_page() {
+    let Some(fixture) = Fixture::start_with_server(
+        "server-page-edit",
+        "document.getElementById(\"out\").textContent = \"client\";\n",
+    ) else {
+        eprintln!("skipping: no chromium");
+        return;
+    };
+    let mut page = Page::open(&fixture).await;
+    page.eval(MARK).await;
+
+    fixture.edit(
+        "src/main.mjs",
+        "document.getElementById(\"out\").textContent = \"edited\";\n",
+    );
+    assert!(
+        page.until("document.getElementById('out')?.textContent === 'edited'")
+            .await,
+        "the page edit never arrived"
     );
 }

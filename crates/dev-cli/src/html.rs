@@ -449,6 +449,7 @@ fn reload_client(port: u16) -> String {
           if(m.type===\"css\")css();\
           else if(m.type===\"patch\")patch(m,0);\
           else if(m.type===\"reload\")location.reload();\
+          else if(m.type===\"event\"){{var h=globalThis.__esdev_hot;if(h&&h.emit)h.emit(m.name,m.data);}}\
           }};\
           s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
           s.onerror=function(){{s.close();}};\
@@ -1147,6 +1148,8 @@ class EsdevHot {
     this.disposeCallbacks = [];
     this.declined = false;
     this._aborter = new AbortController();
+    // The listeners `on` registered, so `_retire` can take them back.
+    this._listening = [];
     // The bag `dispose` writes into and the next instance reads. Kept on the
     // store rather than on this context, because this context is what a
     // replacement throws away.
@@ -1179,6 +1182,25 @@ class EsdevHot {
   }
   /** "I cannot handle this after all" -- try again from this module's importers. */
   invalidate() { this._runtime.esdevInvalidate(this.moduleId); }
+  /**
+   * `fn(data)` each time the dev loop sends `event` -- `esdev:server-update`,
+   * `{ servers, files }`, after a server restart. Vite's name. Taken back
+   * when this module is replaced, so a save does not add a second listener.
+   */
+  on(event, fn) {
+    var entry = { event: event, fn: fn };
+    this._runtime._listenersFor(event).add(entry);
+    this._listening.push(entry);
+  }
+  /** Removes a listener `on` added from this module. */
+  off(event, fn) {
+    var set = this._runtime._listenersFor(event);
+    this._listening = this._listening.filter(function (entry) {
+      if (entry.event !== event || entry.fn !== fn) return true;
+      set.delete(entry);
+      return false;
+    });
+  }
   /** Called by the runtime, immediately before this instance is dropped. */
   _retire() {
     for (var i = 0; i < this.disposeCallbacks.length; i++) {
@@ -1186,6 +1208,10 @@ class EsdevHot {
       catch (e) { console.error("[esdev] a dispose callback threw", e); }
     }
     this._aborter.abort();
+    for (var j = 0; j < this._listening.length; j++) {
+      this._runtime._listenersFor(this._listening[j].event).delete(this._listening[j]);
+    }
+    this._listening = [];
   }
 }
 
@@ -1197,6 +1223,20 @@ class EsdevRuntime extends DevRuntime {
     // `data` is. A replacement makes a new context, never a new store.
     this._stores = new Map();
     this._invalidated = null;
+    // `import.meta.hot.on` listeners, by event, across every module.
+    this._listeners = new Map();
+  }
+  _listenersFor(event) {
+    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
+    return this._listeners.get(event);
+  }
+  esdevEmit(event, data) {
+    var set = this._listeners.get(event);
+    if (!set) return;
+    Array.from(set).forEach(function (entry) {
+      try { entry.fn(data); }
+      catch (e) { console.error("[esdev] an import.meta.hot.on(\"" + event + "\") listener threw", e); }
+    });
   }
   _storeFor(id) {
     if (!this._stores.has(id)) this._stores.set(id, { data: {}, kept: new Map() });
@@ -1310,6 +1350,9 @@ globalThis.__rolldown_runtime__ ??= new EsdevRuntime("esdev");
 (globalThis.__esdev_hot ||= {}).apply = function (changedIds) {
   try { return __rolldown_runtime__.esdevApply(changedIds); }
   catch (e) { console.error("[esdev] hot update failed, reloading", e); return false; }
+};
+globalThis.__esdev_hot.emit = function (event, data) {
+  __rolldown_runtime__.esdevEmit(event, data);
 };
 "#,
     )
