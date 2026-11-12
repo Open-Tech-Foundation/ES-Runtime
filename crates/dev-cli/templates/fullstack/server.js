@@ -10,22 +10,18 @@ import { createHandler, createPageRenderer } from "@afw/server";
 // Beside this bundle: `dist/` in production, `.dev/dist/` under `esdev start`.
 const outDir = new URL("./", import.meta.url);
 
-// Module scripts are refused without a JavaScript MIME type.
-const TYPES = {
-  js: "text/javascript; charset=utf-8",
-  css: "text/css; charset=utf-8",
-  json: "application/json",
-  svg: "image/svg+xml",
-  map: "application/json",
-};
-
 // Built assets. Pages are not files: `/` and `*.html` render through SSR.
+// Only a regular file is one: `/assets/` names a directory, which goes on to
+// the fallback's 404 like any other path that is not a file.
 async function files(request) {
   const { pathname } = new URL(request.url);
   if (pathname === "/" || pathname.endsWith(".html")) return null;
   const asset = file(new URL(`.${pathname}`, outDir));
-  if (!(await asset.exists())) return null;
-  const type = TYPES[pathname.split(".").pop()] ?? "application/octet-stream";
+  const isFile = await asset.stat().then((stat) => stat.isFile, () => false);
+  if (!isFile) return null;
+  // The runtime's type for the extension: module scripts are refused without
+  // a JavaScript one.
+  const type = asset.type || "application/octet-stream";
   return new Response(asset.stream(), { headers: { "content-type": type } });
 }
 

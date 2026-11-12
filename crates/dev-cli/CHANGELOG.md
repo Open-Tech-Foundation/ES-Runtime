@@ -37,6 +37,11 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **The fullstack servers answer a directory with a 404.** The `fullstack`
+  and `react --mode=fullstack` templates served any path that existed, so
+  `/assets/` sent a `200`, failed reading a directory, and cut the response
+  off. They serve only a regular file now, typed by the runtime's own table
+  (`file().type`) instead of a short list of their own.
 - **`esdev preview` and `esdev start` type a site's feeds and sitemap.**
   `rss.xml`, `atom.xml`, `sitemap.xml`, a `.webmanifest`, and `.md`, `.csv`,
   `.pdf`, font and media files were sent as `application/octet-stream`, so the
