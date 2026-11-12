@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use es_runtime_http::ws::Role;
 use es_runtime_providers::{
     BoxFuture, ProviderError, SocketInfo, UpgradedIo, WebSocketInfo, WebSocketProvider, WsIncoming,
-    WsMessage, WsServeOptions,
+    WsLimits, WsMessage, WsServeOptions,
 };
 use tokio::net::TcpListener;
 #[cfg(test)]
@@ -48,7 +48,21 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 /// several messages behind on a large payload, or thousands behind on a small
 /// one, and the alternative to a bound is the host holding it until the process
 /// dies.
-const DEFAULT_MAX_BUFFERED: u64 = WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT;
+#[cfg(test)]
+const DEFAULT_MAX_BUFFERED: u64 = WsLimits::DEFAULT_MAX_BUFFERED_AMOUNT;
+
+/// The decoder's bounds for a connection's [`WsLimits`]: one cap for a
+/// message and for each of its frames, since a frame cannot be larger than its
+/// message. `None` is no bound.
+fn decoder_limits(limits: &WsLimits) -> es_runtime_http::ws::Limits {
+    let cap = limits
+        .max_message_size
+        .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    es_runtime_http::ws::Limits {
+        max_frame: cap,
+        max_message: cap,
+    }
+}
 
 /// A connection's channel ends. `inbound_rx` is taken out during a `recv` and
 /// restored after (one outstanding recv per socket, like [`SystemNet`] reads);
@@ -229,7 +243,7 @@ impl SystemWebSocket {
         role: Role,
         permit: Option<OwnedSemaphorePermit>,
         peer_slot: Option<PeerSlot>,
-        max_buffered: Option<u64>,
+        limits: WsLimits,
     ) -> WsSlot
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -249,13 +263,13 @@ impl SystemWebSocket {
             // close, a broken stream, the guest dropping the socket, or a panic.
             let _permit = permit;
             let _peer_slot = peer_slot;
-            crate::ws_conn::run(io, leftover, role, actor).await;
+            crate::ws_conn::run(io, leftover, role, decoder_limits(&limits), actor).await;
         });
         WsSlot {
             inbound_rx: Some(inbound_rx),
             cmd_tx,
             buffered,
-            max_buffered,
+            max_buffered: limits.max_buffered_amount,
             overflow,
         }
     }
@@ -481,7 +495,7 @@ impl WebSocketProvider for SystemWebSocket {
                 Role::Client,
                 None,
                 None,
-                Some(DEFAULT_MAX_BUFFERED),
+                WsLimits::default(),
             );
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
@@ -563,7 +577,7 @@ impl WebSocketProvider for SystemWebSocket {
         })
     }
 
-    fn adopt(&self, io: UpgradedIo) -> BoxFuture<Result<u64, ProviderError>> {
+    fn adopt(&self, io: UpgradedIo, limits: WsLimits) -> BoxFuture<Result<u64, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
             // The handshake was answered by the HTTP server, so there is nothing
@@ -576,14 +590,8 @@ impl WebSocketProvider for SystemWebSocket {
             // No server permit and no peer slot: an upgraded connection was
             // already counted by the HTTP server that accepted it, and counting
             // it twice would make one connection spend two budgets.
-            let slot = SystemWebSocket::spawn(
-                io.compat(),
-                Vec::new(),
-                Role::Server,
-                None,
-                None,
-                Some(DEFAULT_MAX_BUFFERED),
-            );
+            let slot =
+                SystemWebSocket::spawn(io.compat(), Vec::new(), Role::Server, None, None, limits);
             this.conns.lock().unwrap().insert(id, slot);
             Ok(id)
         })
@@ -693,7 +701,7 @@ impl WebSocketProvider for SystemWebSocket {
             // `accept`, because that is when the peer is known, and a refusal
             // closes rather than waits — see [`crate::peer_limit`].
             let per_peer = PeerLimit::new(options.max_connections_per_ip);
-            let max_buffered = options.max_buffered_amount;
+            let limits = options.limits;
             // Accept loop: each TCP connection's WS handshake runs in its own task
             // so a slow handshake never blocks the next accept; on success the
             // connection registers in the shared `conns` map and is queued for
@@ -793,7 +801,7 @@ impl WebSocketProvider for SystemWebSocket {
                                             Role::Server,
                                             permit,
                                             peer_slot,
-                                            max_buffered,
+                                            limits,
                                         ))
                                     }
                                     Some(site) => {
@@ -811,7 +819,7 @@ impl WebSocketProvider for SystemWebSocket {
                                             Role::Server,
                                             permit,
                                             peer_slot,
-                                            max_buffered,
+                                            limits,
                                         ))
                                     }
                                 }
@@ -1058,7 +1066,10 @@ mod tests {
             timeouts,
             max_connections,
             max_connections_per_ip: None,
-            max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
+            limits: WsLimits {
+                max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
+                ..WsLimits::default()
+            },
         })
         .await
         .unwrap()
@@ -1747,7 +1758,10 @@ mod bounds_tests {
                 timeouts: WsTimeouts::default(),
                 max_connections: None,
                 max_connections_per_ip: None,
-                max_buffered_amount: Some(64 * 1024),
+                limits: WsLimits {
+                    max_buffered_amount: Some(64 * 1024),
+                    ..WsLimits::default()
+                },
             })
             .await
             .unwrap();
@@ -1807,7 +1821,10 @@ mod bounds_tests {
                 timeouts: WsTimeouts::default(),
                 max_connections: None,
                 max_connections_per_ip: None,
-                max_buffered_amount: Some(64 * 1024),
+                limits: WsLimits {
+                    max_buffered_amount: Some(64 * 1024),
+                    ..WsLimits::default()
+                },
             })
             .await
             .unwrap();
@@ -1850,7 +1867,10 @@ mod bounds_tests {
                 timeouts: WsTimeouts::default(),
                 max_connections: None,
                 max_connections_per_ip: None,
-                max_buffered_amount: Some(64 * 1024),
+                limits: WsLimits {
+                    max_buffered_amount: Some(64 * 1024),
+                    ..WsLimits::default()
+                },
             })
             .await
             .unwrap();
@@ -1904,7 +1924,10 @@ mod bounds_tests {
                 timeouts: WsTimeouts::default(),
                 max_connections: Some(8),
                 max_connections_per_ip: Some(1),
-                max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
+                limits: WsLimits {
+                    max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
+                    ..WsLimits::default()
+                },
             })
             .await
             .unwrap();

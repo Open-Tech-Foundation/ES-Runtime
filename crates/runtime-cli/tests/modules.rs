@@ -560,6 +560,32 @@ fn a_websocket_close_reports_the_same_code_at_both_ends() {
     }
 }
 
+/// `maxMessageSize` and `maxBufferedAmount` on `upgradeWebSocket` and
+/// `runtime:websocket`'s `serve`: the receive limit closes with 1009 on both
+/// paths, bad values are refused before anything happens, and the send bound
+/// limits a backlog, not one message.
+#[test]
+fn websocket_limits_apply_on_both_server_paths() {
+    let out = run_file("websocket-limits.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "bad RangeError,RangeError,TypeError",
+        "upgrade-under echo:1000",
+        "upgrade-over closed:1009",
+        "serve-under echo:1000",
+        "serve-over closed:1009",
+        "upgrade-large echo:20971520",
+        "WS_LIMITS_OK",
+    ] {
+        assert!(
+            s.contains(expected),
+            "missing {expected:?} in:\n{s}\nstderr: {}",
+            stderr(&out)
+        );
+    }
+}
+
 /// `runtime:net` port validation and failure shape, and `runtime:process`
 /// `args` reporting as the frozen value the docs describe.
 #[test]

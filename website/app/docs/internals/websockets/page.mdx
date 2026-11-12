@@ -14,8 +14,8 @@ the same for client and server, checked against the Autobahn testsuite
 (`scripts/autobahn.sh`) and by fuzzing. A peer that breaks the protocol is
 answered with the close code RFC 6455 names for what it did — 1002 for a
 framing error, 1007 for text that is not UTF-8 (found as soon as the bytes so
-far cannot be UTF-8, not only when the message ends), 1009 for a frame over
-16 MiB or a message over 64 MiB — and the connection is dropped; the guest
+far cannot be UTF-8, not only when the message ends), 1009 for a message over
+`maxMessageSize` (64 MiB by default) — and the connection is dropped; the guest
 sees that as an abnormal close (1006), as a browser reports it. A close from
 the peer is answered with its own code and reason, so both ends report the
 same close. No extension is negotiated, so `permessage-deflate` is never
@@ -145,6 +145,7 @@ the reasoning behind each.
 | `maxConnections` | unlimited | How many connections this server holds at once |
 | `maxConnectionsPerIp` | unlimited | How many one peer address may hold |
 | `maxBufferedAmount` | 8 MiB | Bytes already queued at which the next send closes the connection |
+| `maxMessageSize` | 64 MiB | The largest message a peer may send, fragments together; one frame is held to it too, since a frame cannot be larger than its message |
 | Accept queue | 64 | Accepted connections waiting for an `accept()` call |
 
 The handshake bound exists because RFC 6455's handshake is an HTTP request head,

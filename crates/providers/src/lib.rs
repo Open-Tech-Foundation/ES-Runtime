@@ -1751,30 +1751,57 @@ pub struct WsServeOptions {
     ///
     /// A connection over this should be **refused**, not held.
     pub max_connections_per_ip: Option<usize>,
-    /// The most bytes that may sit queued for one connection before it is
-    /// closed, or `None` for no bound.
+    /// The bounds every connection of this server gets.
+    pub limits: WsLimits,
+}
+
+/// What one WebSocket connection may hold, in each direction — the same for a
+/// [`serve`](WebSocketProvider::serve) server's connections and an
+/// [`adopt`](WebSocketProvider::adopt)ed one, so the two server paths cannot
+/// drift apart.
+///
+/// [`Default`] is the recommended posture, not "off": both bounds protect the
+/// host's memory from a peer, and neither depends on what the deployment
+/// knows. `None` is a guest turning one off deliberately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WsLimits {
+    /// The most bytes queued to send — what the guest reads as
+    /// `bufferedAmount` — at which the next send closes the connection, or
+    /// `None` for no bound.
     ///
     /// `send()` is fire-and-forget by design — the WebSocket API has no way to
     /// report a full buffer — so a guest writing faster than a peer reads is
-    /// never stalled by it; the messages accumulate on the host side instead,
-    /// one pending send each, bounded by nothing. A peer that stops reading a
-    /// fan-out is then a memory leak with a network interface.
-    ///
-    /// Unlike the connection caps this is **on** by default (8 MiB), because
-    /// the number does not depend on what the deployment knows: a queue that
-    /// deep is already a peer several messages behind, and no application
-    /// intends one. A connection past it is closed with `1013` (Try Again
-    /// Later), which is what the situation is.
+    /// never stalled by it; the messages accumulate on the host side instead.
+    /// A peer that stops reading a fan-out is then a memory leak with a network
+    /// interface. A send is admitted while what is already queued is under
+    /// the bound (at most the bound plus one message); past it the connection
+    /// is closed with `1013` (Try Again Later), which is what the situation is.
     pub max_buffered_amount: Option<u64>,
+    /// The largest message the peer may send, its fragments together, or
+    /// `None` for no bound. One frame is held to it too: a frame cannot be
+    /// larger than the message it belongs to. Past it the connection is closed
+    /// with `1009` (Message Too Big), as RFC 6455 §7.4.1 names it.
+    pub max_message_size: Option<u64>,
 }
 
-impl WsServeOptions {
+impl WsLimits {
     /// The send-queue bound a connection gets when nothing names one: 8 MiB.
     ///
     /// Lives here rather than in the runtime or the prelude so there is one copy
     /// of the number to keep true — the same arrangement [`WsTimeouts`]'
     /// [`Default`] makes for the handshake bound.
     pub const DEFAULT_MAX_BUFFERED_AMOUNT: u64 = 8 * 1024 * 1024;
+    /// The largest message a connection takes when nothing names one: 64 MiB.
+    pub const DEFAULT_MAX_MESSAGE_SIZE: u64 = 64 * 1024 * 1024;
+}
+
+impl Default for WsLimits {
+    fn default() -> Self {
+        WsLimits {
+            max_buffered_amount: Some(Self::DEFAULT_MAX_BUFFERED_AMOUNT),
+            max_message_size: Some(Self::DEFAULT_MAX_MESSAGE_SIZE),
+        }
+    }
 }
 
 /// When a [`WebSocketProvider`] server should give up on a connection.
@@ -1895,9 +1922,13 @@ pub trait WebSocketProvider: Send + Sync {
     /// from the first byte and must take the **server** role: it is not the
     /// side that masks.
     ///
+    /// `limits` are the connection's bounds, as a server's
+    /// [`WsServeOptions::limits`] are for its own.
+    ///
     /// The default refuses, which is correct for a provider that cannot take a
     /// connection it did not open.
-    fn adopt(&self, io: UpgradedIo) -> BoxFuture<Result<u64, ProviderError>> {
+    fn adopt(&self, io: UpgradedIo, limits: WsLimits) -> BoxFuture<Result<u64, ProviderError>> {
+        let _ = limits;
         drop(io);
         Box::pin(std::future::ready(Err(ProviderError::Coded {
             code: ErrorCode::ProviderUnavailable,

@@ -148,7 +148,7 @@ pub(crate) struct Actor {
 
 /// Runs one connection until it ends. `leftover` is whatever was read past
 /// the opening handshake: the first frames.
-pub(crate) async fn run<S>(io: S, leftover: Vec<u8>, role: Role, actor: Actor)
+pub(crate) async fn run<S>(io: S, leftover: Vec<u8>, role: Role, limits: Limits, actor: Actor)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -159,7 +159,7 @@ where
         overflow,
     } = actor;
     let (mut rd, mut wr) = tokio::io::split(io);
-    let mut decoder = Decoder::new(role, Limits::default());
+    let mut decoder = Decoder::new(role, limits);
     let mut writer = Writer {
         role,
         masks: Masks::new(),
@@ -579,7 +579,7 @@ mod tests {
             buffered: Arc::new(AtomicU64::new(0)),
             overflow: Arc::new(Notify::new()),
         };
-        tokio::spawn(run(io, leftover, role, actor));
+        tokio::spawn(run(io, leftover, role, Limits::default(), actor));
         Guest { inbound, cmd }
     }
 

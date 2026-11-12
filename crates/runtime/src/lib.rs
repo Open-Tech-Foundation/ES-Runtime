@@ -5479,34 +5479,52 @@ mod tests {
         );
         assert_eq!(served[0].max_connections, None);
         assert_eq!(served[0].max_connections_per_ip, None);
-        // The one bound that is *on* unless the guest turns it off — a queue
-        // nobody bounds is memory a peer can spend, and the right number here
-        // does not depend on anything the deployment knows.
-        assert_eq!(
-            served[0].max_buffered_amount,
-            Some(es_runtime_providers::WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT)
-        );
+        // The two bounds that are *on* unless the guest turns them off — a
+        // queue or a message nobody bounds is memory a peer can spend, and the
+        // right numbers do not depend on anything the deployment knows.
+        assert_eq!(served[0].limits, es_runtime_providers::WsLimits::default());
     }
 
-    /// `0` is the guest turning the send-queue bound off, the same spelling the
-    /// timeouts use. Reading it as "unset" would hand back the default, which
-    /// is the opposite of what was asked.
+    /// `0` is the guest turning a bound off, the same spelling the timeouts
+    /// use. Reading it as "unset" would hand back the default, which is the
+    /// opposite of what was asked; and each bound crosses on its own.
     #[test]
-    fn a_zero_buffer_bound_turns_it_off_rather_than_defaulting() {
+    fn a_zero_bound_turns_it_off_rather_than_defaulting() {
         let _g = v8_guard();
         let ws = Arc::new(MockWs::new(vec![], ""));
         let mut rt = runtime_with_ws(ws.clone());
         run_module(
             &mut rt,
             "import { serve } from 'runtime:websocket'; \
-             const a = serve({ port: 4001, maxBufferedAmount: 0 }); \
-             const b = serve({ port: 4002, maxBufferedAmount: 1024 }); \
-             globalThis.result = (await a.addr).port + (await b.addr).port;",
+             const a = serve({ port: 4001, maxBufferedAmount: 0, maxMessageSize: 0 }); \
+             const b = serve({ port: 4002, maxBufferedAmount: 1024, maxMessageSize: 4096 }); \
+             const c = serve({ port: 4003, maxMessageSize: 512 }); \
+             globalThis.result = (await a.addr).port + (await b.addr).port + (await c.addr).port;",
             MapLoader::new(&[]),
         );
         let served = ws.served.lock().unwrap();
-        assert_eq!(served[0].max_buffered_amount, None);
-        assert_eq!(served[1].max_buffered_amount, Some(1024));
+        use es_runtime_providers::WsLimits;
+        assert_eq!(
+            served[0].limits,
+            WsLimits {
+                max_buffered_amount: None,
+                max_message_size: None
+            }
+        );
+        assert_eq!(
+            served[1].limits,
+            WsLimits {
+                max_buffered_amount: Some(1024),
+                max_message_size: Some(4096)
+            }
+        );
+        assert_eq!(
+            served[2].limits,
+            WsLimits {
+                max_message_size: Some(512),
+                ..WsLimits::default()
+            }
+        );
     }
 
     /// The two knobs cross as they are written: milliseconds for the timeout,

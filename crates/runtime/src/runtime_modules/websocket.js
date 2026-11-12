@@ -259,22 +259,26 @@ function parseMaxConnectionsPerIp(options) {
   return count(options, "maxConnectionsPerIp");
 }
 
-// The most bytes that may sit queued for one connection before the host closes
-// it with 1013 ("try again later"). Unlike the connection caps this is *on* by
-// default (8 MiB), because the number does not depend on what the deployment
-// knows: `send()` is fire-and-forget, so a peer that stops reading a fan-out
-// accumulates messages on the host side with nothing bounding the total, and a
-// queue that deep is already a peer several messages behind. `0` turns it off.
-function parseMaxBufferedAmount(options) {
-  const value = (options ?? {}).maxBufferedAmount;
+// A connection's two bounds, each a non-negative integer of bytes; absent or
+// null takes the host's default, and 0 turns the bound off.
+//
+// `maxBufferedAmount` caps what the socket reports as `bufferedAmount`: a send
+// that finds that much already queued makes the host close the connection with
+// 1013 ("try again later"). On by default (8 MiB) because `send()` is
+// fire-and-forget, so a peer that stops reading accumulates messages on the
+// host side with nothing else bounding them.
+//
+// `maxMessageSize` caps one message the peer sends, its fragments together;
+// past it the host closes with 1009 ("message too big"). On by default
+// (64 MiB): a message is held whole before it is delivered.
+function parseBytes(options, name, caller) {
+  const value = (options ?? {})[name];
   if (value === undefined || value === null) return null; // host default
   if (typeof value !== "number") {
-    throw new TypeError(
-      `serve: maxBufferedAmount must be a number of bytes or null, got ${typeof value}`,
-    );
+    throw new TypeError(`${caller}: ${name} must be a number of bytes or null, got ${typeof value}`);
   }
   if (!Number.isInteger(value) || value < 0) {
-    throw new RangeError("serve: maxBufferedAmount must be a non-negative integer of bytes");
+    throw new RangeError(`${caller}: ${name} must be a non-negative integer of bytes`);
   }
   return value;
 }
@@ -316,6 +320,10 @@ function upgradeWebSocket(request, options = {}) {
         "no connection to take over",
     );
   }
+  // The options first: a bad one is the caller's mistake whatever request it
+  // meets, so it is reported as that, not as a refusal of this request.
+  const maxBufferedAmount = parseBytes(options, "maxBufferedAmount", "upgradeWebSocket");
+  const maxMessageSize = parseBytes(options, "maxMessageSize", "upgradeWebSocket");
   // The host's verdict, by RFC 6455 §4.2.1's rule — one rule, kept there —
   // before anything is built: a 101 answering a request that did not ask for
   // one switches the client to a protocol it is not speaking.
@@ -330,7 +338,7 @@ function upgradeWebSocket(request, options = {}) {
   // Started before the 101 is returned and settles after it: the host resolves
   // this once the response is on the wire. Awaiting it here would deadlock on a
   // response this function has not returned yet.
-  const connection = ops.ws_upgrade(requestId);
+  const connection = ops.ws_upgrade(requestId, maxBufferedAmount, maxMessageSize);
   // The accept header is the host's (it is a digest of a key the guest never
   // sees); the subprotocol is the guest's, because only the application knows
   // which of the offered dialects it speaks.
@@ -375,7 +383,8 @@ function serve(options = {}) {
   const handshake = parseHandshakeTimeout(options);
   const maxConnections = parseMaxConnections(options);
   const maxConnectionsPerIp = parseMaxConnectionsPerIp(options);
-  const maxBufferedAmount = parseMaxBufferedAmount(options);
+  const maxBufferedAmount = parseBytes(options, "maxBufferedAmount", "serve");
+  const maxMessageSize = parseBytes(options, "maxMessageSize", "serve");
   const tls = parseWssTls(options);
   const ready = ops.ws_serve(
     hostname,
@@ -386,6 +395,7 @@ function serve(options = {}) {
     maxBufferedAmount,
     tls?.cert ?? null,
     tls?.key ?? null,
+    maxMessageSize,
   );
   return new WebSocketServer(ready);
 }

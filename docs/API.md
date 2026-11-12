@@ -760,8 +760,10 @@ queued, exactly as they are on a socket that is still connecting.
 
 The connection is an ordinary one: the same `WebSocketConnection` `serve()`
 yields, so `broadcast()` reaches upgraded and dedicated-port sockets alike, and
-`maxBufferedAmount` applies at its default (8 MiB). The handshake headers are the
-host's — `Sec-WebSocket-Accept` is a digest of a key the handler never sees.
+`maxBufferedAmount` (8 MiB) and `maxMessageSize` (64 MiB) apply at their defaults
+unless the second argument names them, as `serve()`'s options do. The handshake
+headers are the host's — `Sec-WebSocket-Accept` is a digest of a key the handler
+never sees.
 
 `upgradeWebSocket` throws a `TypeError` for a `Request` that did not come from a
 `serve()` handler, since there is no connection behind it to take over, and for
@@ -2940,8 +2942,8 @@ for await (const ws of server) {
 
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `serve(options)`  | `({ hostname?, port, secureTransport?, cert?, key?, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server on its own port; `port` 0 picks an ephemeral one. `secureTransport: "on"` serves `wss:` with an inline PEM `cert` and `key` (client certificates are `runtime:http`'s `serve` with `upgradeWebSocket`). `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
-| `upgradeWebSocket(request, options?)` | `(Request, { protocol? }) => { response, socket }` | Turn a `runtime:http` request into a WebSocket, so one port serves `https:` and `wss:` together. No capability of its own — the port was already bound under `NetListen`. |
+| `serve(options)`  | `({ hostname?, port, secureTransport?, cert?, key?, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount?, maxMessageSize? }) => WebSocketServer` | Bind a WebSocket server on its own port; `port` 0 picks an ephemeral one. `secureTransport: "on"` serves `wss:` with an inline PEM `cert` and `key` (client certificates are `runtime:http`'s `serve` with `upgradeWebSocket`). `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `NetListen`. |
+| `upgradeWebSocket(request, options?)` | `(Request, { protocol?, maxBufferedAmount?, maxMessageSize? }) => { response, socket }` | Turn a `runtime:http` request into a WebSocket, so one port serves `https:` and `wss:` together. No capability of its own — the port was already bound under `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |
@@ -2950,6 +2952,7 @@ for await (const ws of server) {
 | `maxConnections` | unlimited | The most connections to hold at once. A connection over the cap is **held, not refused**: it waits in the kernel backlog and is served once a slot frees. Worth setting on a public port — WebSocket connections are long-lived by design, so unlike an HTTP server's the count does not fall back down on its own. |
 | `maxConnectionsPerIp` | unlimited | The most connections **one peer address** may hold. Without it, `maxConnections` says nothing about whose connections fill it — one peer can take every slot. A connection over this is **refused**, not held. Leave it off behind a proxy or a NAT, where every connection shares one source address. |
 | `maxBufferedAmount` | `8388608` (8 MiB) | The most bytes that may sit queued for one connection: a send that finds this much already queued closes it with `1013`. A single larger message on a connection with less queued still goes out, so a connection holds at most this plus one message. **On by default**, unlike the caps above: the number does not depend on what the deployment knows. `0` removes it. |
+| `maxMessageSize` | `67108864` (64 MiB) | The largest message a peer may send, its fragments together (and so the largest frame); past it the connection is closed with `1009` (Message Too Big). **On by default**: a message is held whole before it is delivered. `0` removes it. |
 
 The connection spellings match `runtime:http`'s `serve()`, and the numbers live
 only in the host — the prelude sends "unset", so there is one copy to keep true.

@@ -14,8 +14,8 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    HttpServerProvider, ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage,
-    WsServeOptions, WsTimeouts,
+    HttpServerProvider, ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsLimits,
+    WsMessage, WsServeOptions, WsTimeouts,
 };
 
 use crate::Result;
@@ -86,6 +86,7 @@ pub(crate) fn install(
         let owned = owned.clone();
         let owned_requests = owned_requests.clone();
         let rid = arg_u64(&args, 0);
+        let limits = ws_limits(&args, 1, 2);
         Box::pin(async move {
             let rid = owned_requests.check(rid)?;
             let http = h.clone().ok_or_else(|| {
@@ -98,7 +99,7 @@ pub(crate) fn install(
             // Resolves once the guest's `101` is on the wire — so this op is
             // started before the handler returns and settles after it.
             let io = http.upgrade(rid).await.map_err(map_err)?;
-            let id = require(&w)?.adopt(io).await.map_err(map_err)?;
+            let id = require(&w)?.adopt(io, limits).await.map_err(map_err)?;
             Ok(Value::Number(owned.own(id) as f64))
         })
     }))?;
@@ -241,16 +242,7 @@ pub(crate) fn install(
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
-            // Unlike the caps above, absent means the provider's default rather
-            // than "no bound": a queue nobody bounds is a peer that can spend
-            // the host's memory, and the right number here does not depend on
-            // the deployment. `0` is the guest turning it off, the same
-            // spelling the timeouts use.
-            let max_buffered_amount = match args.get(5).and_then(Value::as_number) {
-                None => Some(WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT),
-                Some(n) if n <= 0.0 || !n.is_finite() => None,
-                Some(n) => Some(n as u64),
-            };
+            let limits = ws_limits(&args, 5, 8);
             // `wss:`: the PEM chain and key, inline (D28). Absent ⇒ `ws:`.
             let pem = |i: usize| match args.get(i) {
                 Some(Value::Bytes(bytes)) => Some(bytes.clone()),
@@ -278,7 +270,7 @@ pub(crate) fn install(
                         timeouts,
                         max_connections,
                         max_connections_per_ip,
-                        max_buffered_amount,
+                        limits,
                     })
                     .await
                     .map_err(map_err)?;
@@ -416,4 +408,23 @@ fn require(
 
 fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
+}
+
+/// A connection's [`WsLimits`] from the op's arguments at `buffered` and
+/// `message`. Unlike the connection caps, absent means the default rather than
+/// "no bound": both protect the host's memory from a peer, and neither depends
+/// on the deployment. `0` is the guest turning one off, the same spelling the
+/// timeouts use; the prelude has already refused anything that is not a
+/// non-negative integer.
+fn ws_limits(args: &[Value], buffered: usize, message: usize) -> WsLimits {
+    let bound = |i: usize, default: Option<u64>| match args.get(i).and_then(Value::as_number) {
+        None => default,
+        Some(n) if n <= 0.0 || !n.is_finite() => None,
+        Some(n) => Some(n as u64),
+    };
+    let defaults = WsLimits::default();
+    WsLimits {
+        max_buffered_amount: bound(buffered, defaults.max_buffered_amount),
+        max_message_size: bound(message, defaults.max_message_size),
+    }
 }

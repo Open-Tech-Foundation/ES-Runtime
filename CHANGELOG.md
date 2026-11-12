@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `maxMessageSize` for `runtime:websocket`'s `serve()` and for
+  `upgradeWebSocket()`, which also takes `maxBufferedAmount` now: the largest
+  message a peer may send (default 64 MiB; past it the connection closes with
+  `1009`), and the send backlog, on both server paths. `0` turns either off.
+  One cap now bounds a message and each of its frames; a frame was capped
+  separately at 16 MiB.
 - `es-runtime-http` (DECISIONS D217): the start of ES-Runtime's own HTTP
   stack — a sans-I/O HTTP/1.1 request parser, chunked-body decoder and response
   encoder with no dependencies, strict by design (CRLF only, HTTP/1.1 only,

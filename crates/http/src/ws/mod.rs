@@ -39,11 +39,11 @@ pub struct Limits {
 }
 
 impl Default for Limits {
-    /// 16 MiB a frame and 64 MiB a message — the bounds the runtime had under
-    /// tungstenite, whose defaults these were.
+    /// 64 MiB, for a message and so for any one of its frames: a frame cannot
+    /// be larger than the message it belongs to, so one cap bounds both.
     fn default() -> Self {
         Limits {
-            max_frame: 16 << 20,
+            max_frame: 64 << 20,
             max_message: 64 << 20,
         }
     }

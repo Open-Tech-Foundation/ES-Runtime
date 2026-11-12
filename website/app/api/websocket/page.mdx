@@ -83,8 +83,8 @@ for await (const ws of server) {
 
 | Export | Type | Description |
 | --- | --- | --- |
-| `serve(options)` | `({ hostname?, port, secureTransport?, cert?, key?, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server. `secureTransport: "on"` serves `wss:` with an inline PEM `cert` and `key`. For client certificates, use `runtime:http`'s `serve` with `upgradeWebSocket`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
-| `upgradeWebSocket(request, options?)` | `(Request, { protocol? }) => { response, socket }` | Turn a [`runtime:http`](/api/http) request into a WebSocket, so one port serves `https:` and `wss:`. Return `response` to accept, anything else to decline. NetListen is already held by the server. |
+| `serve(options)` | `({ hostname?, port, secureTransport?, cert?, key?, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount?, maxMessageSize? }) => WebSocketServer` | Bind a WebSocket server. `secureTransport: "on"` serves `wss:` with an inline PEM `cert` and `key`. For client certificates, use `runtime:http`'s `serve` with `upgradeWebSocket`. `hostname` defaults to `0.0.0.0` (all interfaces — pass `127.0.0.1` for a loopback-only server; a locked-down host may refuse a wildcard bind). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `upgradeWebSocket(request, options?)` | `(Request, { protocol?, maxBufferedAmount?, maxMessageSize? }) => { response, socket }` | Turn a [`runtime:http`](/api/http) request into a WebSocket, so one port serves `https:` and `wss:`. Return `response` to accept, anything else to decline. NetListen is already held by the server. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). A closed connection is skipped; an element that is not a connection is a `TypeError`. |
 
 ### ServeOptions
@@ -97,6 +97,7 @@ for await (const ws of server) {
 | `maxConnections` | unlimited | The most connections to hold at once; over the cap they wait rather than being refused. |
 | `maxConnectionsPerIp` | unlimited | The most one peer address may hold; over this they are **refused**. Leave off behind a proxy. |
 | `maxBufferedAmount` | `8 MiB` | Bytes that may sit queued for one connection: a send that finds this much already queued closes it with `1013`. One larger message on a connection with less queued still goes out. **On** by default; `0` removes it. |
+| `maxMessageSize` | `64 MiB` | The largest message a peer may send, fragments together; past it the connection is closed with `1009`. **On** by default; `0` removes it. |
 
 ```js
 const server = serve({
@@ -146,7 +147,10 @@ serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
 
 The `socket` is usable immediately; sends before the handover completes are
 queued. It is an ordinary connection — `broadcast()` reaches it alongside sockets
-from `serve()`, and `maxBufferedAmount` applies at its default. The handshake
+from `serve()`, and `maxBufferedAmount` and `maxMessageSize` apply at their
+defaults unless the second argument names them, as `serve()`'s options do. A bad
+value for either is a `TypeError` or `RangeError`, before anything else is
+checked. The handshake
 headers are the host's: `Sec-WebSocket-Accept` is a digest of a key your handler
 never sees. A `Request` that did not come from a handler is a `TypeError`, and
 so is one that did not ask to become a WebSocket (a `GET` with `Upgrade:
