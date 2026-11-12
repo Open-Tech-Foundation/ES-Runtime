@@ -42,6 +42,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   symlinks followed, so the packages it imports in turn are found beside it.
   The `docs` template failed to build when installed with pnpm (`cannot find
   the stylesheet "@opentf/syntax-highlighter/themes/shared.css"`).
+- **A failure message no longer prints two different values alike.**
+  `expect(new Set([1])).toEqual([1])` failed correctly but read `expected [1]
+  to equal [1]`: values went through `JSON.stringify`, which prints a Set as an
+  array, a Date as its string and an Error as `{}`, and drops `undefined`. They
+  now print as `Set {1}`, `Map {"a" => 1}`, `Date("…")`, `Uint8Array [1,2]`,
+  `Error("a")`, `Point {"x":1}`, with `undefined`, `NaN`, `-0` and
+  `[Circular]` kept. Plain objects and arrays print as before, and so do the
+  `test.each` names made from them.
 
 ## [0.27.0] - 2026-11-11
 

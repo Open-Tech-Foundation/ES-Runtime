@@ -1719,26 +1719,55 @@ function equal(a, b, seen, strict = false) {
   return true;
 }
 
-// A value, for a failure message. Everything `JSON.stringify` refuses or
-// mangles is handled first, because those are exactly the values a failing
-// assertion is most often about.
-function show(v) {
-  if (typeof v === "bigint") return `${v}n`;
-  if (v !== null && typeof v === "object" && typeof v.nodeType === "number" && typeof v.nodeName === "string") {
-    return describeNode(v);
-  }
-  if (v === undefined || typeof v === "symbol" || typeof v === "function") return String(v);
+// A value, for a failure message, on one line. Plain objects and arrays print
+// as JSON does; everything JSON mangles keeps what it is, because two values
+// the comparison tells apart must not print alike — `JSON.stringify` printed a
+// Set and an array the same, a Date as its string, an Error as `{}`, and
+// dropped `undefined`, so a correct failure read "expected [1] to equal [1]".
+function show(value) {
+  const seen = new Set();
+  const print = (v) => {
+    if (typeof v === "bigint") return `${v}n`;
+    if (typeof v === "string") return JSON.stringify(v);
+    if (typeof v === "number") return Object.is(v, -0) ? "-0" : String(v);
+    if (typeof v === "function") return v.name ? `[Function ${v.name}]` : "[Function]";
+    if (v === null || typeof v !== "object") return String(v);
+    if (typeof v.nodeType === "number" && typeof v.nodeName === "string") return describeNode(v);
+    if (seen.has(v)) return "[Circular]";
+    seen.add(v);
+    try {
+      return printObject(v);
+    } finally {
+      // Only an ancestor is a cycle; a value shared by two siblings prints twice.
+      seen.delete(v);
+    }
+  };
+  const list = (items) => Array.from(items, print).join(",");
+  const printObject = (v) => {
+    if (Array.isArray(v)) return `[${list(v)}]`;
+    if (v instanceof Date) {
+      return `Date(${Number.isNaN(v.getTime()) ? "Invalid" : JSON.stringify(v.toISOString())})`;
+    }
+    if (v instanceof RegExp) return String(v);
+    if (v instanceof Map) {
+      return `Map {${Array.from(v, ([key, item]) => `${print(key)} => ${print(item)}`).join(",")}}`;
+    }
+    if (v instanceof Set) return `Set {${list(v)}}`;
+    if (v instanceof ArrayBuffer) return `ArrayBuffer [${new Uint8Array(v).join(",")}]`;
+    if (ArrayBuffer.isView(v) && !(v instanceof DataView)) return `${v.constructor.name} [${list(v)}]`;
+    if (v instanceof Error) return `${v.name}(${JSON.stringify(v.message)})`;
+    const body = `{${Object.keys(v).map((key) => `${JSON.stringify(key)}:${print(v[key])}`).join(",")}}`;
+    const prototype = Object.getPrototypeOf(v);
+    if (prototype === Object.prototype || prototype === null) return body;
+    const name = v.constructor?.name || "Object";
+    // A URL, a Temporal value: what it stands for is what toJSON says.
+    if (typeof v.toJSON === "function") return `${name}(${print(v.toJSON())})`;
+    return `${name} ${body}`;
+  };
   try {
-    const s = JSON.stringify(v, (_key, x) => {
-      if (typeof x === "bigint") return `${x}n`;
-      if (ArrayBuffer.isView(x) && !(x instanceof DataView)) return Array.from(x);
-      if (x instanceof Map) return Array.from(x);
-      if (x instanceof Set) return Array.from(x);
-      return x;
-    });
-    return s === undefined ? String(v) : s;
+    return print(value);
   } catch {
-    return String(v);
+    return String(value);
   }
 }
 

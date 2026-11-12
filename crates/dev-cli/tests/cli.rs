@@ -16452,6 +16452,69 @@ test("schemaMatching", () => {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A failure message prints two values the comparison tells apart differently:
+/// a Set is not printed as an array, nor an Error as `{}`, nor a Date as its
+/// string. Plain data prints as JSON does, as it always has.
+#[test]
+fn test_failure_messages_keep_the_types_they_compare() {
+    let dir = build_dir("t_failure_types");
+    write_in(
+        &dir,
+        "m.test.ts",
+        r#"import { expect, test } from "runtime:test";
+
+function message(run: () => void): string {
+  try { run(); } catch (error) { return (error as Error).message; }
+  throw new Error("the assertion passed");
+}
+class Point { constructor(public x: number) {} }
+
+test("distinct types print distinctly", () => {
+  expect(message(() => expect(new Set([1])).toEqual([1]))).toBe("expected Set {1} to equal [1]");
+  expect(message(() => expect(new Map([["a", 1]])).toEqual({ a: 1 })))
+    .toBe('expected Map {"a" => 1} to equal {"a":1}');
+  expect(message(() => expect(new Date(0)).toEqual("1970-01-01T00:00:00.000Z")))
+    .toBe('expected Date("1970-01-01T00:00:00.000Z") to equal "1970-01-01T00:00:00.000Z"');
+  expect(message(() => expect(new Error("a")).toEqual(new Error("b"))))
+    .toBe('expected Error("a") to equal Error("b")');
+  expect(message(() => expect(new Uint8Array([1, 2])).toEqual([1, 2])))
+    .toBe("expected Uint8Array [1,2] to equal [1,2]");
+  expect(message(() => expect(new Point(1)).toStrictEqual({ x: 1 })))
+    .toBe('expected Point {"x":1} to strictly equal {"x":1}');
+});
+
+test("what JSON drops is kept", () => {
+  expect(message(() => expect({ a: undefined }).toStrictEqual({})))
+    .toBe('expected {"a":undefined} to strictly equal {}');
+  expect(message(() => expect([NaN]).toEqual([null]))).toBe("expected [NaN] to equal [null]");
+  expect(message(() => expect(-0).toBe(0))).toBe("expected -0 to be 0");
+  expect(message(() => expect(1n).toBe(2n))).toBe("expected 1n to be 2n");
+  const cycle: Record<string, unknown> = { name: "c" };
+  cycle.self = cycle;
+  expect(message(() => expect(cycle).toBe({}))).toBe('expected {"name":"c","self":[Circular]} to be {}');
+  const shared = { n: 1 };
+  expect(message(() => expect([shared, shared]).toBe([])))
+    .toBe('expected [{"n":1},{"n":1}] to be []');
+  function named() {}
+  expect(message(() => expect(named).toBe(1))).toBe("expected [Function named] to be 1");
+});
+
+test("plain data prints as JSON", () => {
+  expect(message(() => expect({ a: 1, b: [1, "x", null, true] }).toEqual({})))
+    .toBe('expected {"a":1,"b":[1,"x",null,true]} to equal {}');
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .args(["test"])
+        .output()
+        .expect("spawn esdev test");
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("3 passed, 0 failed"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Equality testers apply at every depth and in every deep comparison, and a
 /// serializer prints a class instance a snapshot otherwise refuses.
 #[test]
