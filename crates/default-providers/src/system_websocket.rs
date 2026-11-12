@@ -270,11 +270,14 @@ const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
 /// websocket`, `Connection: upgrade`, the accept value derived from our key, a
 /// subprotocol only from those offered, and no extension we did not offer.
 /// Whatever the server sent after its head is handed on with the stream.
-async fn client_handshake(
-    mut wire: BoxWire,
+pub(crate) async fn client_handshake<W>(
+    mut wire: W,
     url: &url::Url,
     protocols: &[String],
-) -> Result<(BoxWire, Vec<u8>, WebSocketInfo), ProviderError> {
+) -> Result<(W, Vec<u8>, WebSocketInfo), ProviderError>
+where
+    W: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use base64::Engine as _;
     use es_runtime_http::h1::{
         Framing, Limits, ParsedResponse, encode_request_head, parse_response,

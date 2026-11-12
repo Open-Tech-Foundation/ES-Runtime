@@ -31,7 +31,7 @@ const NO_STATUS_RCVD: u16 = 1005;
 const GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 /// `Sec-WebSocket-Accept` for a key (§4.2.2): base64 of SHA-1 of key + GUID.
-pub(crate) fn accept_key(key: &[u8]) -> String {
+pub fn accept_key(key: &[u8]) -> String {
     use base64::Engine as _;
     use sha1::Digest as _;
     let mut sha = sha1::Sha1::new();
@@ -121,13 +121,17 @@ impl Writer {
         encode_close(&mut self.out, code, reason, mask);
     }
 
+    /// Writes what is queued. Cancel-safe: bytes leave `out` only once they
+    /// are written, so a `select!` that drops this midway loses nothing and
+    /// never leaves half a frame behind for the next write to follow.
     async fn flush<W: AsyncWrite + Unpin>(&mut self, wr: &mut W) -> std::io::Result<()> {
-        if self.out.is_empty() {
-            return Ok(());
+        while !self.out.is_empty() {
+            let n = wr.write(&self.out).await?;
+            if n == 0 {
+                return Err(std::io::ErrorKind::WriteZero.into());
+            }
+            self.out.drain(..n);
         }
-        let written = wr.write_all(&self.out).await;
-        self.out.clear();
-        written?;
         wr.flush().await
     }
 }
@@ -316,6 +320,157 @@ async fn read_frames(
     };
     buf.drain(..at);
     flow
+}
+
+/// One message from a peer, for [`WebSocket::recv`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Message {
+    /// A text message.
+    Text(String),
+    /// A binary message.
+    Binary(Vec<u8>),
+    /// The peer closed; the close was answered (code and reason echoed).
+    Close {
+        /// The status code, when one was sent.
+        code: Option<u16>,
+        /// The reason, possibly empty.
+        reason: String,
+    },
+}
+
+/// A WebSocket over an established stream, for the host's own uses — esdev's
+/// HMR channel, its inspector and its WebDriver BiDi client. The same framing
+/// as the runtime's `WebSocket`, without the guest's channels: [`recv`]
+/// answers pings and echoes a close by itself, and both [`recv`] and
+/// [`send_text`] are cancel-safe, so one task can `select!` over either.
+///
+/// [`recv`]: WebSocket::recv
+/// [`send_text`]: WebSocket::send_text
+pub struct WebSocket<S> {
+    io: S,
+    decoder: Decoder,
+    buf: Vec<u8>,
+    writer: Writer,
+    close_sent: bool,
+    done: bool,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> WebSocket<S> {
+    /// A WebSocket on `io` whose opening handshake is complete; `leftover` is
+    /// what was read past it.
+    pub fn new(io: S, leftover: Vec<u8>, role: Role) -> Self {
+        WebSocket {
+            io,
+            decoder: Decoder::new(role, Limits::default()),
+            buf: leftover,
+            writer: Writer {
+                role,
+                masks: Masks::new(),
+                out: Vec::new(),
+            },
+            close_sent: false,
+            done: false,
+        }
+    }
+
+    /// The next message, `Some(Err)` once for a protocol violation (the
+    /// connection was failed with its close code), or `None` once the
+    /// connection has ended.
+    pub async fn recv(&mut self) -> Option<Result<Message, es_runtime_http::ws::WsError>> {
+        loop {
+            if self.done {
+                return None;
+            }
+            if self.writer.flush(&mut self.io).await.is_err() {
+                self.done = true;
+                return None;
+            }
+            match self.decoder.decode(&self.buf) {
+                Ok(Some((event, used))) => {
+                    self.buf.drain(..used);
+                    match event {
+                        None | Some(Event::Pong(_)) => {}
+                        Some(Event::Ping(payload)) => {
+                            if !self.close_sent {
+                                self.writer.pong(&payload);
+                            }
+                        }
+                        Some(Event::Text(text)) => return Some(Ok(Message::Text(text))),
+                        Some(Event::Binary(bytes)) => return Some(Ok(Message::Binary(bytes))),
+                        Some(Event::Close { code, reason }) => {
+                            if !self.close_sent {
+                                self.writer.close(code, &reason);
+                                self.close_sent = true;
+                            }
+                            let _ = self.writer.flush(&mut self.io).await;
+                            self.done = true;
+                            return Some(Ok(Message::Close { code, reason }));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    self.buf.reserve(16 * 1024);
+                    match self.io.read_buf(&mut self.buf).await {
+                        Ok(0) | Err(_) => {
+                            self.done = true;
+                            return None;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                Err(e) => {
+                    self.writer.close(Some(e.code), e.why);
+                    let _ = self.writer.flush(&mut self.io).await;
+                    self.done = true;
+                    return Some(Err(e));
+                }
+            }
+        }
+    }
+
+    /// Sends a text message.
+    ///
+    /// # Errors
+    ///
+    /// When the connection is closing or the write fails.
+    pub async fn send_text(&mut self, text: &str) -> std::io::Result<()> {
+        if self.close_sent || self.done {
+            return Err(std::io::ErrorKind::NotConnected.into());
+        }
+        self.writer.message(&WsMessage::Text(text.to_owned()));
+        self.writer.flush(&mut self.io).await
+    }
+
+    /// Begins the closing handshake; [`recv`](Self::recv) then returns the
+    /// peer's answer.
+    ///
+    /// # Errors
+    ///
+    /// When the write fails.
+    pub async fn close(&mut self, code: Option<u16>, reason: &str) -> std::io::Result<()> {
+        if !self.close_sent {
+            self.writer.close(code, reason);
+            self.close_sent = true;
+        }
+        self.writer.flush(&mut self.io).await
+    }
+}
+
+/// Connects a client WebSocket on `stream` (already connected, TLS done if
+/// `wss:`) to `url`: the opening handshake, checked as RFC 6455 §4.1 says.
+///
+/// # Errors
+///
+/// A handshake the server refused or answered wrongly, as a sentence.
+pub async fn connect<S>(stream: S, url: &str) -> Result<WebSocket<S>, String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let parsed = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
+    let (stream, leftover, _) = crate::system_websocket::client_handshake(stream, &parsed, &[])
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(WebSocket::new(stream, leftover, Role::Client))
 }
 
 /// The opening handshake as a standalone WebSocket server answers it

@@ -26,13 +26,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use es_runtime_default_providers::websocket::Message;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tokio_tungstenite::tungstenite::Message;
 
 use crate::browser::{Browser, Launch};
 
@@ -59,7 +58,7 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 /// One BiDi connection: commands matched to their answers by id, and
 /// everything else delivered in order as an [`Event`].
 pub struct Client {
-    outgoing: mpsc::UnboundedSender<Message>,
+    outgoing: mpsc::UnboundedSender<String>,
     pending: Pending,
     /// Taken once, by whoever routes events — so the client itself can be
     /// shared by everything sending commands.
@@ -81,29 +80,32 @@ impl Client {
         let stream = TcpStream::connect(address)
             .await
             .map_err(|err| format!("cannot reach {url}: {err}"))?;
-        let (socket, _) = tokio_tungstenite::client_async(url, stream)
+        let mut socket = es_runtime_default_providers::websocket::connect(stream, url)
             .await
             .map_err(|err| format!("WebDriver BiDi handshake with {url} failed: {err}"))?;
-        let (mut sink, mut stream) = socket.split();
 
-        let (outgoing, mut queue) = mpsc::unbounded_channel::<Message>();
-        tokio::spawn(async move {
-            while let Some(message) = queue.recv().await {
-                if sink.send(message).await.is_err() {
-                    break;
-                }
-            }
-        });
-
+        let (outgoing, mut queue) = mpsc::unbounded_channel::<String>();
         let pending: Pending = Arc::default();
         let (deliver, events) = mpsc::unbounded_channel();
         let answers = Arc::clone(&pending);
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let ended = Arc::clone(&closed);
+        // One task for both directions: the socket answers the browser's
+        // pings while it reads, and both calls are safe to race.
         tokio::spawn(async move {
-            while let Some(Ok(message)) = stream.next().await {
-                let Message::Text(text) = message else {
-                    continue;
+            loop {
+                let text = tokio::select! {
+                    command = queue.recv() => {
+                        match command {
+                            Some(text) if socket.send_text(&text).await.is_ok() => continue,
+                            _ => break,
+                        }
+                    }
+                    message = socket.recv() => match message {
+                        Some(Ok(Message::Text(text))) => text,
+                        Some(Ok(Message::Binary(_))) => continue,
+                        _ => break,
+                    },
                 };
                 let Ok(value) = serde_json::from_str::<Value>(&text) else {
                     continue;
@@ -161,7 +163,7 @@ impl Client {
             return Err(format!("{method}: the browser closed the connection"));
         }
         let text = json!({ "id": id, "method": method, "params": params }).to_string();
-        if self.outgoing.send(Message::text(text)).is_err() {
+        if self.outgoing.send(text).is_err() {
             self.pending.lock().await.remove(&id);
             return Err(format!("{method}: the browser closed the connection"));
         }
@@ -614,7 +616,11 @@ fn dechunk(mut rest: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
+    // The mock browser is tungstenite: an independent implementation on the
+    // other end of the client under test.
+    use tokio_tungstenite::tungstenite::Message as WireMessage;
 
     /// A BiDi server that answers from a script: for each command received,
     /// `respond` returns the messages to send back, in order.
@@ -626,14 +632,14 @@ mod tests {
             let mut socket = tokio_tungstenite::accept_async(stream)
                 .await
                 .expect("upgrade");
-            while let Some(Ok(Message::Text(text))) = socket.next().await {
+            while let Some(Ok(WireMessage::Text(text))) = socket.next().await {
                 let command: Value = serde_json::from_str(&text).expect("json");
                 if command["method"] == "test.hangUp" {
                     return;
                 }
                 for reply in respond(&command) {
                     socket
-                        .send(Message::text(reply.to_string()))
+                        .send(WireMessage::text(reply.to_string()))
                         .await
                         .expect("send");
                 }

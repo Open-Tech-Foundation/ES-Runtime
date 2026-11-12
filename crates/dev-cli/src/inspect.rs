@@ -33,13 +33,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Waker;
 
 use es_runtime_cli_common::InspectorTransport;
-use futures_util::{SinkExt, StreamExt};
+use es_runtime_default_providers::websocket::{Message, Role, WebSocket, accept_key};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use tokio_tungstenite::tungstenite::protocol::Role;
 
 /// What `--inspect[=<addr>]` / `--inspect-brk[=<addr>]` parsed to.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -371,7 +367,7 @@ async fn handle(mut stream: TcpStream, shared: Arc<Shared>, target: Arc<Target>)
 
 /// Runs one debugger session until the client goes away.
 async fn session(mut stream: TcpStream, shared: &Arc<Shared>, key: &str) {
-    let accept = derive_accept_key(key.as_bytes());
+    let accept = accept_key(key.as_bytes());
     let handshake = format!(
         "HTTP/1.1 101 Switching Protocols\r\n\
          Upgrade: websocket\r\n\
@@ -381,8 +377,7 @@ async fn session(mut stream: TcpStream, shared: &Arc<Shared>, key: &str) {
     if stream.write_all(handshake.as_bytes()).await.is_err() {
         return;
     }
-    let socket = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
-    let (mut sink, mut messages) = socket.split();
+    let mut socket = WebSocket::new(stream, Vec::new(), Role::Server);
 
     let (outgoing, mut replies) = tokio::sync::mpsc::unbounded_channel::<String>();
     *shared.outgoing.lock().unwrap_or_else(|e| e.into_inner()) = Some(outgoing);
@@ -393,13 +388,13 @@ async fn session(mut stream: TcpStream, shared: &Arc<Shared>, key: &str) {
 
     loop {
         tokio::select! {
-            incoming = messages.next() => match incoming {
+            incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     let sent = shared
                         .sender
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .send(Incoming::Message(text.as_str().to_string()));
+                        .send(Incoming::Message(text));
                     if sent.is_err() {
                         break;
                     }
@@ -409,13 +404,14 @@ async fn session(mut stream: TcpStream, shared: &Arc<Shared>, key: &str) {
                     shared.wake();
                 }
                 // A CDP client sends text and nothing else; a ping is answered
-                // by the library beneath us.
-                Some(Ok(_)) => {}
+                // inside `recv`.
+                Some(Ok(Message::Binary(_))) => {}
+                Some(Ok(Message::Close { .. })) => break,
                 Some(Err(_)) | None => break,
             },
             reply = replies.recv() => match reply {
                 Some(text) => {
-                    if sink.send(Message::Text(text.into())).await.is_err() {
+                    if socket.send_text(&text).await.is_err() {
                         break;
                     }
                 }

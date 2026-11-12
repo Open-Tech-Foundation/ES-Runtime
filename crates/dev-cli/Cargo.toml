@@ -43,11 +43,6 @@ tokio = { workspace = true, features = [
     # the tests are done.
     "io-std",
 ] }
-# `--inspect`. The WebSocket half of the Chrome DevTools Protocol endpoint —
-# the same crate `runtime:ws` already uses, in its server role. Confined here for
-# the same reason as everything else in this file: `esrun` has no debugger and
-# must carry no code that could become one.
-tokio-tungstenite.workspace = true
 futures-util.workspace = true
 # TypeScript/JSX type-stripping. Lives here and nowhere else: `esrun` runs
 # JavaScript, and what turns a `.ts` into that runs on the developer's machine.
@@ -141,10 +136,10 @@ rustix = { workspace = true, features = [
 
 [dev-dependencies]
 # The `--inspect` tests drive the real binary the way a debugger would: attach
-# over the WebSocket, speak CDP, assert what comes back. Nothing new in the tree
-# — the same crates the feature itself uses.
+# over the WebSocket, speak CDP, assert what comes back — through tungstenite,
+# an independent implementation of the protocol (D217), never shipped.
 tokio = { workspace = true, features = ["rt", "macros", "net", "time", "io-util"] }
-tokio-tungstenite.workspace = true
+tokio-tungstenite = { workspace = true, features = ["connect"] }
 futures-util.workspace = true
 # A private CA and the servers it signs, for the `--tls-ca` tests (D197).
 rcgen.workspace = true

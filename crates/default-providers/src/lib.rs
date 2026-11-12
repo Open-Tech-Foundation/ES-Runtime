@@ -71,6 +71,13 @@ mod trust;
 mod worker;
 mod ws_conn;
 
+/// A WebSocket for the host's own uses (esdev's HMR channel, inspector and
+/// WebDriver BiDi client), on the runtime's RFC 6455 framing (D217).
+pub mod websocket {
+    pub use crate::ws_conn::{Message, WebSocket, accept_key, connect};
+    pub use es_runtime_http::ws::Role;
+}
+
 /// The DNS response reader, for `fuzz/` only (DECISIONS D188).
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]

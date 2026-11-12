@@ -26,6 +26,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Changed
+
+- **esdev's WebSockets are the runtime's own** (DECISIONS D217): the live
+  update channel, the `--inspect` endpoint and the WebDriver BiDi client of
+  `esdev test --browser` run on the same RFC 6455 framing as `esrun`'s
+  `WebSocket`, and `tokio-tungstenite` no longer ships in `esdev`. The BiDi
+  client is one task for both directions and answers the browser's pings
+  while it waits.
+
 ## [0.27.0] - 2026-11-11
 
 ### Added

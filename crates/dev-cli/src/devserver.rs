@@ -61,14 +61,10 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use futures_util::{SinkExt, StreamExt};
+use es_runtime_default_providers::websocket::{Message, Role, WebSocket, accept_key};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use tokio_tungstenite::tungstenite::protocol::Role;
 
 use crate::inspect::{read_head, request_path};
 
@@ -337,7 +333,7 @@ async fn updates(
         return;
     };
 
-    let accept = derive_accept_key(key.as_bytes());
+    let accept = accept_key(key.as_bytes());
     let handshake = format!(
         "HTTP/1.1 101 Switching Protocols\r\n\
          Upgrade: websocket\r\n\
@@ -347,16 +343,15 @@ async fn updates(
     if stream.write_all(handshake.as_bytes()).await.is_err() {
         return;
     }
-    let socket = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
-    let (mut sink, mut incoming) = socket.split();
+    let mut socket = WebSocket::new(stream, Vec::new(), Role::Server);
 
     // A page may connect after the failed build (or reconnect while the error
     // is still current). Read the state after subscribing so a concurrent
     // transition is either represented here or wakes the select below.
     let current_error = { error.borrow_and_update().clone() };
     if let Some(message) = current_error
-        && sink
-            .send(Message::Text(Update::Error { message }.as_message().into()))
+        && socket
+            .send_text(&Update::Error { message }.as_message())
             .await
             .is_err()
     {
@@ -376,7 +371,7 @@ async fn updates(
                 }
                 let current_error = { error.borrow_and_update().clone() };
                 if let Some(message) = current_error
-                    && sink.send(Message::Text(Update::Error { message }.as_message().into())).await.is_err()
+                    && socket.send_text(&Update::Error { message }.as_message()).await.is_err()
                 {
                     return;
                 }
@@ -390,7 +385,7 @@ async fn updates(
                     Err(broadcast::error::RecvError::Lagged(_)) => Update::Reload,
                     Err(broadcast::error::RecvError::Closed) => return,
                 };
-                if sink.send(Message::Text(message.as_message().into())).await.is_err() {
+                if socket.send_text(&message.as_message()).await.is_err() {
                     return;
                 }
             }
@@ -399,8 +394,8 @@ async fn updates(
             // nothing to report. This arm exists because the socket has to be
             // *polled* for its pong to be sent and for a close to be noticed,
             // and a channel nobody reads is a connection that never ends.
-            frame = incoming.next() => match frame {
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+            frame = socket.recv() => match frame {
+                Some(Ok(Message::Close { .. })) | None | Some(Err(_)) => return,
                 Some(Ok(_)) => {}
             },
         }
