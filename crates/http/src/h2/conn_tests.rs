@@ -545,3 +545,45 @@ fn a_graceful_goaway_refuses_streams_it_did_not_cover() {
     assert_eq!(replies[0], goaway(ErrorCode::NoError));
     assert!(replies.contains(&("rst", 3, Some(ErrorCode::RefusedStream))));
 }
+
+/// A client's finished streams are forgotten however their response ended —
+/// END_STREAM on a DATA frame, on trailers, or on the HEADERS — so a long-lived
+/// connection never runs into the server's stream limit with streams that are
+/// long done. Each ending is used many times over a limit of 2.
+#[test]
+fn finished_client_streams_do_not_count_against_the_limit() {
+    let mut client = Connection::client(Config::default());
+    let mut server = Connection::server(Config {
+        max_concurrent_streams: 2,
+        ..Config::default()
+    });
+    pump(&mut client, &mut server);
+    for i in 0..30 {
+        let stream = client
+            .open_stream(get(b"/"), true)
+            .unwrap_or_else(|e| panic!("request {i} refused: {e}"));
+        pump(&mut client, &mut server);
+        events(&mut server);
+        match i % 3 {
+            0 => {
+                server
+                    .send_headers(stream, [(&b":status"[..], &b"200"[..])], false)
+                    .unwrap();
+                server.send_data(stream, b"body", true).unwrap();
+            }
+            1 => {
+                server
+                    .send_headers(stream, [(&b":status"[..], &b"200"[..])], false)
+                    .unwrap();
+                server
+                    .send_headers(stream, [(&b"x-done"[..], &b"1"[..])], true)
+                    .unwrap();
+            }
+            _ => server
+                .send_headers(stream, [(&b":status"[..], &b"204"[..])], true)
+                .unwrap(),
+        }
+        pump(&mut client, &mut server);
+        events(&mut client);
+    }
+}

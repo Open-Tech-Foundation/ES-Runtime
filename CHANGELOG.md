@@ -95,6 +95,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- `fetch` over HTTP/2 refused every request on a connection once as many had
+  completed as the server allows at once (`RefusedStream: the server's stream
+  limit is reached`): a request whose response ended on a DATA frame or on
+  trailers was never forgotten, so it counted against the limit forever.
 - A single WebSocket message larger than `maxBufferedAmount` (8 MiB by
   default) closed the connection with `1013` "Try Again Later" even with
   nothing else queued — a message that could never be sent, reported as one

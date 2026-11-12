@@ -870,6 +870,11 @@ impl Connection {
                 why: "data shorter than content-length",
             });
         }
+        // Closed both ways now if our side had already finished — always so
+        // for a client whose request went out whole before its response
+        // ended. Forgotten here as on every other path that closes a stream,
+        // or it would count against the peer's stream limit forever.
+        self.maybe_forget(stream);
         Ok(())
     }
 

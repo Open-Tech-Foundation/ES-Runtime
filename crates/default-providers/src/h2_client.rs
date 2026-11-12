@@ -925,6 +925,24 @@ mod tests {
         );
     }
 
+    /// Requests one after another, many more than the server's stream limit,
+    /// all on one connection: a stream whose response has ended is no longer
+    /// counted against the limit, however the response ended.
+    #[tokio::test]
+    async fn finished_requests_free_their_streams() {
+        let config = Config {
+            max_concurrent_streams: 4,
+            ..Config::default()
+        };
+        let s = server(config, Duration::ZERO, &["h2"]).await;
+        let client = HttpClient::new(&s.ca.trust());
+        for i in 0..20 {
+            let answers = burst(&client, s.port, 1).await;
+            assert_eq!(answers[0].0, StatusCode::OK, "request {i}");
+        }
+        assert_eq!(s.connections.load(Ordering::SeqCst), 1);
+    }
+
     /// An origin that turns out to be HTTP/1.1 waits only for its first
     /// connect, then connects in parallel — concurrency there *is* more
     /// connections — and is known from then on.
