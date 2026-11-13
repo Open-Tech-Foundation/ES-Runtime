@@ -21396,3 +21396,117 @@ fn a_tsconfig_above_the_project_does_not_reroute_its_imports() {
     );
     let _ = std::fs::remove_dir_all(&parent);
 }
+
+/// `build({ mode })` compiles `import.meta.env` as `esdev build` does — the
+/// mode, `.env`, then the environment, `PUBLIC_*` only, the program's own
+/// `define` winning — and reads both sources as the program (D223).
+#[test]
+fn runtime_build_with_a_mode_compiles_import_meta_env_as_the_program_reads_it() {
+    let dir = build_dir("rb_env");
+    write_in(
+        &dir,
+        ".env",
+        "PUBLIC_FILE=from-file\nPUBLIC_BOTH=file\nSECRET_KEY=never\n",
+    );
+    write_in(
+        &dir,
+        "main.js",
+        "console.log(JSON.stringify([import.meta.env.MODE, import.meta.env.DEV, import.meta.env.PUBLIC_FILE, import.meta.env.PUBLIC_BOTH, import.meta.env.PUBLIC_SHELL, import.meta.env.PUBLIC_MINE, import.meta.env.SECRET_KEY ?? null]));\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+import { args } from "runtime:process";
+import { write } from "runtime:fs";
+const options = { input: "main.js", define: { "import.meta.env.PUBLIC_MINE": '"own"' } };
+if (args[0] !== "none") options.mode = args[0];
+try {
+  const bundle = await build(options);
+  const { output } = await bundle.generate({});
+  const code = output.find((c) => c.type === "chunk").code;
+  console.log("CODE", code.includes("import.meta.env.PUBLIC") ? "unreplaced" : "replaced", code.includes("never") ? "LEAK" : "clean");
+  await write("out.mjs", code);
+  await import(new URL("./out.mjs", import.meta.url).href + "?" + args[0]);
+} catch (err) {
+  console.log("REFUSED", err.name, err.message);
+}
+"#,
+    );
+    let run = |flags: &[&str], mode: &str, extra: &[(&str, &str)]| {
+        let mut command = esdev_in(&dir);
+        command
+            .args(flags)
+            .arg("app.mjs")
+            .arg(mode)
+            .env("PUBLIC_SHELL", "from-shell")
+            .env("PUBLIC_BOTH", "shell");
+        for (name, value) in extra {
+            command.env(name, value);
+        }
+        let out = command.output().expect("spawn esdev");
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+    };
+
+    let production = run(&[], "production", &[]);
+    assert!(production.contains("CODE replaced clean"), "{production}");
+    assert!(
+        production.contains(r#"["production",false,"from-file","shell","from-shell","own",null]"#),
+        "{production}"
+    );
+    let development = run(&[], "development", &[]);
+    assert!(
+        development.contains(r#"["development",true,"#),
+        "{development}"
+    );
+
+    // No mode: nothing is read, and nothing but the program's define compiled in.
+    let none = run(&[], "none", &[]);
+    assert!(none.contains("CODE unreplaced clean"), "{none}");
+
+    // A scoped grant compiles in only the names it lists.
+    let scoped = run(
+        &[
+            "--deny-all",
+            "--allow-read",
+            "--allow-write",
+            "--allow-imports",
+            "--allow-env=PUBLIC_SHELL",
+        ],
+        "production",
+        &[],
+    );
+    assert!(
+        scoped.contains(r#"["production",false,"from-file","file","from-shell","own",null]"#),
+        "{scoped}"
+    );
+    // No env grant: refused, naming the grant — not the environment handed over.
+    let denied = run(
+        &[
+            "--deny-all",
+            "--allow-read",
+            "--allow-write",
+            "--allow-imports",
+        ],
+        "production",
+        &[],
+    );
+    assert!(denied.contains("REFUSED NotAllowedError"), "{denied}");
+    assert!(denied.contains("--allow-env"), "{denied}");
+    // A PUBLIC_ name the runtime holds as a secret is never compiled in.
+    let secret = run(&[], "production", &[("PUBLIC_API_TOKEN", "hunter2")]);
+    assert!(
+        secret.contains("REFUSED TypeError build: PUBLIC_API_TOKEN is held as a secret"),
+        "{secret}"
+    );
+    assert!(!secret.contains("hunter2"), "{secret}");
+    // A mode is one of two words.
+    let wrong = run(&[], "staging", &[]);
+    assert!(
+        wrong.contains("REFUSED TypeError build: mode is"),
+        "{wrong}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -326,8 +326,19 @@ declare module "runtime:build" {
      */
     platform?: "neutral" | "browser" | "node";
     resolve?: ResolveOptions;
-    /** Compile-time replacements: `{ "process.env.NODE_ENV": '"development"' }`. */
+    /**
+     * Compile-time replacements: `{ "process.env.NODE_ENV": '"development"' }`.
+     * Wins over `mode`'s replacement for the same name.
+     */
     define?: Record<string, string>;
+    /**
+     * Compiles `import.meta.env` in, as `esdev build` does: `MODE`, `DEV`,
+     * `PROD`, and `PUBLIC_*` from `.env` in `cwd`, then the environment — read
+     * as this program, under its read and env grants. Refused without an env
+     * grant, or when a `PUBLIC_*` variable is held as a secret. Omitted,
+     * nothing is compiled in.
+     */
+    mode?: "development" | "production";
     plugins?: (Plugin | null | undefined)[];
     minify?: boolean;
     treeshake?: boolean;

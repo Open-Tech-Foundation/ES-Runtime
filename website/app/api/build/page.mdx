@@ -53,7 +53,8 @@ serve(output[0].code);      // never written to disk
 | `external` | `string[] \| (id, importer, resolved) => boolean` | What to leave unbundled. A **predicate** as well as a list — a dev server externalises a shape, not a set. |
 | `platform` | `"neutral" \| "browser" \| "node"` | Which environment the output runs in; decides `exports` conditions. Default `neutral`, which is what this runtime is. |
 | `resolve` | `{ alias, extensions, conditionNames, mainFields }` | Resolution. `conditionNames` is **appended** to the platform's, `mainFields` replaces them. |
-| `define` | `Record<string, string>` | Compile-time replacements. |
+| `define` | `Record<string, string>` | Compile-time replacements. Wins over `mode`'s for the same name. |
+| `mode` | `"development" \| "production"` | Compiles [`import.meta.env`](/esdev/build/project#importmetaenv) in, as `esdev build` does: `MODE`, `DEV`, `PROD`, and `PUBLIC_*` from `.env` in `cwd`, then the environment. Read as the program: needs `--allow-read` for the file and `--allow-env` for the variables — a scoped `--allow-env=PUBLIC_API_URL` compiles in only that name. Omitted, nothing is compiled in. |
 | `plugins` | `PluginOption[]` | Plugins, nested lists of them, or promises of either; `null`, `undefined` and `false` are skipped. See below. |
 | `minify`, `treeshake` | `boolean` | |
 | `cwd` | `string` | Where the build runs. Defaults to the entry module's directory. |
@@ -61,6 +62,11 @@ serve(output[0].code);      // never written to disk
 Output options (`format`, `exports`, `dir`, `codeSplitting`, `sourcemap`,
 `entryFileNames`, …) may be given here or per call to `generate()`/`write()`;
 the per-call ones win.
+
+A build with a `mode` is refused when it may not read the environment
+(`NotAllowedError`), and when a `PUBLIC_*` variable is one the runtime holds
+as a [secret](/api/process) — `PUBLIC_API_TOKEN` compiled into a bundle is
+published (`TypeError`).
 
 ### What a platform asserts
 

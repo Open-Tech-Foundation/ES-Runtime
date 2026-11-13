@@ -63,6 +63,8 @@
 // wait for one hook before accepting the next — so a slow plugin holds up its
 // own module rather than the build.
 
+import { env, Secret } from "runtime:process";
+
 const ops = globalThis.__ops;
 
 // Every plugin object and `external` predicate the guest has handed over, by
@@ -454,11 +456,47 @@ async function flatten(list, out = []) {
 
 // The options, with every function replaced by the handle the host calls back
 // through. Nothing else is rewritten.
+// The `PUBLIC_*` variables a build with a `mode` compiles into
+// `import.meta.env`, read through `runtime:process` — so as this program, under
+// its own env grant: `--allow-env=PUBLIC_API_URL` compiles in that one name,
+// and a run with no env grant is refused here rather than handed the
+// environment through the bundler (D223). A name the runtime holds as a secret
+// is refused outright: compiled in, it is published.
+function publicEnv() {
+  let entries;
+  try {
+    entries = Object.entries(env);
+  } catch (err) {
+    if (err?.name === "NotAllowedError") {
+      const denied = new Error(
+        "build: mode compiles PUBLIC_* variables into import.meta.env, and this run may not read the environment — grant --allow-env, or name the variables: --allow-env=PUBLIC_API_URL",
+        { cause: err },
+      );
+      denied.name = "NotAllowedError";
+      throw denied;
+    }
+    throw err;
+  }
+  const values = {};
+  for (const [name, value] of entries) {
+    if (!name.startsWith("PUBLIC_")) continue;
+    if (value instanceof Secret) {
+      throw new TypeError(
+        `build: ${name} is held as a secret, and compiling it into import.meta.env would publish it — rename it, or read it at run time through runtime:process`,
+      );
+    }
+    values[name] = value;
+  }
+  return values;
+}
+
 async function prepare(options) {
   if (options === null || typeof options !== "object") {
     throw new TypeError(`build: options must be an object, got ${typeof options}`);
   }
   const prepared = { ...options };
+  delete prepared.__publicEnv;
+  if (options.mode !== undefined) prepared.__publicEnv = publicEnv();
   if (typeof options.external === "function") {
     prepared.external = register(options.external);
   }

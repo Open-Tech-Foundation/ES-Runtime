@@ -68,6 +68,7 @@ pub mod plugin;
 pub mod server;
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -550,6 +551,7 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             refresh: wanted.refresh || plugin.jsx.refresh,
         });
 
+    let define = defines(state, &cwd, &options).await?;
     Ok(Options {
         bundler: crate::bundler::Options {
             // A program's build is described by the program: the resolver's
@@ -581,7 +583,7 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             main_fields: string_list(resolve_field("mainFields").as_ref()),
             alias: alias_list(resolve_field("alias").as_ref()),
             extensions: string_list(resolve_field("extensions").as_ref()),
-            define: pairs(get("define").as_ref()),
+            define,
             minify: matches!(get("minify"), Some(Value::Bool(true))),
             treeshake: match get("treeshake") {
                 Some(Value::Bool(on)) => Some(on),
@@ -593,6 +595,66 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
         },
         plugins: declared,
     })
+}
+
+/// The compile-time replacements: `import.meta.env` when the build names a
+/// `mode`, then the program's own `define`, which wins over it.
+///
+/// `import.meta.env` is what `esdev build` compiles in (D85), read **as the
+/// program**: `<cwd>/.env` through the run's filesystem view, under its read
+/// grant, and the environment through `runtime:process` before the options
+/// crossed (`__publicEnv`), under its env grant. Nothing here reads either
+/// from this process — a run with `--deny-all` must not get through `build()`
+/// what it could not read itself (D223).
+async fn defines(
+    state: &BuildState,
+    cwd: &Path,
+    options: &Value,
+) -> Result<Vec<(String, String)>, OpError> {
+    let own = pairs(field(options, "define"));
+    let Some(mode) = field(options, "mode") else {
+        return Ok(own);
+    };
+    let dev = match mode.as_str() {
+        Some("development") => true,
+        Some("production") => false,
+        _ => {
+            return Err(OpError::type_error(
+                "build: mode is \"development\" or \"production\"",
+            ));
+        }
+    };
+    let denied = |e: es_runtime_providers::ProviderError| {
+        OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
+    };
+    let file = cwd.join(".env").to_string_lossy().into_owned();
+    let mut values: Vec<(String, String)> = Vec::new();
+    if state
+        .file_system
+        .exists(file.clone())
+        .await
+        .map_err(denied)?
+    {
+        let bytes = state.file_system.read(file.clone()).await.map_err(denied)?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| OpError::type_error(format!("build: {file} is not UTF-8")))?;
+        values.extend(
+            es_runtime_cli_common::dotenv::parse_text(&text, &file).map_err(OpError::type_error)?,
+        );
+    }
+    values.extend(pairs(field(options, "__publicEnv")));
+    // Later sources win: the environment over the file, as in `esdev build`.
+    let mut folded: Vec<(String, String)> = Vec::new();
+    for (name, value) in values {
+        match folded.iter_mut().find(|(existing, _)| *existing == name) {
+            Some(slot) => slot.1 = value,
+            None => folded.push((name, value)),
+        }
+    }
+    let mut all = crate::build::compile_env(folded, dev);
+    all.retain(|(name, _)| !own.iter().any(|(mine, _)| mine == name));
+    all.extend(own);
+    Ok(all)
 }
 
 /// Reads the output half of the options, from `build()` or from

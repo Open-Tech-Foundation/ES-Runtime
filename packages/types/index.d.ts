@@ -30,3 +30,4 @@
 /// <reference path="./runtime-test.d.ts" />
 /// <reference path="./runtime-watch.d.ts" />
 /// <reference path="./esdev-hot.d.ts" />
+/// <reference path="./import-meta-env.d.ts" />

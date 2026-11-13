@@ -15,6 +15,11 @@ itself.
 
 ### Added
 
+- `import.meta.env` — `MODE`, `DEV`, `PROD` and `PUBLIC_*` names
+  (`string | undefined`) — as `esdev build` compiles it into a bundle; the
+  `ImportMetaEnv` interface merges, so a project can declare its own variables.
+- `runtime:build`'s `mode` option (DECISIONS D223).
+
 - `import.meta.hot.on(event, cb)` and `off(event, cb)`, and the
   `EsdevServerUpdate` payload of `esdev:server-update`, which `esdev start`
   sends after a server restart (DECISIONS D219).

@@ -4676,3 +4676,17 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 **Rejected:** resolving a virtual module's imports from the project root, which was written first and fixed the hang — but it treated the symptom: the app's files were the ones resolving wrongly, and its regression test passed without the fix, which is how it was found to be beside the point. Following the enclosing repository's tsconfig "as TypeScript would" — `tsc` run from inside a project does find a parent's config, but a build is not a typecheck, and silently rerouting a project's imports to source it never installed is the worse failure.
 
 **Consequences:** a project inside a monorepo resolves what it installed unless it says otherwise — with a `tsconfig.json` of its own, which may `extends` the monorepo's. The AFW e2e passes with the original `clientRoute` import restored (31 checks; it hung after 3).
+
+### D223 — `runtime:build` compiles `import.meta.env` when asked, as the program · *Accepted (2026-11-13)*
+
+**Context:** reported by AFW: a framework's own server and SSG build with `runtime:build`, and `import.meta.env.PUBLIC_API_URL` stayed as written in their output, while `esdev build` replaced it (D85). A program had no way to get the same values other than reimplementing `.env` parsing and the `PUBLIC_` rule into `define`. The obvious fix — `build()` reading `.env` and the environment the way `esdev build` does — reads them from **esdev's** process, and `esdev --deny-all --allow-listen=…` is a run that is meant to be exactly esrun's grant: a program with no env grant would get the environment through the bundler.
+
+**Decision:**
+- **`build({ mode: "development" | "production" })`** compiles `import.meta.env` in: `MODE`, `DEV`, `PROD`, and `PUBLIC_*` from `<cwd>/.env`, then the environment, later winning — the one function `esdev build` uses (`compile_env`), so the two cannot drift.
+- **Read as the program.** The file through the run's filesystem view, under its read grant; the variables through `runtime:process`'s `env`, under its env grant — `--allow-env=PUBLIC_API_URL` compiles in that name and no other. With no env grant the build is refused, naming the grant.
+- **A `PUBLIC_*` name the runtime holds as a secret is refused.** `runtime:process` already wraps `*_TOKEN`, `*_KEY` and the like in `Secret`; compiled into a bundle, the value is published.
+- **Explicit.** Without `mode`, nothing is read and nothing compiled in; the program's `define` wins over `mode`'s for the same name.
+
+**Rejected:** a default mode (Vite's JS `build()` defaults to `production` and loads `.env`) — a build call that reads files and the environment because nobody said not to is the wrong default in a runtime whose reads are granted. Reading the environment on the Rust side under the `env` capability check — the gate is per capability, not per scope, so a scoped grant would still have handed over every `PUBLIC_*` name.
+
+**Consequences:** `esdev build` still reads the shell's `PUBLIC_*` names as the toolchain, with no secret check — it is a build command, not a program — so a `PUBLIC_API_TOKEN` it compiles in today is not refused there. Whether it should be is a separate decision.

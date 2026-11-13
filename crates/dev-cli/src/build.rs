@@ -321,8 +321,16 @@ pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, Stri
         }
     }
 
+    Ok(compile_env(values, dev))
+}
+
+/// `import.meta.env` from the `PUBLIC_*` values a build was given, folded
+/// already (later sources won), plus the build's own mode. The one place the
+/// replacements are written, for `esdev build` and `runtime:build` alike.
+pub fn compile_env(mut values: Vec<(String, String)>, dev: bool) -> Vec<(String, String)> {
+    values.retain(|(name, _)| name.starts_with(PUBLIC_PREFIX));
     let mode = if dev { "development" } else { "production" };
-    put("MODE".to_string(), mode.to_string());
+    values.push(("MODE".to_string(), mode.to_string()));
 
     let mut defines: Vec<(String, String)> = values
         .iter()
@@ -351,7 +359,7 @@ pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, Stri
         "import.meta.env".to_string(),
         serde_json::Value::Object(object).to_string(),
     ));
-    Ok(defines)
+    defines
 }
 
 /// The source-map setting one target's build runs under.

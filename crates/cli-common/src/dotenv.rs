@@ -30,6 +30,13 @@ pub fn load(path: &Path) -> Result<Vec<(String, String)>, String> {
     parse(&raw).map_err(|e| format!("--env-file {label}:{}: {}", e.line, e.message))
 }
 
+/// Parses `.env` text already read — by a caller that read it through a
+/// permission-checked filesystem. `label` names it in errors; values never
+/// appear in them.
+pub fn parse_text(text: &str, label: &str) -> Result<Vec<(String, String)>, String> {
+    parse(text).map_err(|e| format!("{label}:{}: {}", e.line, e.message))
+}
+
 /// A parse error: a 1-based line number and a message that never contains a
 /// variable's value.
 #[derive(Debug)]

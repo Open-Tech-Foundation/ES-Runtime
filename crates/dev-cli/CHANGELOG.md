@@ -28,6 +28,11 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **`runtime:build`'s `build({ mode })` compiles `import.meta.env`** as
+  `esdev build` does — `MODE`, `DEV`, `PROD` and `PUBLIC_*` from `.env`, then
+  the environment — read as the program, under its own read and env grants
+  (DECISIONS D223). A run with no env grant, or a `PUBLIC_*` variable held as a
+  secret, is refused. Without `mode`, nothing changes.
 - **`import.meta.hot.on(event, cb)` and `off(event, cb)`,** Vite's names. A
   module's listeners are removed when it is replaced, so a save does not add
   a second one.
