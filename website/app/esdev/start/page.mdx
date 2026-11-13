@@ -237,6 +237,32 @@ ones that depend on them first. A server's errors reach the page under its name
 not waited for unless something names it. `dev.run` is the one-server form, and
 `dev.servers` and `dev.run` are not used together.
 
+## Targets only the dev loop builds
+
+A target under `dev.targets` is built and run by `esdev start` and never by
+`esdev build`, so nothing it writes reaches a deployment. A static site uses one
+to render its pages on a server while you develop, as the prerender step will:
+
+```json
+{
+  "build": { "targets": {
+    "web":      { "entry": "index.html", "outdir": "dist" },
+    "site-ssg": { "entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run" }
+  } },
+  "dev": {
+    "targets": { "render": { "entry": "src/dev-render.js", "out": "devserver/render.js" } },
+    "run": "render"
+  }
+}
+```
+
+| | |
+| --- | --- |
+| **Same keys** | A dev target takes what a build target takes, except `then` — nothing runs after a build that never builds it |
+| **Its own name** | A name is in `build.targets` or `dev.targets`, not both |
+| **Named by the loop** | `dev.run`, `dev.servers.<name>.target` and `dev.watch.targets` may name one |
+| **Never released** | `esdev build` leaves it out, and refuses `--target=` naming it; `esdev preview` never serves it |
+
 ## What is watched
 
 `esdev start` watches the project root, every path under `dev.watch.paths` or

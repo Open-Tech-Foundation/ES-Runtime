@@ -299,6 +299,84 @@ fn the_loop_skips_run_after_build_steps() {
     );
 }
 
+/// The esdev.json of a static site whose dev loop renders through a server of
+/// its own (D224): `esdev build` prerenders, `esdev start` runs `render`.
+fn dev_only_project(name: &str, listen: u16) -> PathBuf {
+    let dir = project(
+        name,
+        &format!(
+            r#"{{ "build": {{ "targets": {{
+                    "prerender": {{ "entry": "src/prerender.ts", "out": "gen/prerender.js", "then": "run" }} }} }},
+                  "dev": {{ "targets": {{ "render": {{ "entry": "src/server.ts", "out": "devserver/render.js" }} }},
+                           "run": "render", "app": {{ "port": {listen} }} }} }}"#
+        ),
+    );
+    std::fs::write(
+        dir.join("src/prerender.ts"),
+        "import { write } from \"runtime:fs\";\nawait write(\"prerendered.txt\", \"yes\");\n",
+    )
+    .expect("write the step");
+    dir
+}
+
+/// A `dev.targets` target is the dev loop's: `esdev start` builds it and runs
+/// it as `dev.run` says (D224).
+#[test]
+fn the_loop_builds_and_runs_a_dev_target() {
+    static PORT: AtomicU16 = AtomicU16::new(20_520);
+    let listen = PORT.fetch_add(1, Ordering::Relaxed);
+    let dir = dev_only_project("dev-target-runs", listen);
+    let mut dev = Loop::start(dir.clone());
+    let port = dev.wait_for_app();
+    assert!(get(port).contains("ok"), "the dev target is the server");
+    assert!(
+        dir.join(".dev/devserver/render.js").is_file(),
+        "built under .dev"
+    );
+}
+
+/// ...and `esdev build` never builds it: the release output has no trace of
+/// it, and naming it is refused with the reason (D224).
+#[test]
+fn a_release_build_never_builds_a_dev_target() {
+    let dir = dev_only_project("dev-target-release", 20_539);
+    let esdev = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_esdev"));
+        command.current_dir(&dir);
+        command
+    };
+    let built = esdev().arg("build").output().expect("spawn esdev build");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(
+        dir.join("gen/prerendered.txt").is_file(),
+        "the release step ran"
+    );
+    assert!(
+        !dir.join("devserver").exists(),
+        "a dev target was built for release"
+    );
+    assert!(
+        !dir.join(".dev").exists(),
+        "a release build wrote the dev directory"
+    );
+
+    let named = esdev()
+        .args(["build", "--target=render"])
+        .output()
+        .expect("spawn esdev build");
+    let stderr = String::from_utf8_lossy(&named.stderr);
+    assert!(!named.status.success(), "a dev target was built by name");
+    assert!(
+        stderr.contains("--target=render is in `dev.targets`"),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `finish` belongs to a release build (D153): the dev loop builds and runs
 /// the project without calling it.
 #[test]

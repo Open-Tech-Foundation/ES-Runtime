@@ -2396,29 +2396,41 @@ pub async fn run(request: BuildRequest) -> Result<Vec<ServerOutput>, String> {
         BuildRequest::Project(project) => project,
     };
 
-    let names: Vec<&str> = project
-        .settings
-        .targets
-        .iter()
-        .map(|t| t.name.as_str())
-        .collect();
+    // `dev.targets` are the dev loop's: built by it, and never by a release
+    // build (D224).
+    let dev_loop = project.dev.is_some();
+    let buildable = || {
+        project
+            .settings
+            .targets
+            .iter()
+            .filter(move |t| dev_loop || !t.dev_only)
+    };
+    let names: Vec<&str> = buildable().map(|t| t.name.as_str()).collect();
     let selected: Vec<&crate::config::Target> = match &project.targets {
-        None => project.settings.targets.iter().collect(),
+        None => buildable().collect(),
         Some(wanted) => wanted
             .iter()
             .map(|name| {
-                project
+                let found = project
                     .settings
                     .targets
                     .iter()
-                    .find(|target| &target.name == name)
-                    .ok_or_else(|| {
-                        format!(
-                            "--target={name} is not a target in this project.\n\n\
-                             Targets: {}.",
-                            names.join(", ")
-                        )
-                    })
+                    .find(|target| &target.name == name);
+                match found {
+                    Some(target) if target.dev_only && !dev_loop => Err(format!(
+                        "--target={name} is in `dev.targets`: `esdev start` builds it, and `esdev build` never does, \
+                         so nothing it writes reaches a deployment.\n\n\
+                         Targets: {}.",
+                        names.join(", ")
+                    )),
+                    Some(target) => Ok(target),
+                    None => Err(format!(
+                        "--target={name} is not a target in this project.\n\n\
+                         Targets: {}.",
+                        names.join(", ")
+                    )),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?,
     };

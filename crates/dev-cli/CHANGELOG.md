@@ -28,6 +28,10 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **`dev.targets`: targets only `esdev start` builds** (DECISIONS D224). They
+  take a build target's keys (not `then`), `dev.run` and `dev.servers` may run
+  one, and `esdev build` never builds them — so a static site can render on a
+  server in development without shipping that server.
 - **`runtime:build`'s `build({ mode })` compiles `import.meta.env`** as
   `esdev build` does — `MODE`, `DEV`, `PROD` and `PUBLIC_*` from `.env`, then
   the environment — read as the program, under its own read and env grants

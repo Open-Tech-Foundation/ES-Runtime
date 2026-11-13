@@ -177,7 +177,11 @@ fn directory(project: &crate::settings::Settings) -> Result<PathBuf, String> {
     if let Some(serve) = &project.start.serve {
         return Ok(project.source.root.join(serve));
     }
-    let mut html = project.targets.iter().filter(|target| target.is_html());
+    // What `esdev build` wrote: never a `dev.targets` output (D224).
+    let mut html = project
+        .targets
+        .iter()
+        .filter(|target| target.is_html() && !target.dev_only);
     let Some(first) = html.next() else {
         let server = project
             .start

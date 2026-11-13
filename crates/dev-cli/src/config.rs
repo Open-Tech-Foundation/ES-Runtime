@@ -318,6 +318,9 @@ pub struct Target {
     /// downstream, which is what keeps `esdev build` a single command for a
     /// stack whose deliverable is a directory of HTML.
     pub run_after_build: bool,
+    /// Written under `dev.targets` (D224): built and run by `esdev start`,
+    /// never by `esdev build`, so nothing it writes reaches a deployment.
+    pub dev_only: bool,
 }
 
 impl Target {
@@ -452,7 +455,7 @@ const NORMALIZED_DEV_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port"
 const BUILD_KEYS: &[&str] = &["targets", "importPolicy", "subresourceIntegrity"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
 const DEV_KEYS: &[&str] = &[
-    "run", "servers", "watch", "serve", "app", "server", "outDir",
+    "run", "servers", "watch", "serve", "app", "server", "outDir", "targets",
 ];
 const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
 const DEV_APP_KEYS: &[&str] = &["port"];
@@ -666,6 +669,29 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         .iter()
         .map(|(target_name, value)| target(target_name, value, name, &dir))
         .collect::<Result<Vec<_>, _>>()?;
+    // `dev.targets`: the dev loop's own builds, read exactly as a build target
+    // is so that one means what the other does — and kept out of every
+    // `esdev build` (D224).
+    if let Some(value) = dev.and_then(|dev| dev.get("targets")) {
+        let declared = object(value, name, "`dev.targets`")?;
+        for (target_name, value) in declared {
+            let mut built = target(target_name, value, name, &dir)?;
+            if targets.iter().any(|t| t.name == built.name) {
+                return Err(format!(
+                    "{name}: \"{target_name}\" is in both `build.targets` and `dev.targets`. \
+                     A target is either built for a deployment or built for the dev loop; name one of them differently."
+                ));
+            }
+            if built.run_after_build {
+                return Err(format!(
+                    "{name}: `dev.targets.{target_name}` has `then`, which runs a target after `esdev build` — \
+                     and `esdev build` never builds a dev target. `dev.run` is how the dev loop runs one."
+                ));
+            }
+            built.dev_only = true;
+            targets.push(built);
+        }
+    }
     // Sorted here rather than taken as they came. `serde_json` keeps insertion
     // order only when a feature enables it, and that feature is currently on
     // because *something else* in this workspace asked for it — an order that
@@ -1311,6 +1337,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
         run_after_build,
+        dev_only: false,
         lib,
         formats,
         types,
@@ -2531,6 +2558,46 @@ mod tests {
             read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "define": {"X": {"y": 1}}}}}}"#)
                 .expect_err("refused");
         assert!(err.contains("a single value"), "{err}");
+    }
+
+    /// `dev.targets` reads as `build.targets` does, marked as the dev loop's,
+    /// and `dev.run` may name one (D224).
+    #[test]
+    fn a_dev_target_is_a_target_the_dev_loop_owns() {
+        let project = read(
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"targets": {"render": {"entry": "render.ts", "out": "devserver/render.js"}}, "run": "render"}}"#,
+        )
+        .expect("read");
+        let render = project
+            .targets
+            .iter()
+            .find(|t| t.name == "render")
+            .expect("render");
+        assert!(render.dev_only);
+        assert!(
+            !project
+                .targets
+                .iter()
+                .find(|t| t.name == "web")
+                .unwrap()
+                .dev_only
+        );
+        assert_eq!(project.start.run.as_deref(), Some("render"));
+
+        let both = read(
+            r#"{"build": {"targets": {"render": {"entry": "a.ts"}}}, "dev": {"targets": {"render": {"entry": "b.ts"}}}}"#,
+        )
+        .expect_err("one name, two meanings");
+        assert!(
+            both.contains("in both `build.targets` and `dev.targets`"),
+            "{both}"
+        );
+
+        let then = read(
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"targets": {"step": {"entry": "s.ts", "out": "x/s.js", "then": "run"}}}}"#,
+        )
+        .expect_err("then on a target esdev build never builds");
+        assert!(then.contains("`dev.targets.step` has `then`"), "{then}");
     }
 
     /// `dev` is validated by the command that reads the file, not held until

@@ -4690,3 +4690,17 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 **Rejected:** a default mode (Vite's JS `build()` defaults to `production` and loads `.env`) — a build call that reads files and the environment because nobody said not to is the wrong default in a runtime whose reads are granted. Reading the environment on the Rust side under the `env` capability check — the gate is per capability, not per scope, so a scoped grant would still have handed over every `PUBLIC_*` name.
 
 **Consequences:** `esdev build` still reads the shell's `PUBLIC_*` names as the toolchain, with no secret check — it is a build command, not a program — so a `PUBLIC_API_TOKEN` it compiles in today is not refused there. Whether it should be is a separate decision.
+
+### D224 — `dev.targets`: builds only the dev loop makes · *Accepted (2026-11-13)*
+
+**Context:** reported by AFW. A fully static site (`web` plus a `then: "run"` prerender step) has no server in production, so `esdev start` only serves the browser build: the server render never runs in development, and a page that breaks only when prerendered breaks first at `esdev build`. AFW ships a small dev renderer to close that gap, and a normal target to build it would also be built — and shipped — by every release build. Vite's dev server renders through middleware on request; esdev runs servers as programs, so the gap is one of declaration: a target the release never builds.
+
+**Decision:**
+- **`dev.targets`**, beside `dev.run`: the same keys as `build.targets` and read by the same code, so a dev target means what a build target means. Where it is written says whose it is — `build.targets` stays exactly what `esdev build` deploys.
+- `esdev start` builds them like any target (under the dev directory); `dev.run`, `dev.servers.<name>.target` and `dev.watch.targets` may name one.
+- `esdev build` never builds one, and `--target=` naming one is refused with the reason; `esdev preview` never serves one.
+- A name is in one section or the other. `then` is refused on a dev target: nothing runs after a build that never happens.
+
+**Rejected:** a `"dev": true` flag on a `build.targets` entry (AFW's sketch) — it makes `build.targets` mean "what is deployed, except the flagged ones", which every reader of that section then has to check for. A dev-server renderer inside esdev — rendering is the framework's; esdev gives it a target and runs it (generic for every plugin).
+
+**Consequences:** a static AFW site can render its pages on a server in development and still release a plain static directory.
