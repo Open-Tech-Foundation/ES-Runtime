@@ -38,6 +38,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **Templates can come from several packages** (DECISIONS D220). The root
+  `@opentf/esdev-templates` lists the others esdev reads in its catalog
+  (`"packages": […]`), and each package names where its templates are with
+  `"esdev": { "templates": … }` in its `package.json`. Each is chosen and
+  verified as the root is; one with no release this esdev reads is left out
+  with a warning, and a template two packages define is refused. `--from` is
+  repeatable.
 - **A plain stylesheet can import a package's** —
   `@import "@opentf/afw-docs/theme"` resolves through the package's `exports`
   (the `style` condition, else `default`) and through pnpm's links, and is

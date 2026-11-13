@@ -276,6 +276,11 @@ fn conditional_package(label: &str) -> PathBuf {
                { "value": "ts", "label": "TS", "description": "TypeScript", "omit": ["app/page.jsx"] } ] } ] }"#,
     );
     put("package.json", "{\n  \"name\": \"{{name}}\"\n}\n");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{ "name": "fixture", "esdev": { "templates": "templates" } }"#,
+    )
+    .unwrap();
     put("app/page.jsx", "page");
     put("_option/server/yes/app/todos/page.jsx", "todos");
     put("_option/language/ts/app/page.tsx", "typed page");
@@ -368,4 +373,277 @@ fn a_conditional_option_and_a_nested_overlay_work_from_a_directory() {
         "{said}"
     );
     assert!(!app.exists());
+}
+
+/// One release of a package the multi-package registry serves.
+struct Published {
+    version: &'static str,
+    esdev: &'static str,
+    files: Vec<(String, String)>,
+}
+
+/// Files as npm packs them, under `package/`.
+fn pack(files: &[(String, String)]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    ));
+    for (path, text) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(text.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        builder
+            .append_data(&mut header, format!("package/{path}"), text.as_bytes())
+            .unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap()
+}
+
+/// A registry serving `packages` — every release, its tarball and its true
+/// sha512 — and `1.2.3` for anything else a template pins.
+fn registry_of(packages: Vec<(&'static str, Vec<Published>)>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the registry");
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mut metadata = std::collections::HashMap::new();
+    let mut tarballs = std::collections::HashMap::new();
+    for (name, releases) in packages {
+        let encoded = name.replace('/', "%2F");
+        let mut versions = serde_json::Map::new();
+        for release in releases {
+            let tarball = pack(&release.files);
+            let path = format!("/{encoded}/-/{}.tgz", release.version);
+            versions.insert(
+                release.version.to_string(),
+                serde_json::json!({
+                    "engines": { "esdev": release.esdev },
+                    "dist": { "tarball": format!("{origin}{path}"), "integrity": sri(&tarball) }
+                }),
+            );
+            tarballs.insert(path, tarball);
+        }
+        metadata.insert(
+            format!("/{encoded}"),
+            serde_json::json!({ "versions": versions }).to_string(),
+        );
+    }
+    let metadata = std::sync::Arc::new(metadata);
+    let tarballs = std::sync::Arc::new(tarballs);
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(mut stream) = incoming else { continue };
+            let (metadata, tarballs) = (metadata.clone(), tarballs.clone());
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    return;
+                }
+                let path = line.split(' ').nth(1).unwrap_or("/").to_string();
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).is_err()
+                        || header == "\r\n"
+                        || header.is_empty()
+                    {
+                        break;
+                    }
+                }
+                let body: Vec<u8> = if let Some(tarball) = tarballs.get(&path) {
+                    tarball.clone()
+                } else if let Some(json) = metadata.get(&path) {
+                    json.clone().into_bytes()
+                } else {
+                    br#"{"dist-tags":{"latest":"1.2.3"},"versions":{"1.2.3":{}}}"#.to_vec()
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            });
+        }
+    });
+    origin
+}
+
+/// A template directory's files under `dir`: a manifest and a package.json.
+fn template_files(dir: &str, name: &str, group: Option<&str>) -> Vec<(String, String)> {
+    let group = group.map_or(String::new(), |g| format!(r#", "group": "{g}""#));
+    vec![
+        (
+            format!("{dir}/{name}/template.json"),
+            format!(r#"{{ "label": "{name}", "description": "the {name} template"{group} }}"#),
+        ),
+        (
+            format!("{dir}/{name}/package.json"),
+            "{\n  \"name\": \"{{name}}\"\n}\n".to_string(),
+        ),
+    ]
+}
+
+/// The root package: `api`, and a catalog listing `listed`.
+fn root_package(listed: &[&str], template: &str) -> Vec<(String, String)> {
+    let mut files = vec![
+        (
+            "package.json".to_string(),
+            r#"{ "name": "@opentf/esdev-templates", "esdev": { "templates": "templates" } }"#
+                .to_string(),
+        ),
+        (
+            "templates/catalog.json".to_string(),
+            serde_json::json!({ "packages": listed }).to_string(),
+        ),
+    ];
+    files.extend(template_files("templates", template, None));
+    files
+}
+
+/// A framework's package, templates under `esdev/templates`, in a group.
+fn framework_package(template: &str) -> Vec<(String, String)> {
+    let mut files = vec![
+        (
+            "package.json".to_string(),
+            r#"{ "name": "@opentf/create-afw", "esdev": { "templates": "esdev/templates" } }"#
+                .to_string(),
+        ),
+        (
+            "esdev/templates/catalog.json".to_string(),
+            serde_json::json!({ "groups": [ { "name": "AFW", "label": "AFW",
+                "description": "AFW starters", "question": "Which?", "templates": [template] } ] })
+            .to_string(),
+        ),
+    ];
+    files.extend(template_files("esdev/templates", template, Some("AFW")));
+    files
+}
+
+/// The root's catalog lists a second package: both are fetched and checked,
+/// their templates are one menu, and either writes a project.
+#[test]
+fn a_package_the_root_lists_is_read_beside_it() {
+    let registry = registry_of(vec![
+        (
+            "@opentf/esdev-templates",
+            vec![Published {
+                version: "0.2.0",
+                esdev: ">=0.0.1",
+                files: root_package(&["@opentf/create-afw"], "api"),
+            }],
+        ),
+        (
+            "@opentf/create-afw",
+            vec![Published {
+                version: "0.6.1",
+                esdev: ">=0.0.1",
+                files: framework_package("app"),
+            }],
+        ),
+    ]);
+    let (out, app) = create("two-packages", &registry, &["--template=app"]);
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("Templates: @opentf/esdev-templates@0.2.0, @opentf/create-afw@0.6.1"),
+        "{said}"
+    );
+    assert!(app.join("package.json").is_file());
+    let (out, api) = create("two-packages-root", &registry, &["--template=api"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(api.join("package.json").is_file());
+}
+
+/// A template both packages define is refused: which package writes a
+/// project never depends on the order they were read in.
+#[test]
+fn a_template_two_packages_define_is_refused() {
+    let registry = registry_of(vec![
+        (
+            "@opentf/esdev-templates",
+            vec![Published {
+                version: "0.2.0",
+                esdev: ">=0.0.1",
+                files: root_package(&["@opentf/create-afw"], "app"),
+            }],
+        ),
+        (
+            "@opentf/create-afw",
+            vec![Published {
+                version: "0.6.1",
+                esdev: ">=0.0.1",
+                files: framework_package("app"),
+            }],
+        ),
+    ]);
+    let (out, app) = create("clash", &registry, &["--template=app"]);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("the app template is in both"), "{said}");
+    assert!(!app.exists());
+}
+
+/// A listed package with no release this esdev reads is left out, saying
+/// so; the root's templates still write.
+#[test]
+fn a_listed_package_this_esdev_cannot_read_is_left_out() {
+    let registry = registry_of(vec![
+        (
+            "@opentf/esdev-templates",
+            vec![Published {
+                version: "0.2.0",
+                esdev: ">=0.0.1",
+                files: root_package(&["@opentf/create-afw"], "api"),
+            }],
+        ),
+        (
+            "@opentf/create-afw",
+            vec![Published {
+                version: "0.6.1",
+                esdev: ">=99.0.0",
+                files: framework_package("app"),
+            }],
+        ),
+    ]);
+    let (out, api) = create("left-out", &registry, &["--template=api"]);
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("the templates in @opentf/create-afw are left out"),
+        "{said}"
+    );
+    assert!(said.contains(">=99.0.0"), "{said}");
+    assert!(api.join("package.json").is_file());
+    let (out, _) = create("left-out-app", &registry, &["--template=app"]);
+    assert!(
+        !out.status.success(),
+        "the app template came from a package that was left out"
+    );
+}
+
+/// `--from` twice reads both directories as one menu, and refuses a name
+/// both define.
+#[test]
+fn from_twice_reads_both_directories() {
+    let write = |label: &str, files: Vec<(String, String)>| {
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dir-{label}"));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, text) in files {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        }
+        format!("--from={}", root.display())
+    };
+    let ours = write("ours", root_package(&[], "api"));
+    let theirs = write("theirs", framework_package("app"));
+    let registry = registry_of(vec![]);
+    let (out, app) = create("from-twice", &registry, &[&ours, &theirs, "--template=app"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(app.join("package.json").is_file());
+    let clash = write("clash", framework_package("api"));
+    let (out, _) = create("from-clash", &registry, &[&ours, &clash, "--template=api"]);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("the api template is in both"), "{said}");
 }

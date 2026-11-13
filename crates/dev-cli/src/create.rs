@@ -92,6 +92,8 @@ pub(crate) struct Library {
 /// what its manifest says.
 pub(crate) struct Entry {
     name: String,
+    /// The package it came from, for the messages that name one.
+    package: String,
     files: Vec<(String, Vec<u8>)>,
     manifest: crate::template::Manifest,
 }
@@ -110,15 +112,51 @@ const SKIPPED: &[&str] = &[
     ".DS_Store",
 ];
 
+/// Where a package keeps its templates: its `package.json`'s
+/// `esdev.templates`, a relative directory inside the package.
+fn templates_dir(package: &str, manifest: Option<&[u8]>) -> Result<String, String> {
+    let manifest = manifest.ok_or_else(|| format!("{package} has no package.json"))?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(manifest).map_err(|e| format!("{package}'s package.json: {e}"))?;
+    let dir = manifest
+        .pointer("/esdev/templates")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "{package}'s package.json has no esdev.templates naming where its templates are"
+            )
+        })?
+        .trim_end_matches('/');
+    let plain = !dir.is_empty()
+        && dir
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains('\\'))
+        && !dir.contains(':');
+    if !plain {
+        return Err(format!(
+            "{package}'s esdev.templates is {dir:?}: it names a directory inside the package, as a relative path"
+        ));
+    }
+    Ok(dir.to_string())
+}
+
 impl Library {
-    /// The templates in a package's files: `templates/<name>/…` and
-    /// `templates/catalog.json`, paths relative to the package root.
-    fn from_files(files: Vec<(String, Vec<u8>)>) -> Result<Library, String> {
+    /// The templates in a package's files, paths relative to the package
+    /// root: `<esdev.templates>/<name>/…` and `<esdev.templates>/catalog.json`.
+    fn from_files(package: &str, files: Vec<(String, Vec<u8>)>) -> Result<Library, String> {
+        let dir = templates_dir(
+            package,
+            files
+                .iter()
+                .find(|(path, _)| path == "package.json")
+                .map(|(_, bytes)| bytes.as_slice()),
+        )?;
+        let prefix = format!("{dir}/");
         let mut by_name: std::collections::BTreeMap<String, Vec<(String, Vec<u8>)>> =
             std::collections::BTreeMap::new();
         let mut catalog = None;
         for (path, bytes) in files {
-            let Some(within) = path.strip_prefix("templates/") else {
+            let Some(within) = path.strip_prefix(prefix.as_str()) else {
                 continue;
             };
             if within == "catalog.json" {
@@ -139,36 +177,43 @@ impl Library {
                 .iter()
                 .map(|(p, b)| (p.as_str(), b.as_slice()))
                 .collect();
-            let manifest = crate::template::manifest(&name, &view)?;
+            let manifest =
+                crate::template::manifest(&name, &view).map_err(|e| format!("{package}: {e}"))?;
             templates.push(Entry {
                 name,
+                package: package.to_string(),
                 files,
                 manifest,
             });
         }
         if templates.is_empty() {
-            return Err("there are no templates in it".to_string());
+            return Err(format!("{package}: there are no templates in {dir}/"));
         }
         let catalog: crate::template::Catalog = match catalog {
-            Some(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|e| format!("catalog.json: {e}"))?
-            }
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| format!("{package}: catalog.json: {e}"))?,
             None => crate::template::Catalog::default(),
         };
         for group in &catalog.groups {
             if templates.iter().any(|entry| entry.name == group.name) {
-                return Err(format!("catalog.json: {} is a template's name", group.name));
+                return Err(format!(
+                    "{package}: catalog.json: {} is a template's name",
+                    group.name
+                ));
             }
             for member in &group.templates {
                 let entry = templates
                     .iter()
                     .find(|entry| &entry.name == member)
                     .ok_or_else(|| {
-                        format!("catalog.json: {} has no template {member}", group.name)
+                        format!(
+                            "{package}: catalog.json: {} has no template {member}",
+                            group.name
+                        )
                     })?;
                 if entry.manifest.group.as_deref() != Some(group.name.as_str()) {
                     return Err(format!(
-                        "catalog.json: {member} is in {}, and its template.json does not say so",
+                        "{package}: catalog.json: {member} is in {}, and its template.json does not say so",
                         group.name
                     ));
                 }
@@ -182,7 +227,7 @@ impl Library {
                     .any(|g| &g.name == group && g.templates.iter().any(|t| t == &entry.name))
             {
                 return Err(format!(
-                    "the {} template names the group {group}, which does not list it",
+                    "{package}: the {} template names the group {group}, which does not list it",
                     entry.name
                 ));
             }
@@ -222,9 +267,47 @@ impl Library {
             }
             Ok(())
         }
-        let mut files = Vec::new();
-        walk(root, &root.join("templates"), &mut files)?;
-        Library::from_files(files).map_err(|e| format!("{}: {e}", root.display()))
+        let shown = root.display().to_string();
+        let manifest = std::fs::read(root.join("package.json"))
+            .map_err(|e| format!("cannot read {shown}/package.json: {e}"))?;
+        let dir = templates_dir(&shown, Some(&manifest))?;
+        let mut files = vec![("package.json".to_string(), manifest)];
+        walk(root, &root.join(&dir), &mut files)?;
+        Library::from_files(&shown, files)
+    }
+
+    /// `other`'s templates and groups beside these. A name both have is
+    /// refused rather than one shadowing the other: which package writes a
+    /// project must never depend on the order they were read in.
+    fn merge(mut self, other: Library) -> Result<Library, String> {
+        if !other.catalog.packages.is_empty() {
+            return Err(format!(
+                "{} lists packages of its own; only the root templates package does",
+                other
+                    .templates
+                    .first()
+                    .map_or("a package", |e| e.package.as_str())
+            ));
+        }
+        for entry in &other.templates {
+            if let Some(mine) = self.get(&entry.name) {
+                return Err(format!(
+                    "the {} template is in both {} and {}",
+                    entry.name, mine.package, entry.package
+                ));
+            }
+        }
+        for group in &other.catalog.groups {
+            if self.catalog.groups.iter().any(|g| g.name == group.name)
+                || self.get(&group.name).is_some()
+            {
+                return Err(format!("the {} group is named twice", group.name));
+            }
+        }
+        self.templates.extend(other.templates);
+        self.templates.sort_by(|a, b| a.name.cmp(&b.name));
+        self.catalog.groups.extend(other.catalog.groups);
+        Ok(self)
     }
 
     fn get(&self, name: &str) -> Option<&Entry> {
@@ -235,11 +318,13 @@ impl Library {
 /// Where `create` reads its templates from.
 #[derive(Debug, Clone)]
 pub enum TemplateSource {
-    /// `@opentf/esdev-templates` from the registry: the newest release this
-    /// esdev reads, or the version `--templates` pins.
+    /// `@opentf/esdev-templates` from the registry — the newest release this
+    /// esdev reads, or the version `--templates` pins — and the packages its
+    /// catalog lists.
     Registry { pinned: Option<String> },
-    /// A package laid out on disk (`--from`).
-    Dir(PathBuf),
+    /// Packages laid out on disk (`--from`, repeatable), read as they are:
+    /// nothing is fetched, and no catalog's `packages` are followed.
+    Dirs(Vec<PathBuf>),
 }
 
 /// The templates, from wherever `source` says (D220).
@@ -247,43 +332,110 @@ pub(crate) async fn load_library(
     source: &TemplateSource,
     proxies: Option<std::sync::Arc<es_runtime_default_providers::Proxies>>,
 ) -> Result<Library, String> {
-    use crate::template_fetch::{PACKAGE, TARBALL_LIMIT};
+    use crate::template_fetch::PACKAGE;
     let pinned = match source {
-        TemplateSource::Dir(root) => return Library::from_dir(root),
+        TemplateSource::Dirs(dirs) => {
+            let mut library: Option<Library> = None;
+            for dir in dirs {
+                let read = Library::from_dir(dir)?;
+                library = Some(match library {
+                    None => read,
+                    Some(library) => library.merge(read)?,
+                });
+            }
+            return library.ok_or_else(|| "--from names no directory".to_string());
+        }
         TemplateSource::Registry { pinned } => pinned.as_deref(),
     };
     let registry = configured_registry()?;
     let client = HttpClient::new(&TrustStore::bundled()).with_proxy(proxies);
-    let metadata_url = registry_url(&registry, PACKAGE);
-    let metadata = with_retries(PACKAGE, || fetch(&client, &metadata_url, REGISTRY_LIMIT)).await?;
-    let metadata: serde_json::Value = serde_json::from_slice(&metadata)
-        .map_err(|e| format!("the registry's answer for {PACKAGE} is not JSON: {e}"))?;
-    let release = crate::template_fetch::choose(&metadata, env!("CARGO_PKG_VERSION"), pinned)?;
+    let (version, files) = match fetch_package(&client, &registry, PACKAGE, pinned).await {
+        Ok(fetched) => fetched,
+        Err(Unfetched::Unreadable(why) | Unfetched::Failed(why)) => return Err(why),
+    };
+    let root = format!("{PACKAGE}@{version}");
+    let mut library = Library::from_files(&root, files)?;
+    let mut read = vec![root];
+    for package in library.catalog.packages.clone() {
+        match fetch_package(&client, &registry, &package, None).await {
+            Ok((version, files)) => {
+                let label = format!("{package}@{version}");
+                library = library.merge(Library::from_files(&label, files)?)?;
+                read.push(label);
+            }
+            // A package with no release this esdev reads leaves its templates
+            // out, and says so; anything else — the network, a mismatch, a
+            // tarball elsewhere — is a refusal, not a smaller menu.
+            Err(Unfetched::Unreadable(why)) => {
+                crate::prompt::warn(&format!("the templates in {package} are left out: {why}"))
+            }
+            Err(Unfetched::Failed(why)) => return Err(why),
+        }
+    }
+    crate::prompt::log(&format!("Templates: {}", read.join(", ")));
+    Ok(library)
+}
+
+/// Why a templates package was not read.
+enum Unfetched {
+    /// No release of it reads with this esdev.
+    Unreadable(String),
+    /// It could not be fetched, or what was fetched was refused.
+    Failed(String),
+}
+
+/// One templates package, chosen, fetched, checked and unpacked: its
+/// version and its files, relative to the package root.
+async fn fetch_package(
+    client: &HttpClient,
+    registry: &str,
+    package: &str,
+    pinned: Option<&str>,
+) -> Result<(String, Vec<(String, Vec<u8>)>), Unfetched> {
+    use crate::template_fetch::TARBALL_LIMIT;
+    let metadata_url = registry_url(registry, package);
+    let metadata = with_retries(package, || fetch(client, &metadata_url, REGISTRY_LIMIT))
+        .await
+        .map_err(Unfetched::Failed)?;
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata).map_err(|e| {
+        Unfetched::Failed(format!(
+            "the registry's answer for {package} is not JSON: {e}"
+        ))
+    })?;
+    let release =
+        crate::template_fetch::choose(package, &metadata, env!("CARGO_PKG_VERSION"), pinned)
+            .map_err(Unfetched::Unreadable)?;
     if let Some((version, range)) = &release.newer {
         crate::prompt::warn(&format!(
-            "{PACKAGE}@{version} needs esdev {range}; using {}. `esdev upgrade` reads the newer templates.",
+            "{package}@{version} needs esdev {range}; using {}. `esdev upgrade` reads the newer templates.",
             release.version
         ));
     }
-    let registry_origin =
-        url::Url::parse(&registry).map_err(|e| format!("invalid npm registry URL: {e}"))?;
-    let tarball_url = url::Url::parse(&release.tarball)
-        .map_err(|e| format!("{PACKAGE}@{}: invalid tarball URL: {e}", release.version))?;
+    let registry_origin = url::Url::parse(registry)
+        .map_err(|e| Unfetched::Failed(format!("invalid npm registry URL: {e}")))?;
+    let tarball_url = url::Url::parse(&release.tarball).map_err(|e| {
+        Unfetched::Failed(format!(
+            "{package}@{}: invalid tarball URL: {e}",
+            release.version
+        ))
+    })?;
     if !crate::template_fetch::same_origin(&registry_origin, &tarball_url) {
-        return Err(format!(
-            "{PACKAGE}@{} is served from {}, not from the registry it was looked up on ({registry});              nothing was read from it",
+        return Err(Unfetched::Failed(format!(
+            "{package}@{} is served from {}, not from the registry it was looked up on \
+             ({registry}); nothing was read from it",
             release.version,
             tarball_url.origin().ascii_serialization()
-        ));
+        )));
     }
-    let tarball = with_retries(PACKAGE, || {
-        fetch(&client, tarball_url.as_str(), TARBALL_LIMIT)
+    let tarball = with_retries(package, || {
+        fetch(client, tarball_url.as_str(), TARBALL_LIMIT)
     })
-    .await?;
-    crate::template_fetch::verify(&tarball, &release.integrity)?;
-    let files = crate::template_fetch::unpack(&tarball)?;
-    crate::prompt::log(&format!("Templates: {PACKAGE}@{}", release.version));
-    Library::from_files(files).map_err(|e| format!("{PACKAGE}@{}: {e}", release.version))
+    .await
+    .map_err(Unfetched::Failed)?;
+    crate::template_fetch::verify(package, &tarball, &release.integrity)
+        .map_err(Unfetched::Failed)?;
+    let files = crate::template_fetch::unpack(package, &tarball).map_err(Unfetched::Failed)?;
+    Ok((release.version, files))
 }
 
 impl Entry {

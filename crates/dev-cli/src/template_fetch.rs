@@ -45,6 +45,7 @@ pub struct Release {
 
 /// The release to read, from the package's registry metadata.
 pub fn choose(
+    package: &str,
     metadata: &serde_json::Value,
     esdev: &str,
     pinned: Option<&str>,
@@ -54,7 +55,7 @@ pub fn choose(
     let versions = metadata
         .get("versions")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| format!("the registry lists no versions of {PACKAGE}"))?;
+        .ok_or_else(|| format!("the registry lists no versions of {package}"))?;
     let range_of = |manifest: &serde_json::Value| {
         manifest
             .pointer("/engines/esdev")
@@ -67,7 +68,7 @@ pub fn choose(
                 .pointer(pointer)
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
-                .ok_or_else(|| format!("{PACKAGE}@{version} has no {pointer} in the registry"))
+                .ok_or_else(|| format!("{package}@{version} has no {pointer} in the registry"))
         };
         Ok(Release {
             version: version.to_string(),
@@ -80,12 +81,12 @@ pub fn choose(
     if let Some(pinned) = pinned {
         let manifest = versions
             .get(pinned)
-            .ok_or_else(|| format!("there is no {PACKAGE}@{pinned} in the registry"))?;
+            .ok_or_else(|| format!("there is no {package}@{pinned} in the registry"))?;
         let range = range_of(manifest)
-            .ok_or_else(|| format!("{PACKAGE}@{pinned} names no engines.esdev range"))?;
+            .ok_or_else(|| format!("{package}@{pinned} names no engines.esdev range"))?;
         if !satisfies(&range, esdev_version)? {
             return Err(format!(
-                "{PACKAGE}@{pinned} needs esdev {range}, and this is esdev {esdev}.\n\n\
+                "{package}@{pinned} needs esdev {range}, and this is esdev {esdev}.\n\n\
                  Run `esdev upgrade`, or pin a release this esdev reads."
             ));
         }
@@ -113,10 +114,10 @@ pub fn choose(
     }
     Err(match newer {
         Some((version, range)) => format!(
-            "no release of {PACKAGE} reads with esdev {esdev}: the newest, {version}, needs esdev {range}.\n\n\
+            "no release of {package} reads with esdev {esdev}: the newest, {version}, needs esdev {range}.\n\n\
              Run `esdev upgrade`."
         ),
-        None => format!("the registry has no stable release of {PACKAGE}"),
+        None => format!("the registry has no stable release of {package}"),
     })
 }
 
@@ -177,7 +178,7 @@ pub fn same_origin(registry: &url::Url, tarball: &url::Url) -> bool {
 /// Checks `bytes` against an SRI `integrity` value. Only `sha512` counts:
 /// the registry has published it for every package since 2017, and a weaker
 /// one alone (`sha1-…`) is refused rather than trusted.
-pub fn verify(bytes: &[u8], integrity: &str) -> Result<(), String> {
+pub fn verify(package: &str, bytes: &[u8], integrity: &str) -> Result<(), String> {
     use base64::Engine as _;
     use sha2::Digest as _;
 
@@ -188,7 +189,7 @@ pub fn verify(bytes: &[u8], integrity: &str) -> Result<(), String> {
         .collect();
     if expected.is_empty() {
         return Err(format!(
-            "the registry gives no sha512 integrity for {PACKAGE} ({integrity:?})"
+            "the registry gives no sha512 integrity for {package} ({integrity:?})"
         ));
     }
     let actual = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(bytes));
@@ -196,65 +197,65 @@ pub fn verify(bytes: &[u8], integrity: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "{PACKAGE} does not match the registry's integrity: what was downloaded is not what \
+            "{package} does not match the registry's integrity: what was downloaded is not what \
              was published, so nothing was read from it"
         ))
     }
 }
 
 /// The files in an npm tarball, paths relative to the package root.
-pub fn unpack(tarball: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub fn unpack(package: &str, tarball: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let gunzipped = flate2::read::GzDecoder::new(tarball).take(UNPACKED_LIMIT + 1);
     let mut archive = tar::Archive::new(gunzipped);
     let mut files = Vec::new();
     let mut total: u64 = 0;
     let entries = archive
         .entries()
-        .map_err(|e| format!("{PACKAGE} is not a tarball: {e}"))?;
+        .map_err(|e| format!("{package} is not a tarball: {e}"))?;
     for entry in entries {
-        let mut entry = entry.map_err(|e| format!("{PACKAGE}: a broken entry: {e}"))?;
+        let mut entry = entry.map_err(|e| format!("{package}: a broken entry: {e}"))?;
         let kind = entry.header().entry_type();
         if kind.is_dir() {
             continue;
         }
         let path = entry
             .path()
-            .map_err(|e| format!("{PACKAGE}: an unreadable path: {e}"))?
+            .map_err(|e| format!("{package}: an unreadable path: {e}"))?
             .into_owned();
         let shown = path.display().to_string();
         if !kind.is_file() {
-            return Err(format!("{PACKAGE}: {shown} is not a regular file"));
+            return Err(format!("{package}: {shown} is not a regular file"));
         }
         let mut parts = Vec::new();
         for component in path.components() {
             match component {
                 std::path::Component::Normal(part) => parts.push(
                     part.to_str()
-                        .ok_or_else(|| format!("{PACKAGE}: {shown} is not UTF-8"))?
+                        .ok_or_else(|| format!("{package}: {shown} is not UTF-8"))?
                         .to_string(),
                 ),
-                _ => return Err(format!("{PACKAGE}: {shown} leaves the package")),
+                _ => return Err(format!("{package}: {shown} leaves the package")),
             }
         }
         // npm packs everything under `package/`.
         if parts.first().map(String::as_str) != Some("package") || parts.len() < 2 {
-            return Err(format!("{PACKAGE}: {shown} is outside package/"));
+            return Err(format!("{package}: {shown} is outside package/"));
         }
         let relative = parts[1..].join("/");
         let size = entry
             .header()
             .size()
-            .map_err(|e| format!("{PACKAGE}: {shown}: {e}"))?;
+            .map_err(|e| format!("{package}: {shown}: {e}"))?;
         total += size;
         if total > UNPACKED_LIMIT || files.len() >= FILE_LIMIT {
             return Err(format!(
-                "{PACKAGE} unpacks to more than a templates package can be"
+                "{package} unpacks to more than a templates package can be"
             ));
         }
         let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
         entry
             .read_to_end(&mut bytes)
-            .map_err(|e| format!("{PACKAGE}: {shown}: {e}"))?;
+            .map_err(|e| format!("{package}: {shown}: {e}"))?;
         files.push((relative, bytes));
     }
     Ok(files)
@@ -297,6 +298,7 @@ mod tests {
         let mut deprecated = version(">=0.27.0");
         deprecated["deprecated"] = serde_json::json!("broken");
         let chosen = choose(
+            PACKAGE,
             &metadata(serde_json::json!({
                 "0.1.0": version(">=0.27.0"),
                 "0.2.0": version(">=0.27.0"),
@@ -318,6 +320,7 @@ mod tests {
     #[test]
     fn nothing_readable_says_how_to_read_it() {
         let err = choose(
+            PACKAGE,
             &metadata(serde_json::json!({ "0.4.0": version(">=0.30.0") })),
             "0.27.0",
             None,
@@ -337,13 +340,15 @@ mod tests {
             "0.4.0": version(">=0.30.0"),
         }));
         assert_eq!(
-            choose(&versions, "0.27.0", Some("0.1.0")).unwrap().version,
+            choose(PACKAGE, &versions, "0.27.0", Some("0.1.0"))
+                .unwrap()
+                .version,
             "0.1.0"
         );
-        let refused = choose(&versions, "0.27.0", Some("0.4.0")).unwrap_err();
+        let refused = choose(PACKAGE, &versions, "0.27.0", Some("0.4.0")).unwrap_err();
         assert!(refused.contains("needs esdev >=0.30.0"), "{refused}");
         assert!(
-            choose(&versions, "0.27.0", Some("9.9.9"))
+            choose(PACKAGE, &versions, "0.27.0", Some("9.9.9"))
                 .unwrap_err()
                 .contains("no ")
         );
@@ -376,14 +381,18 @@ mod tests {
             "sha512-{}",
             base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(bytes))
         );
-        assert!(verify(bytes, &good).is_ok());
-        assert!(verify(bytes, &format!("sha1-abc {good}")).is_ok());
+        assert!(verify(PACKAGE, bytes, &good).is_ok());
+        assert!(verify(PACKAGE, bytes, &format!("sha1-abc {good}")).is_ok());
         assert!(
-            verify(b"something else", &good)
+            verify(PACKAGE, b"something else", &good)
                 .unwrap_err()
                 .contains("not what was published")
         );
-        assert!(verify(bytes, "sha1-abc").unwrap_err().contains("no sha512"));
+        assert!(
+            verify(PACKAGE, bytes, "sha1-abc")
+                .unwrap_err()
+                .contains("no sha512")
+        );
     }
 
     fn tarball(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
@@ -410,14 +419,17 @@ mod tests {
 
     #[test]
     fn a_package_unpacks_its_regular_files_relative_to_its_root() {
-        let files = unpack(&tarball(&[
-            ("package/package.json", tar::EntryType::Regular, b"{}"),
-            (
-                "package/templates/api/template.json",
-                tar::EntryType::Regular,
-                b"{}",
-            ),
-        ]))
+        let files = unpack(
+            PACKAGE,
+            &tarball(&[
+                ("package/package.json", tar::EntryType::Regular, b"{}"),
+                (
+                    "package/templates/api/template.json",
+                    tar::EntryType::Regular,
+                    b"{}",
+                ),
+            ]),
+        )
         .unwrap();
         let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, ["package.json", "templates/api/template.json"]);
@@ -439,7 +451,7 @@ mod tests {
             ),
             ("other/file", tar::EntryType::Regular, "outside package/"),
         ] {
-            let err = unpack(&tarball(&[(path, kind, b"x")])).unwrap_err();
+            let err = unpack(PACKAGE, &tarball(&[(path, kind, b"x")])).unwrap_err();
             assert!(err.contains(why), "{path}: {err}");
         }
     }

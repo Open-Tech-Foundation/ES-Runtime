@@ -11,6 +11,15 @@ esdev create my-app --templates=0.1.0       # a pinned release
 esdev create my-app --from=./esdev-templates  # a local copy, for writing templates
 ```
 
+## Where the templates are
+
+A templates package says where its templates are in its `package.json` —
+`"esdev": { "templates": "templates" }` here, `"esdev/templates"` in
+`@opentf/create-afw` — and `engines.esdev` is the range of esdev versions that
+read its format. This package's `catalog.json` lists the other packages esdev
+reads beside it (`"packages": [ … ]`); a template name two packages define is
+refused.
+
 ## Layout
 
 ```text

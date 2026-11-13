@@ -504,8 +504,8 @@ OPTIONS:
     --no-proxy=<list>           Hosts reached directly (default: NO_PROXY)
     --templates=<version>       Use this release of @opentf/esdev-templates
                                 rather than the newest this esdev reads
-    --from=<dir>                Read the templates from a directory laid out
-                                as the package is: for writing a template
+    --from=<dir>                Read the templates from a package laid out on
+                                disk, for writing templates; repeatable
 
 What you get is a project that runs and one page — its name, what it was built
 with, and the file to edit — with its esdev.json written, its entry named by
@@ -1363,7 +1363,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     // the template is known: what a template asks is its own (D220).
     let mut options: Vec<create::OptionFlag> = Vec::new();
     let mut list = false;
-    let mut from: Option<std::path::PathBuf> = None;
+    let mut from: Vec<std::path::PathBuf> = Vec::new();
     let mut pinned: Option<String> = None;
     let mut manager: Option<String> = None;
     let mut install: Option<Option<String>> = None;
@@ -1387,7 +1387,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 reject_value(flag, value)?;
                 list = true;
             }
-            "--from" => from = Some(std::path::PathBuf::from(require_value(flag, value)?)),
+            "--from" => from.push(std::path::PathBuf::from(require_value(flag, value)?)),
             "--templates" => pinned = Some(require_value(flag, value)?.to_string()),
             "--template" => template = Some(require_value(flag, value)?.to_string()),
             "--package-manager" => {
@@ -1438,14 +1438,15 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             dir => dirs.push(dir.to_string()),
         }
     }
-    if from.is_some() && pinned.is_some() {
+    if !from.is_empty() && pinned.is_some() {
         return Err(format!(
             "--from and --templates both say where the templates come from; give one.\n\n{CREATE_USAGE}"
         ));
     }
-    let source = match from {
-        Some(dir) => create::TemplateSource::Dir(dir),
-        None => create::TemplateSource::Registry { pinned },
+    let source = if from.is_empty() {
+        create::TemplateSource::Registry { pinned }
+    } else {
+        create::TemplateSource::Dirs(from)
     };
     if list {
         return Ok(CreateConfig {

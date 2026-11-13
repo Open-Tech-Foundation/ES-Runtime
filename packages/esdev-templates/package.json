@@ -6,6 +6,9 @@
   "engines": {
     "esdev": ">=0.27.0"
   },
+  "esdev": {
+    "templates": "templates"
+  },
   "files": [
     "templates"
   ],

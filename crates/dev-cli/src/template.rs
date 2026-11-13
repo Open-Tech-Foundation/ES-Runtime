@@ -170,6 +170,11 @@ pub struct Script {
 pub struct Catalog {
     #[serde(default)]
     pub groups: Vec<Group>,
+    /// The other packages whose templates esdev reads beside these. Only
+    /// the root package's list is followed: the set of packages trusted to
+    /// write files into a project is one list, in one package (D220).
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 /// A menu entry that stands for several templates, and the menu behind it.
