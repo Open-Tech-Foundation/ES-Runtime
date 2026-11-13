@@ -63,7 +63,7 @@ command and replace each whole grant with what the service actually touches:
 
 ```sh
 esrun --allow-imports \
-      --allow-listen=8080 \
+      --allow-listen=0.0.0.0:8080 \
       --allow-net=db.internal:5432,api.stripe.com \
       --allow-env=PORT,DATABASE_URL,STRIPE_KEY \
       --allow-read=./public,./config \
@@ -145,7 +145,7 @@ with a non-zero exit status, like any other uncaught exception.
   inside one:
 
   ```sh
-  esrun --allow-listen=443 \
+  esrun --allow-listen=0.0.0.0:443 \
         --allow-read=/etc/letsencrypt/live/example.com \
         server.js
   ```

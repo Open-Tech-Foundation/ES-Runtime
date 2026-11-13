@@ -46,7 +46,7 @@ RUN /root/.es-runtime/bin/esdev build --minify
 FROM ghcr.io/open-tech-foundation/esrun:latest
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
-CMD ["--allow-listen=8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
+CMD ["--allow-listen=0.0.0.0:8080", "--allow-env=PORT", "--shutdown-grace=8000", "dist/server.js"]
 ```
 
 With a `.dockerignore` that keeps local output out of the build context:
@@ -85,7 +85,7 @@ not granted, so name exactly what the service needs: the port it listens on,
 the hosts it calls, the variables it reads.
 
 ```dockerfile
-CMD ["--allow-listen=8080", "--allow-net=api.example.com", "--allow-env=PORT,DATABASE_URL", "dist/server.js"]
+CMD ["--allow-listen=0.0.0.0:8080", "--allow-net=api.example.com", "--allow-env=PORT,DATABASE_URL", "dist/server.js"]
 ```
 
 [`esdev --trace-permissions`](/esdev/permissions) lists what a development run
@@ -147,7 +147,7 @@ Description=Example esrun service
 Image=ghcr.io/example/app:1.0.0
 PublishPort=8080:8080
 Environment=PORT=8080
-Exec=--allow-listen=8080 --allow-env=PORT --shutdown-grace=8000 dist/server.js
+Exec=--allow-listen=0.0.0.0:8080 --allow-env=PORT --shutdown-grace=8000 dist/server.js
 PodmanArgs=--memory=512m
 
 [Service]

@@ -244,7 +244,7 @@ UDP socket is a server and a client at once, so it is checked against both rathe
 than whichever one it was created under:
 
 ```sh
-esrun --allow-listen=5353 responder.js          # receive only
+esrun --allow-listen=0.0.0.0:5353 responder.js          # receive only
 esrun --allow-listen=127.0.0.1:0 \
       --allow-net=127.0.0.1:8125 statsd.js                 # send to one collector
 ```

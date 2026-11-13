@@ -38,6 +38,10 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **`esdev init` and the deploy hints grant an address, not a port**
+  (DECISIONS D221): `esrun --allow-listen=0.0.0.0:8080`. esdev reads grants
+  with esrun's grammar, so `esdev --deny-all --allow-listen=8080` is refused
+  the same way, naming the address to write.
 - **Templates can express combinations and conditional questions**
   (DECISIONS D220). Overlays nest — `_option/language/ts/_option/server/yes/…`
   is written only when both are chosen, and the most specific file wins. An

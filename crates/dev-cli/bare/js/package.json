@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build --minify",
-    "start": "esrun --allow-listen=8080 --allow-env=PORT dist/index.js",
+    "start": "esrun --allow-listen=0.0.0.0:8080 --allow-env=PORT dist/index.js",
     "test": "esdev test"
   },
   "devDependencies": {

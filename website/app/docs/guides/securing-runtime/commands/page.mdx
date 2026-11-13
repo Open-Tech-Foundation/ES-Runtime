@@ -14,7 +14,7 @@ nothing by default, so leave out `--allow-imports` and nothing but the file you
 named can run:
 
 ```sh
-esrun --allow-listen=8080 --allow-read=./public dist/server.js
+esrun --allow-listen=0.0.0.0:8080 --allow-read=./public dist/server.js
 ```
 
 A bundle that loads code at run time — a dynamic `import()` the build split

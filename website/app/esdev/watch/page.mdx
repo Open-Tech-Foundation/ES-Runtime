@@ -8,7 +8,7 @@ import { Callout } from "@opentf/afw-docs";
 # Watch mode
 
 ```sh
-esdev --watch --deny-all --allow-listen=8080 server.ts
+esdev --watch --deny-all --allow-listen=0.0.0.0:8080 server.ts
 ```
 
 The standalone watcher reruns an entry whenever its source changes. The

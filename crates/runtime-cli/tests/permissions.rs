@@ -893,15 +893,48 @@ fn allow_listen_binds_the_named_address_and_refuses_the_rest() {
     assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
 }
 
+/// A bare port would grant that port on any interface, and the program picks
+/// the interface: refused at startup, naming the addresses to write (D221).
 #[test]
-fn a_bare_port_in_a_listen_list_allows_any_interface() {
+fn a_bare_port_is_refused_at_startup_naming_the_addresses() {
+    for flag in ["--allow-listen=8080", "--allow-net=443"] {
+        let out = run(&["--deny-all", flag], "console.log('ran');");
+        let err = stderr(&out);
+        assert!(!out.status.success(), "{flag} was accepted");
+        assert!(!stdout(&out).contains("ran"), "{flag}: the program ran");
+        assert!(
+            err.contains("no address") && err.contains("0.0.0.0:") && err.contains("127.0.0.1:"),
+            "{flag}: {err}"
+        );
+    }
+}
+
+/// `0.0.0.0` grants a bind to every interface and nothing else: a program
+/// granted loopback cannot widen itself to every interface.
+#[test]
+fn a_listen_grant_is_the_interface_it_names() {
     let port = free_port();
     let out = run(
-        &["--deny-all", &format!("--allow-listen={port}")],
+        &["--deny-all", &format!("--allow-listen=127.0.0.1:{port}")],
+        &format!(
+            "import net from 'runtime:net'; \
+             try {{ await net.listen({{ port: {port}, hostname: '0.0.0.0' }}).addr; \
+                    console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.code); }}"
+        ),
+    );
+    let s = stdout(&out);
+    assert!(
+        !s.contains("NO THROW"),
+        "loopback granted every interface: {s}"
+    );
+    assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
+    let out = run(
+        &["--deny-all", &format!("--allow-listen=0.0.0.0:{port}")],
         &format!(
             "import net from 'runtime:net'; \
              const l = net.listen({{ port: {port}, hostname: '0.0.0.0' }}); \
-             console.log('bound'); await l.close();"
+             await l.addr; console.log('bound'); await l.close();"
         ),
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -940,7 +973,7 @@ fn a_malformed_address_is_an_argument_error() {
         let out = run(&["--deny-all", value], "console.log(1)");
         assert!(!out.status.success(), "{value} should be rejected");
         let s = stderr(&out);
-        assert!(s.contains("An entry is a host"), "{value}: {s}");
+        assert!(s.contains("An entry is an address"), "{value}: {s}");
     }
 }
 

@@ -25,7 +25,9 @@ pub fn scope_hint(cap: Capability) -> Option<&'static str> {
         Capability::Run => Some("program names, e.g. --allow-run=git,ls"),
         Capability::Env => Some("variable names, e.g. --allow-env=HOME,PATH"),
         Capability::Net => Some("hosts, e.g. --allow-net=api.example.com,db.internal:5432"),
-        Capability::NetListen => Some("bind addresses, e.g. --allow-listen=127.0.0.1:8080,8443"),
+        Capability::NetListen => {
+            Some("bind addresses, e.g. --allow-listen=0.0.0.0:8080,127.0.0.1:9090")
+        }
         // One inside the project and one outside it: a path inside narrows the
         // root jail, and a path outside adds that subtree (D54), which is the
         // only way a run reaches a TLS certificate or a CA bundle.
@@ -252,9 +254,10 @@ impl Permissions {
                     HostAllowlist::parse(&entries).map_err(|e| {
                         format!(
                             "{flag}: {e}\n\n\
-                             An entry is a host (`example.com`), a host and port \
-                             (`db.internal:5432`), a bare port (`8080`, any interface), or \
-                             an absolute Unix socket path (`unix:/run/app.sock`). \
+                             An entry is an address: a host and port (`0.0.0.0:8080`, \
+                             `db.internal:5432`), a host for any of its ports \
+                             (`example.com`), or an absolute Unix socket path \
+                             (`unix:/run/app.sock`). \
                              Bracket an IPv6 address that carries a port: `[::1]:8080`."
                         )
                     })?;

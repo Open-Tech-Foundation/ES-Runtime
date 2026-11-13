@@ -87,7 +87,7 @@ esrun grants nothing by default. Grant the directory, which covers everything
 under it:
 
 ```sh
-esrun --allow-read=dist/public --allow-listen=8080 dist/server.js
+esrun --allow-read=dist/public --allow-listen=0.0.0.0:8080 dist/server.js
 ```
 
 <Callout type="note" title="Two spellings of one directory">

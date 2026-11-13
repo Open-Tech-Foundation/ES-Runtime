@@ -299,7 +299,7 @@ the command that deploys the artifact.
 
 ```sh
 esdev build server.tsx --out=dist/server.js --minify
-esrun --allow-listen=8080 dist/server.js
+esrun --allow-listen=0.0.0.0:8080 dist/server.js
 ```
 
 For HTML entries, assets and CSS Modules, see [Browser builds](/esdev/build/browser).

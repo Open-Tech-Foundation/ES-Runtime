@@ -11,6 +11,11 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+### Changed
+
+- The server templates' `start` scripts grant an address,
+  `--allow-listen=0.0.0.0:3000`, as esrun now requires (ES-Runtime D221).
+
 ### Added
 
 - The first release on its own: the templates that were built into esdev

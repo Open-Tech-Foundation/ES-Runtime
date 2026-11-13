@@ -72,10 +72,6 @@ enum Entry {
     AnyPort(Host),
     /// `example.com:443` — that host, that port.
     Exact(Host, u16),
-    /// `8080` — any host, that port. Written for `--allow-listen`, where the
-    /// port is usually the whole intent and the interface is the deployment's
-    /// business.
-    AnyHost(u16),
     /// `unix:/run/app.sock` — that socket path, and no other.
     Path(PathBuf),
 }
@@ -87,8 +83,12 @@ pub struct HostAllowlist {
 }
 
 impl HostAllowlist {
-    /// Parses `entries` — each `host`, `host:port`, or a bare `port` — into a
+    /// Parses `entries` — each `host`, `host:port` or `unix:<path>` — into a
     /// list, or returns a message naming the entry that is malformed.
+    ///
+    /// **A bare port is refused** (D221): it would grant that port on any
+    /// host, and on a listener the program picks the interface, so the grant
+    /// would leave exposure to the code it exists to constrain.
     ///
     /// An IPv6 literal must be bracketed when it carries a port
     /// (`[::1]:8080`), exactly as it is in a URL; bare `::1` is a host.
@@ -111,7 +111,6 @@ impl HostAllowlist {
         self.entries.iter().any(|entry| match entry {
             Entry::AnyPort(h) => h.matches(host),
             Entry::Exact(h, p) => *p == port && h.matches(host),
-            Entry::AnyHost(p) => *p == port,
             Entry::Path(_) => false,
         })
     }
@@ -121,8 +120,7 @@ impl HostAllowlist {
     /// (on any port). So allowing `cluster0.example.net` permits
     /// `_mongodb._tcp.cluster0.example.net`, and `example.com` permits
     /// `_dmarc.example.com` — records *about* a host the program may reach.
-    /// A port-only entry names no host, and an IP entry is never a name, so
-    /// neither permits a query.
+    /// An IP entry is never a name, so it permits no query.
     pub fn permits_query(&self, name: &str) -> bool {
         let name = name.strip_suffix('.').unwrap_or(name);
         let mut host = name;
@@ -227,9 +225,13 @@ fn parse_entry(entry: &str) -> Result<Entry, String> {
             port => Ok(Entry::Exact(Host::Ip(ip), parse_port(entry, port)?)),
         };
     }
-    // A bare number is a port on any host: `--allow-listen=8080`.
+    // A bare number names a port and no host (D221).
     if !entry.is_empty() && entry.bytes().all(|b| b.is_ascii_digit()) {
-        return Ok(Entry::AnyHost(parse_port(entry, entry)?));
+        return Err(format!(
+            "{entry} is a port with no address — name the interface: \
+             0.0.0.0:{entry} for every interface (as a container binds), \
+             127.0.0.1:{entry} for loopback (behind a proxy), or the one address it uses"
+        ));
     }
     match entry.rsplit_once(':') {
         // `host:port`, unless the left half is itself part of an unbracketed
@@ -264,9 +266,13 @@ mod tests {
 
     #[test]
     fn a_dns_query_is_judged_by_the_host_it_is_about() {
-        let list =
-            HostAllowlist::parse(["cluster0.example.net", "example.com:25", "10.0.0.1", "8080"])
-                .unwrap();
+        let list = HostAllowlist::parse([
+            "cluster0.example.net",
+            "example.com:25",
+            "10.0.0.1",
+            "0.0.0.0:8080",
+        ])
+        .unwrap();
         assert!(list.permits_query("cluster0.example.net"));
         assert!(list.permits_query("_mongodb._tcp.cluster0.example.net"));
         assert!(
@@ -304,7 +310,7 @@ mod tests {
         assert!(!allow.permits("unix", 0));
         assert!(!allow.permits("/var/run/docker.sock", 0));
         // A host entry never admits a path.
-        assert!(!list(&["db.internal", "8080"]).permits_path(Path::new("/tmp/a.sock")));
+        assert!(!list(&["db.internal", "0.0.0.0:8080"]).permits_path(Path::new("/tmp/a.sock")));
     }
 
     #[test]
@@ -329,14 +335,31 @@ mod tests {
         assert!(!allow.permits("db.internal", 5433));
     }
 
+    /// A bare port grants that port on any host, and so is refused, naming
+    /// the addresses that say what was meant (D221).
     #[test]
-    fn a_bare_port_matches_any_host() {
-        // The `--allow-listen=8080` shape: the port is the intent, the
-        // interface is the deployment's business.
-        let allow = list(&["8080"]);
+    fn a_bare_port_is_refused_with_the_addresses_to_write() {
+        let err = HostAllowlist::parse(["8080"]).unwrap_err();
+        assert!(
+            err.contains("0.0.0.0:8080") && err.contains("127.0.0.1:8080"),
+            "{err}"
+        );
+    }
+
+    /// `0.0.0.0` is an address: it matches a bind to it, and not a bind to
+    /// loopback, which is a different exposure.
+    #[test]
+    fn every_interface_is_an_address_of_its_own() {
+        let allow = list(&["0.0.0.0:8080"]);
         assert!(allow.permits("0.0.0.0", 8080));
-        assert!(allow.permits("127.0.0.1", 8080));
-        assert!(!allow.permits("127.0.0.1", 9090));
+        assert!(!allow.permits("127.0.0.1", 8080));
+        assert!(!allow.permits("0.0.0.0", 9090));
+        let loopback = list(&["127.0.0.1:8080"]);
+        assert!(loopback.permits("127.0.0.1", 8080));
+        assert!(
+            !loopback.permits("0.0.0.0", 8080),
+            "loopback granted every interface"
+        );
     }
 
     #[test]
@@ -393,11 +416,12 @@ mod tests {
 
     #[test]
     fn entries_accumulate() {
-        let allow = list(&["example.com", "db.internal:5432", "8080"]);
+        let allow = list(&["example.com", "db.internal:5432", "0.0.0.0:8080"]);
         assert!(allow.permits("example.com", 443));
         assert!(allow.permits("db.internal", 5432));
-        assert!(allow.permits("anything", 8080));
-        assert!(!allow.permits("anything", 8081));
+        assert!(allow.permits("0.0.0.0", 8080));
+        assert!(!allow.permits("anything", 8080), "no entry admits any host");
+        assert!(!allow.permits("0.0.0.0", 8081));
     }
 
     #[test]

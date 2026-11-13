@@ -11,7 +11,7 @@ produced from your source. `esdev` stays on the build machine — it is
 
 ```sh
 esdev build --minify                                # on the build machine
-esrun --allow-listen=8080 dist/server.js            # on the server
+esrun --allow-listen=0.0.0.0:8080 dist/server.js            # on the server
 ```
 
 Every target follows the same steps:

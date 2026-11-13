@@ -84,7 +84,7 @@ all-or-nothing at the command line:
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-net=db.internal:5432 --allow-listen=8080 \
+      --allow-net=db.internal:5432 --allow-listen=0.0.0.0:8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
 ```

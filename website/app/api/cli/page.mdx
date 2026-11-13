@@ -122,13 +122,13 @@ esrun app.js
 esrun --allow-imports --allow-listen --allow-net server.js
 
 # ...and narrow those grants to what it actually touches
-esrun --allow-imports --allow-listen=8080 \
+esrun --allow-imports --allow-listen=0.0.0.0:8080 \
       --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
       --allow-read=./public --allow-write=./var/log \
       --allow-signals=SIGTERM server.js
 
 # A bundle needs no imports: without --allow-imports nothing but it can load
-esrun --allow-listen=8080 dist/server.js
+esrun --allow-listen=0.0.0.0:8080 dist/server.js
 
 # Grant everything except the network and subprocesses
 esrun --allow-all --deny-net --deny-run app.js
@@ -187,7 +187,7 @@ packages a program is made of is decided when it is built — see
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-net=db.internal:5432 --allow-listen=8080 \
+      --allow-net=db.internal:5432 --allow-listen=0.0.0.0:8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
 ```
@@ -202,8 +202,11 @@ esrun --allow-imports --allow-env=PORT,DATABASE_URL \
 | `--allow-run=<programs>` | spawning those programs | fails to spawn |
 | `--allow-signals=<names>` | watching those signals | refused, and hidden from `signals()` |
 
-An **address** is a host (any port), a `host:port`, a bare port (any
-interface), or `unix:` and an absolute socket path (`unix:/run/app.sock`).
+An **address** is a `host:port` (`0.0.0.0:8080`), a host for any of its ports
+(`example.com`), or `unix:` and an absolute socket path (`unix:/run/app.sock`).
+A port alone is refused: a listener's interface decides who can reach it, so
+the grant names it — `0.0.0.0:8080` for every interface, as a container binds,
+`127.0.0.1:8080` behind a proxy on the same host.
 Bracket IPv6 that carries a port: `[::1]:8080`. A socket path must be named:
 the bare `--allow-net` and `--allow-listen` do not cover paths, `--allow-all` does. Matching is exact —
 `example.com` does not admit `api.example.com`, and there are no wildcards — and

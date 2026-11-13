@@ -186,7 +186,7 @@ fn directory(project: &crate::settings::Settings) -> Result<PathBuf, String> {
                 "this project builds no site to preview — \"{name}\" writes a server.\n\n\
                  A server bundle is run rather than served, and it is run by the \
                  binary that will run it in production:\n\n  \
-                 esrun --allow-listen=8080 dist/server.js"
+                 esrun --allow-listen=0.0.0.0:8080 dist/server.js"
             ),
             None => "this project builds nothing to preview.".to_string(),
         });

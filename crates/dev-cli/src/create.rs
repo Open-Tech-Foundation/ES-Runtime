@@ -3129,7 +3129,12 @@ mod tests {
                         if let Some(start) = manifest["scripts"]["start"].as_str()
                             && let Some(grant) = start.split("--allow-listen=").nth(1)
                         {
-                            assert!(grant.starts_with("3000"), "{at}: start grants {start}");
+                            // An address, not a port (D221): every interface,
+                            // as `serve()` binds by default.
+                            assert!(
+                                grant.starts_with("0.0.0.0:3000 "),
+                                "{at}: start grants {start}"
+                            );
                         }
                         for (path, contents) in &files {
                             let source = String::from_utf8_lossy(contents);

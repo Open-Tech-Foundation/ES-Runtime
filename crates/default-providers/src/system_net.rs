@@ -2836,8 +2836,9 @@ mod unix_socket_tests {
         assert!(err.to_string().contains("--allow-net=unix:"), "{err}");
 
         // A list naming another path, or only hosts.
-        let other = SystemNet::new()
-            .with_listen_allowlist(HostAllowlist::parse(["unix:/tmp/other.sock", "8080"]).unwrap());
+        let other = SystemNet::new().with_listen_allowlist(
+            HostAllowlist::parse(["unix:/tmp/other.sock", "0.0.0.0:8080"]).unwrap(),
+        );
         let err = other.listen_unix(path.clone()).await.err().unwrap();
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
 

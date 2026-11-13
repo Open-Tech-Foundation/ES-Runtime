@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build",
-    "start": "esrun --allow-read --allow-net --allow-listen=3000 --allow-env=PORT --allow-imports dist/server.js",
+    "start": "esrun --allow-read --allow-net --allow-listen=0.0.0.0:3000 --allow-env=PORT --allow-imports dist/server.js",
     "test": "esdev test"
   },
   "dependencies": {

@@ -1065,7 +1065,7 @@ than ignored, so a run is never narrower on the command line than in reality:
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-net=db.internal:5432 --allow-listen=8080 \
+      --allow-net=db.internal:5432 --allow-listen=0.0.0.0:8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
 ```
@@ -1096,9 +1096,11 @@ on Linux and macOS, ignoring case on Windows, where `--allow-env=PATH` grants
 the variable the OS spells `Path`. Windows holds one variable per name whatever
 its case, so a grant still reaches exactly one variable.
 
-**An address** is a host (any port), a `host:port`, a bare port (any
-interface — usually what a `--allow-listen` wants), or `unix:` and an absolute
-Unix socket path (`unix:/var/run/docker.sock`). Bracket an IPv6 literal that
+**An address** is a `host:port` (`0.0.0.0:8080`, `db.internal:5432`), a host
+for any of its ports (`example.com`), or `unix:` and an absolute Unix socket
+path (`unix:/var/run/docker.sock`). A port alone is refused (D221): the
+interface decides who can reach a listener, so the grant names it —
+`0.0.0.0:8080` for every interface, `127.0.0.1:8080` behind a proxy. Bracket an IPv6 literal that
 carries a port: `[::1]:8080`. A socket path is only ever reached by naming it: a
 bare `--allow-net` or `--allow-listen` covers network addresses, not paths. Matching is exact and never widens:
 `--allow-net=example.com` does not admit `api.example.com`, and there are no

@@ -46,7 +46,7 @@ implementation shared by both binaries.
 
 ```sh
 esdev server.ts                              # everything granted
-esdev --deny-all --allow-listen=8080 server.ts   # ...or exactly esrun's grant
+esdev --deny-all --allow-listen=0.0.0.0:8080 server.ts   # ...or exactly esrun's grant
 ```
 
 Outbound traffic follows your machine's proxy: `esdev` reads `HTTPS_PROXY`,

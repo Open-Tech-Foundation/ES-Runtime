@@ -189,7 +189,7 @@ fn an_ignored_failed_socket_does_not_take_the_process_down() {
 fn a_bind_failure_handled_through_accept_does_not_also_fail_the_run() {
     // Listener.addr is the same shape as Socket.opened.
     let out = esrun_with(
-        &["--deny-all", "--allow-listen=9"],
+        &["--deny-all", "--allow-listen=127.0.0.1:9"],
         "import { listen } from 'runtime:net'; \
          const l = listen({ port: 8123 }); \
          try { await l.accept(); } catch (e) { console.log('caught:' + e.code); } \

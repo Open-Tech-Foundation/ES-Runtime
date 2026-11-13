@@ -84,7 +84,7 @@ serve({
 services:
   app:
     build: .
-    command: ["--allow-listen=8443", "--allow-read=/run/secrets", "dist/server.js"]
+    command: ["--allow-listen=0.0.0.0:8443", "--allow-read=/run/secrets", "dist/server.js"]
     ports: ["443:8443"]
     secrets: [cert.pem, key.pem]
 

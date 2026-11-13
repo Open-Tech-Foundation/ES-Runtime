@@ -54,7 +54,7 @@ services:
       PORT: "8080"
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD}@db:5432/app
     command:
-      - --allow-listen=8080
+      - --allow-listen=0.0.0.0:8080
       - --allow-net=db:5432
       - --allow-env=PORT,DATABASE_URL
       - --shutdown-grace=8000

@@ -13,8 +13,8 @@
 //! that grant can go:
 //!
 //! ```text
-//! unbundled:  esrun --allow-imports --allow-listen=8080 app.js
-//! bundled:    esrun --allow-listen=8080 dist/app.js
+//! unbundled:  esrun --allow-imports --allow-listen=0.0.0.0:8080 app.js
+//! bundled:    esrun --allow-listen=0.0.0.0:8080 dist/app.js
 //! ```
 //!
 //! A bundle that code-splits is the exception. A dynamic `import()` becomes a
@@ -23,7 +23,7 @@
 //! resolve, so that build needs the grant as well:
 //!
 //! ```text
-//! split:      esrun --allow-imports --allow-listen=8080 dist/app.js
+//! split:      esrun --allow-imports --allow-listen=0.0.0.0:8080 dist/app.js
 //! ```
 //!
 //! Four settings are what make this a command rather than a note in the README

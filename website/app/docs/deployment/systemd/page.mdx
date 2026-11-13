@@ -39,7 +39,7 @@ Wants=network-online.target
 Type=exec
 WorkingDirectory=/opt/app
 Environment=PORT=8080
-ExecStart=/usr/local/bin/esrun --allow-listen=8080 --allow-env=PORT --shutdown-grace=8000 dist/server.js
+ExecStart=/usr/local/bin/esrun --allow-listen=0.0.0.0:8080 --allow-env=PORT --shutdown-grace=8000 dist/server.js
 Restart=on-failure
 TimeoutStopSec=10
 SuccessExitStatus=143
@@ -96,7 +96,7 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ```
 
-and grant the port: `--allow-listen=80`.
+and grant the port: `--allow-listen=0.0.0.0:80`.
 
 ## Writing files
 
@@ -106,7 +106,7 @@ outside the working directory:
 
 ```ini
 StateDirectory=app
-ExecStart=/usr/local/bin/esrun --allow-listen=8080 --allow-read=/var/lib/app --allow-write=/var/lib/app dist/server.js
+ExecStart=/usr/local/bin/esrun --allow-listen=0.0.0.0:8080 --allow-read=/var/lib/app --allow-write=/var/lib/app dist/server.js
 ```
 
 systemd creates `/var/lib/app`, owned by the service's dynamic user.

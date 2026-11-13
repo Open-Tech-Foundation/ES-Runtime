@@ -39,6 +39,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **Breaking: a network grant names an address** (DECISIONS D221). A bare
+  port in `--allow-listen` or `--allow-net` (`--allow-listen=8080`) granted
+  that port on *any* host — and since a program chooses the interface it
+  binds, a service meant to sit behind a proxy on loopback could bind every
+  interface under it. It is now refused at startup, naming the addresses to
+  write instead: `--allow-listen=0.0.0.0:8080` for every interface, as a
+  container binds, or `--allow-listen=127.0.0.1:8080` behind a proxy on the
+  same host. `0.0.0.0` matches a bind to `0.0.0.0` and nothing else.
+
 - `es-runtime-default-providers`: the HTTP client is the `client` module
   (DECISIONS D218) — `client::HttpClient`, `client::Outbound`, and the HTTP
   types under `client::types` — in place of `http_client` and `http_types`.
