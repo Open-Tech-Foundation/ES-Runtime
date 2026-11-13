@@ -128,8 +128,13 @@ pub struct FileRun {
     /// How source is read: the project's `jsx`, aliases and plugins.
     pub source: crate::settings::Source,
 
-    /// Install the esdev-only DOM realm before the test module evaluates.
+    /// Install the esdev-only DOM realm before the test module evaluates:
+    /// `--dom`, for every file.
     pub dom: bool,
+    /// `test.dom`: the files that get it without `--dom` — globs relative to
+    /// the project root (D225).
+    #[serde(default)]
+    pub dom_files: Vec<String>,
     /// Run only the tests whose full name matches, from `-t`.
     pub name_pattern: Option<String>,
     /// Skip the tests whose full name matches.
@@ -211,7 +216,51 @@ pub fn remove_settings() {
     let _ = std::fs::remove_file(settings_path());
 }
 
+/// One `test.dom` pattern. `*` stays within a directory and `**` crosses
+/// them, so `src/components/**` is a folder and `**/*.dom.test.ts` a naming
+/// convention.
+pub fn dom_glob(pattern: &str) -> Result<globset::GlobMatcher, String> {
+    globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+        .map_err(|e| format!("{pattern:?} is not a glob: {e}"))
+}
+
+/// Whether a `test.dom` pattern names `relative`, a `/`-separated path from
+/// the project root.
+fn dom_match(patterns: &[String], relative: &str) -> bool {
+    patterns
+        .iter()
+        .filter_map(|pattern| dom_glob(pattern).ok())
+        .any(|glob| glob.is_match(relative))
+}
+
 impl FileRun {
+    /// Whether `file` runs with the DOM realm: `--dom`, or a `test.dom` glob
+    /// naming it, matched against its path from the project root.
+    pub fn dom_for(&self, file: &Path) -> bool {
+        if self.dom {
+            return true;
+        }
+        if self.dom_files.is_empty() {
+            return false;
+        }
+        let absolute = es_runtime_default_providers::path::canonicalize(file)
+            .unwrap_or_else(|_| file.to_path_buf());
+        let root = es_runtime_default_providers::path::canonicalize(&self.source.root)
+            .unwrap_or_else(|_| self.source.root.clone());
+        let Ok(relative) = absolute.strip_prefix(&root) else {
+            return false;
+        };
+        let relative = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        dom_match(&self.dom_files, &relative)
+    }
+
     /// Writes this for the children of a run to read with `--_settings`.
     pub fn write(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self)
@@ -1338,6 +1387,33 @@ fn is_run_file(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A folder, a naming convention, and `*` within one directory (D225).
+    #[test]
+    fn a_test_dom_glob_names_a_folder_or_a_convention() {
+        let patterns = vec![
+            "src/ui/**".to_string(),
+            "**/*.dom.test.ts".to_string(),
+            "e2e/*.test.ts".to_string(),
+        ];
+        for yes in [
+            "src/ui/button.test.ts",
+            "src/ui/deep/x.test.ts",
+            "lib/form.dom.test.ts",
+            "e2e/a.test.ts",
+        ] {
+            assert!(dom_match(&patterns, yes), "{yes}");
+        }
+        for no in [
+            "src/lib/math.test.ts",
+            "src/uix/a.test.ts",
+            "e2e/nested/a.test.ts",
+            "lib/form.test.ts",
+        ] {
+            assert!(!dom_match(&patterns, no), "{no}");
+        }
+        assert!(dom_glob("src/[ui").is_err());
+    }
+
     /// What a child reads is what the parent resolved: the project's source
     /// settings and the flags, whole.
     #[test]
@@ -1364,6 +1440,7 @@ mod tests {
                 tsconfig: Some(PathBuf::from("/p/jsconfig.json")),
             },
             dom: true,
+            dom_files: vec!["src/**".to_string()],
             setup: vec!["file:///p/setup.ts".to_string()],
             provided: Some(PathBuf::from("/tmp/provided.json")),
             quiet: true,

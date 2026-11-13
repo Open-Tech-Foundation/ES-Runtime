@@ -2010,6 +2010,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
         run: test::FileRun {
             source: settings::Source::default(),
             dom,
+            dom_files: Vec::new(),
             setup,
             provided,
             quiet,
@@ -2972,14 +2973,16 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     // from the `runtime:test` the file imported. What makes this a *test*
     // run is what `finish()` finds afterwards, not anything done to the
     // source.
-    let stripper = if config.run.setup.is_empty() && !config.run.dom {
+    // `--dom`, or a `test.dom` glob naming this file (D225).
+    let dom = config.run.dom_for(std::path::Path::new(&file));
+    let stripper = if config.run.setup.is_empty() && !dom {
         TypeStripper::new()
     } else {
         let entry = es_runtime_default_providers::path::canonicalize(&file)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(&file));
         TypeStripper::before_with(
             &entry,
-            config.run.dom.then(|| "runtime:dom".to_string()),
+            dom.then(|| "runtime:dom".to_string()),
             config.run.setup.clone(),
         )
     };
@@ -3011,9 +3014,9 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
                 ..RunOptions::default()
             },
             stripper,
-            extensions: guest::test_extensions(config.run.dom),
+            extensions: guest::test_extensions(dom),
             observer: None,
-            site: test::site(config.run.dom),
+            site: test::site(dom),
         })
         .await;
     let mut run = match run {
@@ -3155,8 +3158,24 @@ pub(crate) async fn run_tests_unisolated(
         config.run.full_diff,
         config.run.snapshot_prune,
     );
+    // One process, one realm: every file has the DOM or none does (D225).
+    let with_dom = files.iter().filter(|file| config.run.dom_for(file)).count();
+    if with_dom != 0 && with_dom != files.len() {
+        let (some, other) = (
+            files.iter().find(|file| config.run.dom_for(file)),
+            files.iter().find(|file| !config.run.dom_for(file)),
+        );
+        print_error(&format!(
+            "`test.dom` gives {} the DOM and not {}, and --isolation=none runs every file \
+             in one realm.\n\nDrop --isolation=none, or select only files that agree.",
+            some.map_or_else(String::new, |f| f.display().to_string()),
+            other.map_or_else(String::new, |f| f.display().to_string()),
+        ));
+        return ExitCode::FAILURE;
+    }
+    let dom = with_dom != 0;
     let mut source = String::new();
-    if config.run.dom {
+    if dom {
         source.push_str("import \"runtime:dom\";");
     }
     source.push_str("import { __setTestFile } from \"runtime:test\";");
@@ -3219,9 +3238,9 @@ pub(crate) async fn run_tests_unisolated(
                 ..RunOptions::default()
             },
             stripper: TypeStripper::new(),
-            extensions: guest::test_extensions(config.run.dom),
+            extensions: guest::test_extensions(dom),
             observer: None,
-            site: test::site(config.run.dom),
+            site: test::site(dom),
         })
         .await;
     let mut run = match run {

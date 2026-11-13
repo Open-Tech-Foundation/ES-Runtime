@@ -28,6 +28,9 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **`test.dom`: which test files get the DOM** (DECISIONS D225) — globs
+  relative to the project, a folder (`src/components/**`) or a convention
+  (`**/*.dom.test.ts`); `--dom` still gives it to every file.
 - **`dev.targets`: targets only `esdev start` builds** (DECISIONS D224). They
   take a build target's keys (not `then`), `dev.run` and `dev.servers` may run
   one, and `esdev build` never builds them — so a static site can render on a

@@ -21510,3 +21510,53 @@ try {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `test.dom` gives the DOM to the files its globs name — a folder, a naming
+/// convention — and to no others; `--isolation=none`, one realm for every
+/// file, refuses a set that disagrees (D225).
+#[test]
+fn test_dom_globs_give_the_dom_to_the_files_they_name() {
+    let dir = build_dir("test_dom_globs");
+    for sub in ["src/ui", "src/lib"] {
+        std::fs::create_dir_all(dir.join(sub)).expect("mkdir");
+    }
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "test": { "dom": ["src/ui/**", "**/*.dom.test.js"] } }"#,
+    );
+    let with = "import { test, assertEquals } from 'runtime:test';\n\
+                test('has a document', () => { assertEquals(typeof document, 'object'); });\n";
+    let without = "import { test, assertEquals } from 'runtime:test';\n\
+                   test('has no document', () => { assertEquals(typeof document, 'undefined'); });\n";
+    write_in(&dir, "src/ui/button.test.js", with);
+    write_in(&dir, "src/lib/form.dom.test.js", with);
+    write_in(&dir, "src/lib/math.test.js", without);
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(ran.status.success(), "{}{}", stdout(&ran), stderr(&ran));
+    let report = format!("{}{}", stdout(&ran), stderr(&ran));
+    assert!(report.contains("3 files passed"), "{report}");
+
+    let shared = esdev_in(&dir)
+        .args(["test", "--isolation=none"])
+        .output()
+        .expect("spawn esdev test --isolation=none");
+    assert!(!shared.status.success(), "a split set shared one realm");
+    assert!(
+        stderr(&shared).contains("--isolation=none runs every file in one realm"),
+        "{}",
+        stderr(&shared)
+    );
+
+    write_in(&dir, "esdev.json", r#"{ "test": { "dom": ["src/[ui"] } }"#);
+    let bad = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!bad.status.success());
+    assert!(stderr(&bad).contains("`test`'s `dom`"), "{}", stderr(&bad));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -4704,3 +4704,11 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 **Rejected:** a `"dev": true` flag on a `build.targets` entry (AFW's sketch) — it makes `build.targets` mean "what is deployed, except the flagged ones", which every reader of that section then has to check for. A dev-server renderer inside esdev — rendering is the framework's; esdev gives it a target and runs it (generic for every plugin).
 
 **Consequences:** a static AFW site can render its pages on a server in development and still release a plain static directory.
+
+### D225 — `test.dom`: the DOM for the files a project names · *Accepted (2026-11-13)*
+
+**Context:** reported by AFW (optional). `--dom` gives esdev's DOM realm to every file of a run, so a project with component tests and server tests runs them as two commands, or gives its server tests a `document` they must not have. Jest and Vitest answer per file with a docblock (`@jest-environment jsdom`, `@vitest-environment`), and Vitest had `environmentMatchGlobs` by path — removed in Vitest 4 for `projects`, which configures whole groups (Vitest 4 migration guide).
+
+**Decision:** `test.dom` in `esdev.json`, a glob or a list of them, relative to the project root: the files they name get the DOM, the others do not. `*` stays within a directory and `**` crosses them, so one key covers a folder and a naming convention. `--dom` still means every file. An invalid glob is refused when the file is read. Under `--isolation=none` all files share one realm, so a set the globs split is refused, as a file declaring its own `@permissions` is.
+
+**Rejected:** a per-file docblock — a second place a test's environment is decided, found only by opening each file; the path is what a project already organises by. `projects`-style groups — a whole second configuration for one boolean.

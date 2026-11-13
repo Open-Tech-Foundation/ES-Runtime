@@ -12,6 +12,17 @@ esdev test --dom
 esdev test --dom --file=src/button.test.ts
 ```
 
+To give the DOM to some files and not others, name them in `esdev.json` — a
+folder, or a naming convention:
+
+```json
+{ "test": { "dom": ["src/components/**", "**/*.dom.test.ts"] } }
+```
+
+Globs are relative to the project root; `*` stays within a directory and `**`
+crosses them. `--dom` still gives it to every file. Under `--isolation=none`
+every file shares one realm, so a set the globs split is refused.
+
 `--dom` is deliberately test-runner-only. It creates a fresh in-memory DOM
 realm for every test file; normal `esdev` programs do not receive `window` or
 `document`. Fresh realms prevent event listeners, custom-element registrations,

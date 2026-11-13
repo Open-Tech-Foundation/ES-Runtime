@@ -219,6 +219,9 @@ pub struct TestSettings {
     /// Whether a test naming a tag not defined here is an error. `None` is
     /// on: a misspelt tag is otherwise a test no filter ever selects.
     pub strict_tags: Option<bool>,
+    /// `test.dom`: globs, relative to the project, of the test files that run
+    /// with esdev's DOM realm — as `--dom` gives every file (D225).
+    pub dom: Vec<String>,
 }
 
 /// One entry of `test.tags`.
@@ -474,6 +477,7 @@ const TEST_KEYS: &[&str] = &[
     "tags",
     "strictTags",
     "maxConcurrency",
+    "dom",
 ];
 
 /// The keys a `test.tags` entry may carry.
@@ -993,7 +997,15 @@ fn read_test(value: Option<&Value>, file: &str) -> Result<TestSettings, String> 
             ));
         }
     };
+    let dom = match map.get("dom") {
+        Some(Value::String(one)) => vec![one.clone()],
+        other => string_array(other, file, "`test`'s `dom`")?,
+    };
+    for pattern in &dom {
+        crate::test::dom_glob(pattern).map_err(|e| format!("{file}: `test`'s `dom`: {e}"))?;
+    }
     Ok(TestSettings {
+        dom,
         max_concurrency,
         tags,
         strict_tags,

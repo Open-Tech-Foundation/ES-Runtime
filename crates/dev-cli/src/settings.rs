@@ -197,7 +197,9 @@ impl Settings {
             max_concurrency,
             tags,
             strict_tags,
+            dom,
         } = &self.test;
+        config.run.dom_files.clone_from(dom);
         // `--setup` and the project's `setup` name the same kind of module, so
         // they resolve the same way: against the project root, whichever was
         // given (the flag wins when both name one). A relative path left as it
