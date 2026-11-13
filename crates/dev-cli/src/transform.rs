@@ -43,6 +43,38 @@ pub struct TypeStripper {
     /// How JSX compiles. The project's `jsx` section, which a file's own pragma
     /// comments may still override.
     jsx: JsxSettings,
+    /// What `import.meta.env` is replaced with, as a JSON object — `esdev
+    /// test`'s, compiled in as a bundle's is (D226). `None` leaves it alone.
+    import_meta_env: Option<String>,
+}
+
+/// Replaces `import.meta.env` with an object, as a bundler's `define` does:
+/// `import.meta.env.PUBLIC_API_URL` and `const { MODE } = import.meta.env`
+/// read the replacement alike.
+struct ReplaceImportMetaEnv<'a> {
+    allocator: &'a oxc::allocator::Allocator,
+    replacement: oxc::ast::ast::Expression<'a>,
+    replaced: bool,
+}
+
+fn is_import_meta_env(expression: &oxc::ast::ast::Expression<'_>) -> bool {
+    use oxc::ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = expression else {
+        return false;
+    };
+    member.property.name == "env" && matches!(&member.object, Expression::ImportMeta(_))
+}
+
+impl<'a> oxc::ast_visit::VisitMut<'a> for ReplaceImportMetaEnv<'a> {
+    fn visit_expression(&mut self, expression: &mut oxc::ast::ast::Expression<'a>) {
+        use oxc::allocator::CloneIn;
+        if is_import_meta_env(expression) {
+            *expression = self.replacement.clone_in(self.allocator);
+            self.replaced = true;
+            return;
+        }
+        oxc::ast_visit::walk_mut::walk_expression(self, expression);
+    }
 }
 
 /// Where the function a JSX element compiles into comes from.
@@ -507,6 +539,14 @@ impl TypeStripper {
         }
     }
 
+    /// Replaces `import.meta.env` in every module with `object`, a JSON
+    /// object (D226).
+    #[must_use]
+    pub fn with_import_meta_env(mut self, object: String) -> Self {
+        self.import_meta_env = Some(object);
+        self
+    }
+
     /// Names how JSX compiles on a stripper that already exists.
     #[must_use]
     pub fn compiling_jsx(mut self, jsx: JsxSettings) -> Self {
@@ -538,6 +578,7 @@ impl TypeStripper {
                 modules,
             )),
             jsx: JsxSettings::default(),
+            import_meta_env: None,
         }
     }
 
@@ -732,7 +773,11 @@ impl TypeStripper {
             Some(kind) => kind == "js",
             None => !needs_transform(path),
         };
-        if javascript && !source.contains("accessor") {
+        let env_text = self
+            .import_meta_env
+            .as_ref()
+            .filter(|_| source.contains("import.meta.env"));
+        if javascript && !source.contains("accessor") && env_text.is_none() {
             return Ok((
                 if prelude.is_empty() {
                     source
@@ -783,9 +828,26 @@ impl TypeStripper {
             }
             lowering.lowered
         };
+        let replaced = match env_text {
+            None => false,
+            Some(object) => {
+                use oxc::ast_visit::VisitMut;
+                let text = allocator.alloc_str(&format!("({object})"));
+                let replacement = Parser::new(&allocator, text, SourceType::mjs())
+                    .parse_expression()
+                    .map_err(|_| "esdev: import.meta.env is not an object".to_string())?;
+                let mut replacing = ReplaceImportMetaEnv {
+                    allocator: &allocator,
+                    replacement,
+                    replaced: false,
+                };
+                replacing.visit_program(&mut program);
+                replacing.replaced
+            }
+        };
         // The word was in a comment or a name, so this is the ordinary
         // JavaScript file it was before: hand back the bytes, not a reprint.
-        if javascript && !lowered {
+        if javascript && !lowered && !replaced {
             return Ok((
                 if prelude.is_empty() {
                     source
@@ -920,6 +982,43 @@ mod tests {
         .expect("an absolute path")
         .to_string();
         TypeStripper::new().transform(&inline, source.to_string())
+    }
+
+    /// `import.meta.env` is replaced where it is read, and nowhere else:
+    /// `import.meta.url` stays, and a file that never names it is returned
+    /// byte for byte (D226).
+    #[test]
+    fn import_meta_env_is_replaced_and_nothing_else_is() {
+        let stripper = TypeStripper::new()
+            .with_import_meta_env(r#"{"MODE":"test","PUBLIC_A":"a"}"#.to_string());
+        let out = stripper
+            .transform(
+                &specifier("env.js"),
+                "const a = import.meta.env.PUBLIC_A;\nconst { MODE } = import.meta.env;\nconst u = import.meta.url;\n".to_string(),
+            )
+            .expect("compiles");
+        assert!(!out.contains("import.meta.env"), "{out}");
+        assert!(
+            out.contains("PUBLIC_A") && out.contains("\"test\""),
+            "{out}"
+        );
+        assert!(out.contains("import.meta.url"), "{out}");
+
+        let untouched = "// no env here\nexport const x = 1;\n";
+        assert_eq!(
+            stripper
+                .transform(&specifier("plain.js"), untouched.to_string())
+                .unwrap(),
+            untouched
+        );
+        // Without the setting, nothing is replaced.
+        let off = TypeStripper::new()
+            .transform(
+                &specifier("off.js"),
+                "export const e = import.meta.env;\n".to_string(),
+            )
+            .unwrap();
+        assert!(off.contains("import.meta.env"), "{off}");
     }
 
     fn strip_with(jsx: JsxSettings, name: &str, source: &str) -> Result<String, String> {

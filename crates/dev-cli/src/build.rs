@@ -292,6 +292,13 @@ pub const PUBLIC_PREFIX: &str = "PUBLIC_";
 /// something undefined. The bundler takes the longest match, so the object never
 /// shadows the property.
 pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, String> {
+    Ok(compile_env(public_env(root)?, dev))
+}
+
+/// The `PUBLIC_*` values a build compiles in: the project's `.env`, then the
+/// process environment, later winning. Also what `esdev test` gives
+/// `import.meta.env` (D226).
+pub fn public_env(root: &Path) -> Result<Vec<(String, String)>, String> {
     let mut values: Vec<(String, String)> = Vec::new();
     let mut put = |name: String, value: String| match values
         .iter_mut()
@@ -321,7 +328,7 @@ pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, Stri
         }
     }
 
-    Ok(compile_env(values, dev))
+    Ok(values)
 }
 
 /// `import.meta.env` from the `PUBLIC_*` values a build was given, folded

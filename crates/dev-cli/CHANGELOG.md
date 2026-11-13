@@ -28,6 +28,9 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Added
 
+- **`import.meta.env` under `esdev test`** (DECISIONS D226): the `PUBLIC_*`
+  values a bundle has compiled in, from `.env` then the shell, with `MODE`
+  `"test"`, in every module a test loads.
 - **`test.dom`: which test files get the DOM** (DECISIONS D225) — globs
   relative to the project, a folder (`src/components/**`) or a convention
   (`**/*.dom.test.ts`); `--dom` still gives it to every file.

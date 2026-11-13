@@ -1,10 +1,11 @@
 // `import.meta.env`: the values `esdev build`, `esdev start` and the
-// `runtime:build` API compile into a bundle (DECISIONS D85).
+// `runtime:build` API compile into a bundle (DECISIONS D85), and `esdev test`
+// into each module it runs (D226).
 //
-// Compiled in, never read at run time: code run unbundled — by `esrun`, or by
-// `esdev` running or testing a source file — has no `import.meta.env`. A
-// deployment's configuration and secrets are read at run time through
-// `runtime:process`, under `--allow-env`.
+// Compiled in, never read at run time: code `esrun` runs unbundled, or
+// `esdev` runs as a program, has no `import.meta.env`. A deployment's
+// configuration and secrets are read at run time through `runtime:process`,
+// under `--allow-env`.
 
 /**
  * What a bundle was built with. Only variables named `PUBLIC_*` are compiled
@@ -20,9 +21,9 @@
  * ```
  */
 interface ImportMetaEnv {
-  /** `"development"` under `esdev start`, `"production"` in a release build. */
-  readonly MODE: "development" | "production";
-  /** `true` under `esdev start`. */
+  /** `"development"` under `esdev start`, `"production"` in a release build, `"test"` under `esdev test`. */
+  readonly MODE: "development" | "production" | "test";
+  /** `true` under `esdev start` and `esdev test`. */
   readonly DEV: boolean;
   /** `true` in a release build. */
   readonly PROD: boolean;

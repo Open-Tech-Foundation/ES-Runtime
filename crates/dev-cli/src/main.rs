@@ -2011,6 +2011,7 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
             source: settings::Source::default(),
             dom,
             dom_files: Vec::new(),
+            import_meta_env: None,
             setup,
             provided,
             quiet,
@@ -2986,6 +2987,11 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
             config.run.setup.clone(),
         )
     };
+    // `import.meta.env`, as a bundle has it compiled in (D226).
+    let stripper = match &config.run.import_meta_env {
+        Some(object) => stripper.with_import_meta_env(object.clone()),
+        None => stripper,
+    };
     // A rehearsal still applies here: this is also how every child of a
     // restricted parent executes, and the flags arrived on its command
     // line for exactly this run. A file that declares its own grant runs
@@ -3237,7 +3243,10 @@ pub(crate) async fn run_tests_unisolated(
                 proxy_from_env: true,
                 ..RunOptions::default()
             },
-            stripper: TypeStripper::new(),
+            stripper: match &config.run.import_meta_env {
+                Some(object) => TypeStripper::new().with_import_meta_env(object.clone()),
+                None => TypeStripper::new(),
+            },
             extensions: guest::test_extensions(dom),
             observer: None,
             site: test::site(dom),

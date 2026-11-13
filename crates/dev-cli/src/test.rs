@@ -135,6 +135,11 @@ pub struct FileRun {
     /// the project root (D225).
     #[serde(default)]
     pub dom_files: Vec<String>,
+    /// What `import.meta.env` reads in every module of the run, as a JSON
+    /// object: the `PUBLIC_*` values a build would compile in, and `MODE`
+    /// `"test"` (D226).
+    #[serde(default)]
+    pub import_meta_env: Option<String>,
     /// Run only the tests whose full name matches, from `-t`.
     pub name_pattern: Option<String>,
     /// Skip the tests whose full name matches.
@@ -1441,6 +1446,7 @@ mod tests {
             },
             dom: true,
             dom_files: vec!["src/**".to_string()],
+            import_meta_env: Some(r#"{"MODE":"test"}"#.to_string()),
             setup: vec!["file:///p/setup.ts".to_string()],
             provided: Some(PathBuf::from("/tmp/provided.json")),
             quiet: true,

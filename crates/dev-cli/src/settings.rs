@@ -200,6 +200,7 @@ impl Settings {
             dom,
         } = &self.test;
         config.run.dom_files.clone_from(dom);
+        config.run.import_meta_env = Some(test_import_meta_env(root)?);
         // `--setup` and the project's `setup` name the same kind of module, so
         // they resolve the same way: against the project root, whichever was
         // given (the flag wins when both name one). A relative path left as it
@@ -339,6 +340,20 @@ pub fn run_site() -> crate::contract::Site {
         platform: Some("server"),
         ..crate::contract::Site::default()
     }
+}
+
+/// `import.meta.env` under `esdev test` (D226): what `esdev start` compiles
+/// into a bundle — `PUBLIC_*` from `.env`, then the environment — with `MODE`
+/// `"test"`, `DEV` and not `PROD`, as Vitest gives a test.
+fn test_import_meta_env(root: &std::path::Path) -> Result<String, String> {
+    let mut object: serde_json::Map<String, serde_json::Value> = crate::build::public_env(root)?
+        .into_iter()
+        .map(|(name, value)| (name, serde_json::Value::String(value)))
+        .collect();
+    object.insert("MODE".to_string(), "test".into());
+    object.insert("DEV".to_string(), true.into());
+    object.insert("PROD".to_string(), false.into());
+    Ok(serde_json::Value::Object(object).to_string())
 }
 
 impl Source {

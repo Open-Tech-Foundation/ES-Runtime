@@ -41,6 +41,13 @@ build: `"react": "preact/compat"` under `resolve.alias` is for dependencies too.
 [`--changed` and `--related`](/esdev/test/running), so a change to `src/db.ts`
 selects the test that imports it as `@/db`.
 
+## `import.meta.env`
+
+A test and the source it imports read `import.meta.env` as a bundle does:
+`PUBLIC_*` from `.env`, then the shell, compiled in by esdev. `MODE` is
+`"test"`, `DEV` is `true` and `PROD` is `false`. Anything else, a secret
+included, is not there to read. See [`import.meta.env`](/esdev/build/project#importmetaenv).
+
 ## CommonJS packages
 
 `esdev` runs a CommonJS package without a build step. The first run that

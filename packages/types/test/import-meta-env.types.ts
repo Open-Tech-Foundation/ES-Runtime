@@ -3,7 +3,9 @@
 // `@ts-expect-error` fails the build when the error it names stops happening,
 // so a declaration that widened to `any` breaks this file rather than passing.
 
-const mode: "development" | "production" = import.meta.env.MODE;
+const mode: "development" | "production" | "test" = import.meta.env.MODE;
+// @ts-expect-error — `"test"` is a mode too
+const built: "development" | "production" = import.meta.env.MODE;
 const dev: boolean = import.meta.env.DEV;
 const prod: boolean = import.meta.env.PROD;
 
@@ -23,4 +25,4 @@ import.meta.env.MODE = "production";
 const { PUBLIC_REGION } = import.meta.env;
 const region: string | undefined = PUBLIC_REGION;
 
-export { api, dev, mode, prod, region, sure };
+export { api, built, dev, mode, prod, region, sure };

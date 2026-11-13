@@ -18,6 +18,7 @@ itself.
 - `import.meta.env` — `MODE`, `DEV`, `PROD` and `PUBLIC_*` names
   (`string | undefined`) — as `esdev build` compiles it into a bundle; the
   `ImportMetaEnv` interface merges, so a project can declare its own variables.
+  `MODE` includes `"test"`, what `esdev test` gives it.
 - `runtime:build`'s `mode` option (DECISIONS D223).
 
 - `import.meta.hot.on(event, cb)` and `off(event, cb)`, and the

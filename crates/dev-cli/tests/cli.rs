@@ -21560,3 +21560,59 @@ fn test_dom_globs_give_the_dom_to_the_files_they_name() {
     assert!(stderr(&bad).contains("`test`'s `dom`"), "{}", stderr(&bad));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Under `esdev test`, `import.meta.env` is what a bundle has compiled in —
+/// `PUBLIC_*` from `.env`, then the shell — with `MODE` `"test"`, in the test
+/// and in the source it imports, `.js` and `.ts` alike (D226).
+#[test]
+fn esdev_test_gives_import_meta_env_the_values_a_bundle_has() {
+    let dir = build_dir("test_import_meta_env");
+    std::fs::create_dir_all(dir.join("src")).expect("mkdir");
+    write_in(
+        &dir,
+        "package.json",
+        r#"{ "name": "app", "type": "module" }"#,
+    );
+    write_in(
+        &dir,
+        ".env",
+        "PUBLIC_API_URL=https://api.example\nPUBLIC_BOTH=file\nSECRET=never\n",
+    );
+    write_in(
+        &dir,
+        "src/config.js",
+        "export const api = import.meta.env.PUBLIC_API_URL;\nexport const { MODE } = import.meta.env;\n",
+    );
+    write_in(
+        &dir,
+        "src/flags.ts",
+        "export const both: string | undefined = import.meta.env.PUBLIC_BOTH;\n",
+    );
+    write_in(
+        &dir,
+        "src/config.test.ts",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import { api, MODE } from './config.js';\n\
+         import { both } from './flags.ts';\n\
+         test('env', () => {\n\
+           assertEquals([api, MODE, both, import.meta.env.PUBLIC_SHELL], ['https://api.example', 'test', 'shell', 'from-shell']);\n\
+           assertEquals([import.meta.env.DEV, import.meta.env.PROD, import.meta.env.SECRET], [true, false, undefined]);\n\
+         });\n",
+    );
+    for flags in [&[][..], &["--isolation=none"][..]] {
+        let ran = esdev_in(&dir)
+            .arg("test")
+            .args(flags)
+            .env("PUBLIC_SHELL", "from-shell")
+            .env("PUBLIC_BOTH", "shell")
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            ran.status.success(),
+            "{flags:?}\n{}{}",
+            stdout(&ran),
+            stderr(&ran)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

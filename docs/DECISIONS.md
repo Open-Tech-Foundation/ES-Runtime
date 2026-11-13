@@ -4712,3 +4712,11 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 **Decision:** `test.dom` in `esdev.json`, a glob or a list of them, relative to the project root: the files they name get the DOM, the others do not. `*` stays within a directory and `**` crosses them, so one key covers a folder and a naming convention. `--dom` still means every file. An invalid glob is refused when the file is read. Under `--isolation=none` all files share one realm, so a set the globs split is refused, as a file declaring its own `@permissions` is.
 
 **Rejected:** a per-file docblock — a second place a test's environment is decided, found only by opening each file; the path is what a project already organises by. `projects`-style groups — a whole second configuration for one boolean.
+
+### D226 — `import.meta.env` under `esdev test` · *Accepted (2026-11-13)*
+
+**Context:** reported by AFW (item 4): code that reads `import.meta.env.PUBLIC_API_URL` works in every bundle and reads `undefined` under `esdev test`, which runs source unbundled. It had been declined on the rule that unbundled runs get no run-time `import.meta.env` — a rule whose reason is production: a value appearing in code that esrun runs without `--allow-env`. `esdev test` never runs in production, and `PUBLIC_*` values are the ones a build already publishes into every bundle.
+
+**Decision:** in `esdev test`, every module a run loads — the test and the source it imports — has `import.meta.env` replaced at compile time, by esdev's own transform, with what `esdev start` would compile into a bundle: `PUBLIC_*` from `.env`, then the shell (the one function, `public_env`), and `MODE: "test"`, `DEV: true`, `PROD: false`, as Vitest gives a test. Nothing else is there to read. Only files that name `import.meta.env` are reprinted.
+
+**Rejected:** an `import.meta` hook in the engine — shared with esrun, and esrun stays exactly as it was. Reading each name through `runtime:process` under `--allow-env` — the values are the toolchain's to compile in, as `esdev build` compiles them with no grant; a test asking for a grant a bundle never needs would be the friction this exists to remove. Extending it to `esdev <file>` programs — not asked for; a program reads its configuration through `runtime:process`.
