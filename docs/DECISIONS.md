@@ -4664,3 +4664,15 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 - **A deprecation period.** Pre-1.0 (SPEC §14), and the failure is at startup, naming the fix — never a service that runs with a different exposure than before.
 
 **Consequences:** `esrun --allow-listen=8080 server.js` stops at startup with the address to write instead; every existing deployment line needs that one edit. A permission-denied message can name the exact grant that would allow the request, because every grant is now an address.
+
+### D222 — A project's `tsconfig.json` is inside the project · *Accepted (2026-11-13)*
+
+**Context:** reported by AFW as "a virtual module's bare import loads a second copy of a package": with their route table importing `clientRoute` from `@opentf/afw`, the esdev e2e page never hydrated. Measured in their fixture: the virtual module's import resolved to the fixture's installed `node_modules/@opentf/afw`, and the app's own files resolved the same specifier to `../../packages/afw/index.js` — the AFW monorepo's source. The fixture has no `tsconfig.json`; the resolver looks for the one nearest each file, walked past the project root, and applied the monorepo's root tsconfig, whose `paths` map `@opentf/afw` to `./packages/afw/index.js`. A virtual module has no file, so no tsconfig applied to it. Two copies of one runtime, and a page that never adopts its server render. The same unbounded search ran in the unbundled resolver behind `esdev test` and `esdev <file>`.
+
+**Decision:**
+- **A tsconfig applies to a project only from inside it.** With a `tsconfig.json` at the project root, a file finds its own as TypeScript does — the root's, or one nested inside the project. With none at the root, none applies; a root `jsconfig.json` still does, as it is named explicitly (D85). A tsconfig found outside the root never applies.
+- **The build and the unbundled resolver agree**, by the same rule, so a bundle and a test resolve a specifier to the same file.
+
+**Rejected:** resolving a virtual module's imports from the project root, which was written first and fixed the hang — but it treated the symptom: the app's files were the ones resolving wrongly, and its regression test passed without the fix, which is how it was found to be beside the point. Following the enclosing repository's tsconfig "as TypeScript would" — `tsc` run from inside a project does find a parent's config, but a build is not a typecheck, and silently rerouting a project's imports to source it never installed is the worse failure.
+
+**Consequences:** a project inside a monorepo resolves what it installed unless it says otherwise — with a `tsconfig.json` of its own, which may `extends` the monorepo's. The AFW e2e passes with the original `clientRoute` import restored (31 checks; it hung after 3).

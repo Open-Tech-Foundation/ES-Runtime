@@ -515,6 +515,29 @@ pub fn builder(
         .with_plugins(all))
 }
 
+/// Which `tsconfig.json` decides `paths` and `baseUrl` for a build.
+///
+/// A named one (a JavaScript project's `jsconfig.json`) is used as named. A
+/// project with a `tsconfig.json` at its root has its files find their own,
+/// as TypeScript does — the root's, or one nested inside the project, both
+/// found before anything above it. A project with none at its root has none
+/// searched for: the next `tsconfig.json` up the tree belongs to whatever
+/// encloses the project — a monorepo's, mapping its packages to their source —
+/// and applying its `paths` reroutes the project's imports to code it never
+/// installed, so one package loads twice (DECISIONS D222).
+fn project_tsconfig(
+    named: Option<&Path>,
+    root: Option<&Path>,
+) -> Option<rolldown_common::TsConfig> {
+    match (named, root) {
+        (Some(path), _) => Some(rolldown_common::TsConfig::Manual(path.to_path_buf())),
+        (None, Some(root)) if !root.join("tsconfig.json").is_file() => {
+            Some(rolldown_common::TsConfig::Auto(false))
+        }
+        (None, _) => None,
+    }
+}
+
 /// Translates a build into the bundler's own options. The only such
 /// translation in this binary, deliberately; [`builder`] is what uses it.
 pub fn translate(
@@ -628,10 +651,7 @@ pub fn translate(
             _ => TreeshakeOptions::default(),
         },
         transform: jsx_transform(&options.jsx_settings, options.jsx.refresh),
-        tsconfig: options
-            .tsconfig
-            .clone()
-            .map(rolldown_common::TsConfig::Manual),
+        tsconfig: project_tsconfig(options.tsconfig.as_deref(), options.cwd.as_deref()),
         experimental: options.hmr_runtime.as_ref().map(|implement| {
             rolldown_common::ExperimentalOptions {
                 dev_mode: Some(rolldown_common::DevModeOptions {

@@ -41,13 +41,26 @@ pub struct Aliases {
     project: Vec<(String, String)>,
     /// Finds the tsconfig that owns a file, and reads it as the build does.
     resolver: oxc_resolver::Resolver,
+    /// The project root, which a tsconfig must be inside to apply, and
+    /// whether the file to read was named rather than found (D222).
+    root: Option<PathBuf>,
+    named: bool,
 }
 
 impl Aliases {
     /// `tsconfig` names the one file to read, when looking would find none
     /// ([`crate::settings::Source::tsconfig`]); `None` finds the tsconfig that
     /// owns each importing file, as the build does.
-    pub fn new(project: Vec<(String, String)>, tsconfig: Option<PathBuf>) -> Aliases {
+    ///
+    /// `root` bounds the search, as the build bounds it (D222): with no
+    /// `tsconfig.json` at the root none applies, and one found outside the
+    /// root — an enclosing monorepo's — never does. `None` searches unbounded.
+    pub fn new(
+        project: Vec<(String, String)>,
+        tsconfig: Option<PathBuf>,
+        root: Option<PathBuf>,
+    ) -> Aliases {
+        let named = tsconfig.is_some();
         let discovery = match tsconfig {
             Some(config_file) => {
                 oxc_resolver::TsconfigDiscovery::Manual(oxc_resolver::TsconfigOptions {
@@ -63,6 +76,8 @@ impl Aliases {
                 tsconfig: Some(discovery),
                 ..oxc_resolver::ResolveOptions::default()
             }),
+            root,
+            named,
         }
     }
 
@@ -90,7 +105,19 @@ impl Aliases {
         {
             return None;
         }
+        if let Some(root) = &self.root
+            && !self.named
+            && !root.join("tsconfig.json").is_file()
+        {
+            return None;
+        }
         let tsconfig = self.resolver.find_tsconfig(importer).ok()??;
+        if let Some(root) = &self.root
+            && !self.named
+            && !tsconfig.path().starts_with(root)
+        {
+            return None;
+        }
         tsconfig
             .resolve_path_alias_or_base_url(specifier)
             .iter()
@@ -351,6 +378,7 @@ mod tests {
                 ("react".to_string(), "preact/compat".to_string()),
             ],
             None,
+            None,
         );
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
@@ -381,6 +409,7 @@ mod tests {
                 dir.join("src/config.ts").display().to_string(),
             )],
             None,
+            None,
         );
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
@@ -393,6 +422,44 @@ mod tests {
 
     /// `paths` from the file's tsconfig, through `extends`, taken only when it
     /// names a file.
+    /// A tsconfig above the project root is not the project's: its `paths`
+    /// never apply, and with no tsconfig at the root none does (D222). One at
+    /// the root still applies.
+    #[test]
+    fn a_tsconfig_above_the_project_root_never_applies() {
+        let dir = project(&[
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "shared": ["source/shared.ts"] } } }"#,
+            ),
+            ("source/shared.ts", ""),
+            ("app/src/main.ts", ""),
+            ("app/src/local.ts", ""),
+        ]);
+        let app = dir.join("app");
+        let from = url_of(&app.join("src/main.ts"));
+        let bounded = Aliases::new(Vec::new(), None, Some(app.clone()));
+        assert_eq!(
+            bounded.alias("shared", &from),
+            None,
+            "the enclosing tsconfig applied"
+        );
+        // Unbounded, it is found: the behaviour being guarded against.
+        let unbounded = Aliases::new(Vec::new(), None, None);
+        assert!(unbounded.alias("shared", &from).is_some());
+        // The project's own tsconfig applies.
+        std::fs::write(
+            app.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "shared": ["src/local.ts"] } } }"#,
+        )
+        .unwrap();
+        let own = Aliases::new(Vec::new(), None, Some(app.clone()));
+        assert_eq!(
+            own.alias("shared", &from),
+            Some(url_of(&app.join("src/local.ts")))
+        );
+    }
+
     #[test]
     fn tsconfig_paths_map_to_files_through_extends() {
         let dir = project(&[
@@ -405,7 +472,7 @@ mod tests {
             ("src/db/index.ts", ""),
             ("src/app.ts", ""),
         ]);
-        let aliases = Aliases::new(Vec::new(), None);
+        let aliases = Aliases::new(Vec::new(), None, None);
         let from = url_of(&dir.join("src/app.ts"));
         assert_eq!(
             aliases.alias("@/lib/two", &from),
@@ -437,7 +504,7 @@ mod tests {
             ("src/x.ts", ""),
             ("node_modules/dep/index.js", ""),
         ]);
-        let aliases = Aliases::new(Vec::new(), None);
+        let aliases = Aliases::new(Vec::new(), None, None);
         let from = url_of(&dir.join("node_modules/dep/index.js"));
         assert_eq!(aliases.alias("@/x", &from), None);
         std::fs::remove_dir_all(&dir).ok();
@@ -461,7 +528,7 @@ mod tests {
             ),
             ("app/own/pkg.js", ""),
         ]);
-        let aliases = Aliases::new(Vec::new(), None);
+        let aliases = Aliases::new(Vec::new(), None, None);
         let own = Some(url_of(&dir.join("app/own/pkg.js")));
         for importer in ["page.mdx", "page.jsx", "page.js", "page.vue", "page.ts"] {
             let from = url_of(&dir.join("app/src").join(importer));
@@ -486,7 +553,7 @@ mod tests {
             ),
             ("app/own/pkg.ts", ""),
         ]);
-        let aliases = Aliases::new(Vec::new(), None);
+        let aliases = Aliases::new(Vec::new(), None, None);
         let from = url_of(&dir.join("app/scripts/seed.ts"));
         assert_eq!(
             aliases.alias("pkg", &from),
@@ -515,7 +582,7 @@ mod tests {
             ),
             ("src/ui/card.jsx", ""),
         ]);
-        let aliases = Aliases::new(Vec::new(), None);
+        let aliases = Aliases::new(Vec::new(), None, None);
         let from = url_of(&dir.join("src/pages/post.mdx"));
         assert_eq!(
             aliases.alias("@/ui/card", &from),

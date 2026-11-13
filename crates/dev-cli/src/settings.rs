@@ -347,6 +347,7 @@ impl Source {
             alias: Arc::new(crate::alias::Aliases::new(
                 self.alias.clone(),
                 self.tsconfig.clone(),
+                Some(self.root.clone()),
             )),
             converter: crate::commonjs::converter(),
         }

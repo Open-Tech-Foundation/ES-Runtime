@@ -249,7 +249,7 @@ fn host(compiler: &str) -> Result<Arc<PluginHost>, String> {
         &serde_json::Value::String(compiler.to_string()).to_string(),
     );
     let resolution = crate::settings::Resolution {
-        alias: Arc::new(crate::alias::Aliases::new(Vec::new(), None)),
+        alias: Arc::new(crate::alias::Aliases::new(Vec::new(), None, None)),
         // A `@plugin` from npm is very often CommonJS.
         converter: crate::commonjs::converter(),
     };

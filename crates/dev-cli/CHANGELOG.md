@@ -45,6 +45,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   verified as the root is; one with no release this esdev reads is left out
   with a warning, and a template two packages define is refused. `--from` is
   repeatable.
+- **A `tsconfig.json` above the project no longer applies to it**
+  (DECISIONS D222). With no tsconfig at its root, a project inside a monorepo
+  picked up the monorepo's, and its `paths` rerouted the project's imports to
+  the monorepo's source — so a package loaded twice, once from there and once
+  from a virtual module that took the installed copy. Only a tsconfig inside
+  the project applies now, in builds and in `esdev test` alike.
 - **A plain stylesheet can import a package's** —
   `@import "@opentf/afw-docs/theme"` resolves through the package's `exports`
   (the `style` condition, else `default`) and through pnpm's links, and is

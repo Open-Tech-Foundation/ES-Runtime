@@ -21313,3 +21313,86 @@ await server.stop();
         stderr(&missing)
     );
 }
+
+/// A `tsconfig.json` above the project is not the project's: a monorepo's
+/// `paths` would reroute the project's imports to the monorepo's source, and
+/// a package the project installed would load twice. A project's own
+/// tsconfig still decides `paths` (DECISIONS D222).
+#[test]
+fn a_tsconfig_above_the_project_does_not_reroute_its_imports() {
+    let parent = build_dir("tsconfig_boundary");
+    let app = parent.join("app");
+    for sub in ["app/node_modules/shared", "app/src", "source"] {
+        std::fs::create_dir_all(parent.join(sub)).expect("mkdir");
+    }
+    // The enclosing repository: its tsconfig maps `shared` to its own source.
+    write_in(
+        &parent,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "shared": ["./source/shared.js"] } } }"#,
+    );
+    write_in(
+        &parent,
+        "source/shared.js",
+        "export const id = \"MONOREPO-SOURCE\";\n",
+    );
+    write_in(
+        &app,
+        "node_modules/shared/package.json",
+        r#"{ "name": "shared", "type": "module", "exports": "./index.js" }"#,
+    );
+    write_in(
+        &app,
+        "node_modules/shared/index.js",
+        "export const id = \"INSTALLED\";\n",
+    );
+    write_in(
+        &app,
+        "src/main.js",
+        "import { id } from \"shared\";\nconsole.log(id);\n",
+    );
+    write_in(
+        &app,
+        "package.json",
+        r#"{ "name": "app", "type": "module" }"#,
+    );
+    write_in(
+        &app,
+        "esdev.json",
+        r#"{ "build": { "targets": { "app": { "entry": "src/main.js", "out": "dist/main.js" } } } }"#,
+    );
+    let built = esdev_in(&app)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let bundle = std::fs::read_to_string(app.join("dist/main.js")).expect("the bundle");
+    assert!(bundle.contains("INSTALLED"), "{bundle}");
+    assert!(
+        !bundle.contains("MONOREPO-SOURCE"),
+        "the enclosing tsconfig rerouted it:\n{bundle}"
+    );
+
+    // With a tsconfig of its own, the project's `paths` apply.
+    write_in(
+        &app,
+        "tsconfig.json",
+        r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "shared": ["./src/local.js"] } } }"#,
+    );
+    write_in(
+        &app,
+        "src/local.js",
+        "export const id = \"PROJECT-PATH\";\n",
+    );
+    let built = esdev_in(&app)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+    let bundle = std::fs::read_to_string(app.join("dist/main.js")).expect("the bundle");
+    assert!(
+        bundle.contains("PROJECT-PATH"),
+        "the project's own paths: {bundle}"
+    );
+    let _ = std::fs::remove_dir_all(&parent);
+}
