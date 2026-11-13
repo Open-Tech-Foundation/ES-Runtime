@@ -59,6 +59,10 @@ pub struct Bundled {
     /// The `@import`s naming no file, each as the error it is unless a
     /// compiler claims the sheet. Left in place in `sheet`.
     missing: Vec<String>,
+    /// Whether a package `@import` is resolved here. Off for the first read:
+    /// in a sheet a compiler claims (`@import "tailwindcss"`) packages are the
+    /// compiler's, and inlining one would hide it from it.
+    resolve_packages: bool,
 }
 
 /// Reads `entry` and everything it imports.
@@ -67,21 +71,36 @@ pub struct Bundled {
 /// (Sass) or rewrote (PostCSS) rather than what is on disk (D149). Its
 /// `@import`s and `url()`s still resolve from the entry's own directory.
 pub fn bundle(entry: &Path, source: Option<String>) -> Result<Bundled, String> {
+    let first = read_all(entry, source.clone(), false)?;
+    if first.missing.is_empty() || crate::tailwind::uses(&first.sheet) {
+        return Ok(first);
+    }
+    // No compiler claims the sheet, so its package imports are esdev's to
+    // resolve (`@import "@acme/ui/theme"`): read again, resolving them. One
+    // that still names nothing is the error it always was.
+    let second = read_all(entry, source, true)?;
+    if let Some(missing) = second.missing.first() {
+        return Err(missing.clone());
+    }
+    Ok(second)
+}
+
+fn read_all(
+    entry: &Path,
+    source: Option<String>,
+    resolve_packages: bool,
+) -> Result<Bundled, String> {
     let mut out = Bundled {
         sheet: Stylesheet::default(),
         referenced: Vec::new(),
         sources: 0,
         read_files: Vec::new(),
         missing: Vec::new(),
+        resolve_packages,
     };
     let mut stack = Vec::new();
     let items = read(entry, source, &mut out, &mut stack)?;
     out.sheet.items = items;
-    if let Some(missing) = out.missing.first()
-        && !crate::tailwind::uses(&out.sheet)
-    {
-        return Err(missing.clone());
-    }
     Ok(out)
 }
 
@@ -169,7 +188,12 @@ fn inline_import(
         return Ok(());
     }
 
-    let target = dir.join(&url);
+    // A package's stylesheet (`@import "@acme/ui/theme"`) is found through its
+    // `exports`, as Vite finds it; a path is the file it names.
+    let target = match out.resolve_packages && !url.starts_with('.') {
+        true => package_stylesheet(dir, &url).unwrap_or_else(|| dir.join(&url)),
+        false => dir.join(&url),
+    };
     if !target.is_file() {
         let message = format!("{} imports {url}, which is not there.", display(dir));
         // A relative path that is not there is a mistake whoever reads the
@@ -474,6 +498,113 @@ fn reference(url: &str, dir: &Path, out: &mut Bundled) -> Result<Option<String>,
 
 /// Whether a URL names a file in the project rather than something the browser
 /// fetches from elsewhere.
+/// The stylesheet a package import names: `@scope/name/sub` found from
+/// `dir` up through `node_modules`, as Node finds a package, then through the
+/// package's `exports` with the `style` condition (Tailwind's and Vite's for
+/// a stylesheet), else `default`. Without `exports`, the subpath is a file in
+/// the package, and the package itself is its `style` field or `index.css`.
+///
+/// From the directory's real location, symlinks followed: under pnpm a
+/// package is a link into `node_modules/.pnpm`, and the packages it imports
+/// sit beside where it really is. The answer is that file's real path too, so
+/// what it imports in turn is found the same way.
+fn package_stylesheet(dir: &Path, url: &str) -> Option<PathBuf> {
+    let parts: Vec<&str> = url.split('/').collect();
+    let count = if url.starts_with('@') { 2 } else { 1 };
+    if parts.len() < count || parts.iter().any(|part| part.is_empty() || *part == "..") {
+        return None;
+    }
+    let name = parts[..count].join("/");
+    let rest = parts[count..].join("/");
+    let subpath = if rest.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{rest}")
+    };
+    let start = es_runtime_default_providers::path::canonicalize(dir).ok()?;
+    let mut at = Some(start.as_path());
+    while let Some(here) = at {
+        let package = here.join("node_modules").join(&name);
+        if let Ok(text) = std::fs::read_to_string(package.join("package.json")) {
+            let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let target = match manifest.get("exports") {
+                Some(exports) => stylesheet_export(exports, &subpath)?,
+                None if subpath == "." => manifest
+                    .get("style")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("index.css")
+                    .to_string(),
+                None => subpath.clone(),
+            };
+            let target = target.strip_prefix("./").unwrap_or(&target);
+            if target.split('/').any(|part| part == "..") {
+                return None;
+            }
+            let real =
+                es_runtime_default_providers::path::canonicalize(package.join(target)).ok()?;
+            let real_package = es_runtime_default_providers::path::canonicalize(&package).ok()?;
+            // Inside the package it was found as, and nowhere else.
+            return real.starts_with(&real_package).then_some(real);
+        }
+        at = here.parent();
+    }
+    None
+}
+
+/// What `exports` names for `subpath` under the stylesheet conditions.
+fn stylesheet_export(exports: &serde_json::Value, subpath: &str) -> Option<String> {
+    let keyed = exports
+        .as_object()
+        .is_some_and(|map| map.keys().any(|key| key.starts_with('.')));
+    let entry = if !keyed {
+        (subpath == ".").then(|| exports.clone())?
+    } else {
+        let map = exports.as_object()?;
+        match map.get(subpath) {
+            Some(entry) => entry.clone(),
+            None => map.iter().find_map(|(key, value)| {
+                let (before, after) = key.split_once('*')?;
+                let captured = subpath.strip_prefix(before)?.strip_suffix(after)?;
+                Some(substitute(value, captured))
+            })?,
+        }
+    };
+    stylesheet_condition(&entry)
+}
+
+/// A pattern's value with its `*` filled in.
+fn substitute(value: &serde_json::Value, captured: &str) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) => serde_json::Value::String(text.replace('*', captured)),
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| substitute(item, captured))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), substitute(item, captured)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// `style`, else `default`. Node requires `default` to be a condition
+/// object's last key, so this is "the first of the two in the author's
+/// order" for every valid manifest, without depending on key order here.
+fn stylesheet_condition(entry: &serde_json::Value) -> Option<String> {
+    match entry {
+        serde_json::Value::String(target) => Some(target.clone()),
+        serde_json::Value::Array(items) => items.iter().find_map(stylesheet_condition),
+        serde_json::Value::Object(map) => ["style", "default"]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(stylesheet_condition)),
+        _ => None,
+    }
+}
+
 fn is_local(url: &str) -> bool {
     !url.is_empty()
         && !url.starts_with('/')

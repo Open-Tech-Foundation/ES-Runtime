@@ -38,6 +38,14 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **A plain stylesheet can import a package's** —
+  `@import "@opentf/afw-docs/theme"` resolves through the package's `exports`
+  (the `style` condition, else `default`) and through pnpm's links, and is
+  refused if it leaves the package. It worked only in a sheet Tailwind
+  compiled.
+- **A page asked for during `esdev start`'s first build waits for it.** The
+  endpoint is bound before the build so a taken port fails at once; a request
+  in between was a 404 for a page that existed a moment later.
 - **`esdev init` and the deploy hints grant an address, not a port**
   (DECISIONS D221): `esrun --allow-listen=0.0.0.0:8080`. esdev reads grants
   with esrun's grammar, so `esdev --deny-all --allow-listen=8080` is refused

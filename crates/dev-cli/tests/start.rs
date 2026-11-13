@@ -579,3 +579,54 @@ fn a_page_with_nothing_built_shows_the_build_failure() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// The endpoint is bound before the first build, so a taken port fails at
+/// once; a page asked for while that build runs waits for it and is the page,
+/// never a 404 for a file that is about to exist.
+#[test]
+fn a_page_asked_for_during_the_first_build_waits_for_it() {
+    let dir = project(
+        "early-request",
+        r#"{ "plugins": ["./slow.mjs"],
+             "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } } }"#,
+    );
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><title>early</title><script type=\"module\" src=\"./src/main.js\"></script>\n",
+    )
+    .expect("write the page");
+    std::fs::write(dir.join("src/main.js"), "export const x = 1;\n").expect("write the script");
+    // Two seconds inside the first build: the request below lands in them.
+    std::fs::write(
+        dir.join("slow.mjs"),
+        "export default { name: \"slow\", transform: { filter: { id: /main\\.js$/ },\n\
+         handler: async () => { await new Promise((r) => setTimeout(r, 2000)); return null; } } };\n",
+    )
+    .expect("write the plugin");
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .expect("a free port");
+    let child = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        .args(["start", &format!("--port={port}")])
+        .current_dir(&dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn esdev start");
+    let _dev = Loop {
+        child,
+        dir: dir.clone(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let page = loop {
+        assert!(Instant::now() < deadline, "the endpoint never answered");
+        let answer = get_path(port, "/");
+        if !answer.is_empty() {
+            break answer;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(page.starts_with("HTTP/1.1 200"), "the first answer: {page}");
+    assert!(page.contains("<title>early</title>"), "{page}");
+}

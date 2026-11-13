@@ -332,6 +332,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // Each server's port, by name, for the proxy rules that name one (D208).
     let ports: crate::proxy::ServerPorts = Arc::default();
     let (error, _) = tokio::sync::watch::channel(None::<String>);
+    let (first_build, built) = tokio::sync::watch::channel(false);
     tokio::spawn(crate::devserver::serve(
         listener,
         Arc::new(DevServer {
@@ -341,6 +342,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             proxy: crate::proxy::Rule::from_config(&project.start.proxy, Some(&ports)),
             trust,
             miss: crate::devserver::Miss::Spa,
+            built,
         }),
     ));
 
@@ -494,6 +496,9 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             false
         }
     };
+    // Requests that arrived during it are answered now: with the page, or
+    // with the failure.
+    first_build.send_replace(true);
 
     // The banner goes last: ready means listening *and* built, with the first
     // build's own lines above it. One block with no per-line tags — the

@@ -525,14 +525,83 @@ mod tests {
         assert!(message.contains("imports itself"), "{message}");
     }
 
-    /// A package `@import` is a compiler's to resolve. In a sheet no compiler
-    /// claims, it is the error it always was, word for word.
+    /// A package `@import` that no package answers is the error it always
+    /// was, word for word.
     #[test]
-    fn a_package_import_in_plain_css_is_still_an_error() {
+    fn a_package_import_naming_no_package_is_an_error() {
         let entry = project("package-plain", &[("app.css", "@import \"some-kit\";\n")]);
         let message = build(&entry, false).expect_err("nothing resolves a package");
         assert!(
             message.contains("imports some-kit, which is not there"),
+            "{message}"
+        );
+    }
+
+    /// In a sheet no compiler claims, a package `@import` is found through the
+    /// package's `exports` (the `style` condition, else `default`), from the
+    /// package's real location — so a stylesheet a pnpm-linked package
+    /// imports from its own dependency is found too.
+    #[cfg(unix)]
+    #[test]
+    fn a_package_import_resolves_through_exports_and_symlinks() {
+        let entry = project(
+            "package-exports",
+            &[
+                ("app.css", "@import \"theme/dark\";\n.app { color: red }\n"),
+                (
+                    "node_modules/.pnpm/theme/node_modules/theme/package.json",
+                    r#"{ "exports": { "./dark": { "style": "./dark.css", "default": "./dark.js" } } }"#,
+                ),
+                (
+                    "node_modules/.pnpm/theme/node_modules/theme/dark.css",
+                    "@import \"tokens\";\n.dark { color: black }\n",
+                ),
+                (
+                    "node_modules/.pnpm/tokens/node_modules/tokens/package.json",
+                    r#"{ "style": "./tokens.css" }"#,
+                ),
+                (
+                    "node_modules/.pnpm/tokens/node_modules/tokens/tokens.css",
+                    ".token { color: blue }\n",
+                ),
+            ],
+        );
+        let root = entry.parent().unwrap();
+        std::os::unix::fs::symlink(
+            "../../tokens/node_modules/tokens",
+            root.join("node_modules/.pnpm/theme/node_modules/tokens"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            ".pnpm/theme/node_modules/theme",
+            root.join("node_modules/theme"),
+        )
+        .unwrap();
+        let css = build(&entry, false)
+            .expect("the package's stylesheet is found")
+            .code;
+        assert!(css.contains(".dark"), "{css}");
+        assert!(css.contains(".token"), "{css}");
+        assert!(css.contains(".app"), "{css}");
+    }
+
+    /// A package whose export leaves the package is not followed.
+    #[test]
+    fn a_package_export_outside_the_package_is_refused() {
+        let entry = project(
+            "package-escape",
+            &[
+                ("app.css", "@import \"kit\";\n"),
+                (
+                    "node_modules/kit/package.json",
+                    r#"{ "exports": { ".": "../../secret.css" } }"#,
+                ),
+                ("secret.css", ".secret {}\n"),
+            ],
+        );
+        let message = build(&entry, false).expect_err("not inside the package");
+        assert!(
+            message.contains("imports kit, which is not there"),
             "{message}"
         );
     }

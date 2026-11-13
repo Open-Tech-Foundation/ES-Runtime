@@ -187,6 +187,11 @@ pub struct DevServer {
     pub trust: es_runtime_default_providers::TrustStore,
     /// What a request for a file that is not there gets.
     pub miss: Miss,
+    /// Whether the first build has finished, worked or not. The endpoint is
+    /// bound before it, so a port that is taken fails at once; a request that
+    /// arrives in between waits for it rather than meeting a 404 for a page
+    /// that is about to exist.
+    pub built: tokio::sync::watch::Receiver<bool>,
 }
 
 /// What a request for a missing file is answered with (D154).
@@ -296,6 +301,10 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
         .await;
         return;
     };
+    // Not before the first build: until it finishes there is nothing to
+    // serve, and a 404 now would be a page that loads a moment later.
+    let mut built = server.built.clone();
+    let _ = built.wait_for(|done| *done).await;
     // The build that failed, if the last one did: a page that has nothing
     // built to load is shown the failure instead of a blank miss.
     let failure = server.error.borrow().clone();
