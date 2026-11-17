@@ -11,6 +11,8 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-17
+
 ### Changed
 
 - The AFW starters (spa, fullstack, docs, library) moved to

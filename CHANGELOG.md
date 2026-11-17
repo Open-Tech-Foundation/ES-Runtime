@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-17
+
 ### Added
 
 - **`Isolate` in `runtime:workers`** (DECISIONS D227): small sandboxed agents
