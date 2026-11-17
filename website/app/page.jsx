@@ -2,6 +2,7 @@ import BenchRoller from "../components/BenchRoller.jsx";
 import CodeTabs from "../components/CodeTabs.jsx";
 import DurableDiagram from "../components/DurableDiagram.jsx";
 import FrameworkTabs from "../components/FrameworkTabs.jsx";
+import IsolatesDiagram from "../components/IsolatesDiagram.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import SandboxDiagram from "../components/SandboxDiagram.jsx";
 import StackIcon from "../components/StackIcon.jsx";
@@ -210,6 +211,27 @@ const durablePoints = [
   },
 ];
 
+// Isolates: properties, as for durable workers — the costs are measured on the
+// workers internals page by a committed script, and linked rather than restated.
+const isolatePoints = [
+  {
+    title: "Thousands, not dozens",
+    body: "Isolates share a pool of threads, one per core. A Worker costs an OS thread of its own; an isolate costs a small heap.",
+  },
+  {
+    title: "Computation only",
+    body: "No files, no network, no environment — and no grant that adds them. A refusal says so, and says what to do instead.",
+  },
+  {
+    title: "Only what you hand it",
+    body: "host functions are the one way out. Hand over getUser(id), not fetch: each runs in your program, with your permissions.",
+  },
+  {
+    title: "Stopped when you say",
+    body: "terminate() ends a call stuck in a loop at once, and every waiting call rejects. The other isolates carry on.",
+  },
+];
+
 // What the *production* binary deliberately lacks — each one available in esdev,
 // on your machine. These used to sit in the red list below, which read as "you
 // cannot", when the truth is "not in the binary you deploy".
@@ -390,6 +412,48 @@ export default function HomePage() {
               className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
             >
               Durable workers API →
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Isolates: code the program does not control, run where it can only
+          compute. Shown as the pool at work rather than as code; properties,
+          not numbers — those are on the internals page, from the script that
+          measures them. */}
+      <section id="isolates" className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
+          <div className="mb-12 text-center">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+              Run code you don't control
+            </h2>
+            <p className="mt-4 text-lg text-zinc-600 dark:text-zinc-400">
+              Isolates: plugins, customer rules and code a model wrote, in a box that can only compute.
+            </p>
+          </div>
+          <div className="mx-auto max-w-5xl rounded-2xl bg-zinc-900 p-6 shadow-xl ring-1 ring-white/10 sm:p-8 dark:shadow-none">
+            <IsolatesDiagram />
+          </div>
+          <div className="mx-auto mt-12 grid max-w-5xl gap-8 sm:grid-cols-2 lg:grid-cols-4">
+            {isolatePoints.map((p) => (
+              <div>
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{p.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">{p.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-10 flex flex-wrap justify-center gap-x-6 gap-y-2">
+            <a
+              href="/docs/guides/isolates"
+              className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+            >
+              Isolates guide →
+            </a>
+            <a
+              href="/docs/internals/workers#isolates"
+              className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+            >
+              What one costs →
             </a>
           </div>
         </div>
