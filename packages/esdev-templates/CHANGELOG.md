@@ -13,6 +13,10 @@ here, without an esdev release.
 
 ### Changed
 
+- The AFW starters (spa, fullstack, docs, library) moved to
+  `@opentf/create-afw`, which AFW maintains and releases; `catalog.json`
+  lists it, so `esdev create` still offers them, from there. Needs esdev
+  0.28.0 or later, the first to read a listed package.
 - The server templates' `start` scripts grant an address,
   `--allow-listen=0.0.0.0:3000`, as esrun now requires (ES-Runtime D221).
 

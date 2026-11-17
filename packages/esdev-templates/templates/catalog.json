@@ -1,16 +1,3 @@
 {
-  "groups": [
-    {
-      "name": "AFW",
-      "label": "AFW",
-      "description": "AFW starters — SPA, fullstack, docs or library",
-      "question": "Which AFW Starter?",
-      "templates": [
-        "spa",
-        "fullstack",
-        "docs",
-        "library"
-      ]
-    }
-  ]
+  "packages": ["@opentf/create-afw"]
 }

@@ -44,10 +44,10 @@ esdev create my-app --template=react --mode=fullstack
 | `preact` | Preact on the DOM — React's API in three kilobytes |
 | `lit` | Lit web components — shadow DOM, client-rendered |
 | `lib` | A publishable package — `.d.ts` and `exports` wired |
-| `spa` | An AFW single-page app — browser-only UI, static deploy, no server |
-| `fullstack` | An AFW fullstack app — server-rendered pages, loaders, API routes and server functions |
-| `docs` | An AFW documentation site — MDX docs, sidebar, search, optional blog |
-| `library` | An AFW component library — publishable components, `esdev`-tested |
+
+AFW's starters — `app`, `docs` and `library`, behind one **AFW** entry — come
+from [`@opentf/create-afw`](https://afw.opentechf.org), which AFW maintains and
+releases. Their options are AFW's, and `esdev create --list` shows them.
 
 The templates are the **`@opentf/esdev-templates`** package, released on their
 own so a template fix does not wait for an esdev release. `create` fetches the
@@ -55,7 +55,9 @@ newest release that supports the esdev you run, checks it against the sha512
 the registry published for it, and reads it in memory; a release that needs a
 newer esdev is named, with `esdev upgrade` as the way to it. `--templates=<version>`
 pins a release, and `--from=<dir>` reads a local copy laid out as the package
-is, for writing templates.
+is, for writing templates. The packages its catalog lists, such as
+`@opentf/create-afw`, are fetched and checked the same way; one with no release
+for your esdev is left out, and named.
 
 During scaffolding, `create` also looks up each dependency's current `latest`
 version on the npm registry and writes that exact version to `package.json`. It
@@ -80,30 +82,6 @@ esdev create my-app --template=vanilla --styling=tailwind
 Styling has no default. On a terminal the question has to be answered; an
 unattended run without `--styling` adds nothing to the template.
 
-The AFW starters are `esdev` projects: their `esdev.json` names
-[`@opentf/esdev-plugin-afw`](https://afw.opentechf.org), which compiles
-`.jsx`/`.tsx`/`.mdx`, and their scripts call `esdev start`, `esdev build` and
-`esdev test`.
-They take three extra axes, each with a flag, asked where the template takes
-them:
-
-```sh
-esdev create my-app --template=spa --language=ts --styling=tailwind
-esdev create my-app --template=docs --blog
-```
-
-| | |
-| --- | --- |
-| `--language=js\|ts` | `spa`, `fullstack`, `docs`, `library` — JavaScript (default) or TypeScript |
-| `--styling=css\|tailwind` | `spa`, `fullstack` — plain CSS or Tailwind v4 |
-| `--blog`, `--no-blog` | `docs` — add a blog with RSS and Atom feeds, or not (default) |
-
-TypeScript is a conversion, not a second template: sources rename (`.jsx` to
-`.tsx`) and a `tsconfig.json` plus the compiler-macro declarations arrive
-beside them — with the `typescript` dependency and a `typecheck` script, so
-the config has something to act on it. The library's test runs under
-`esdev test` in either language.
-
 ## Every template is a hello world
 
 Each esdev-built template writes the smallest project that runs, builds and
@@ -116,11 +94,9 @@ src/hello.test.ts   its test, with runtime:test
 src/main.ts         shows it (App.tsx and entry.client.tsx for react)
 ```
 
-The AFW starters are pages rather than packages: one page — the file to edit
-named in it — and the scripts to run it. Every template's scripts are there
-from the start: applications have `dev` and `build`; `lib` has `build`, `test`
-and `typecheck`, without a `dev` script. The AFW `library` publishes its source
-and has `test`, plus `typecheck` when TypeScript is selected. Templates add
+Every template's scripts are there from the start: applications have `dev` and
+`build`; `lib` has `build`, `test` and `typecheck`, without a `dev` script.
+Templates add
 `test:dom` where they have a DOM test and `preview` where they build a static
 site. Nothing chooses a license for you; add one when you publish.
 
@@ -146,10 +122,10 @@ Fast Refresh during `npm run dev`.
 ## It asks, or it writes files and stops
 
 On a terminal it asks which template, which mode if that template has more than
-one, the AFW axes where the template takes them, which package manager the
-project uses, and whether to install — as a menu you arrow through. The AFW
-starters choose behind one group entry, in a second menu; neither menu
-preselects — the template is the one answer worth choosing explicitly:
+one, the template's own options, which package manager the project uses, and
+whether to install — as a menu you arrow through. A group of templates, such as
+AFW's, is chosen behind one entry, in a second menu; neither menu preselects —
+the template is the one answer worth choosing explicitly:
 
 ```text
 ? Which Template?
@@ -158,29 +134,19 @@ preselects — the template is the one answer worth choosing explicitly:
     Micro-UI  Micro apps with Micro-UI — framework-free UI with a tiny reactive core
     ReactJS   React — a static site, or an app with a server of its own
     Vanilla   TypeScript and the DOM — no framework, nothing it ships depends on
-    AFW       AFW starters — SPA, fullstack, docs or library
+    AFW       AFW starters: an app, a docs site or a component library
 
   ↑/↓ move · 1-9 jump · enter select · esc cancel
 ```
 
-Menus show the proper name — `SPA`, not `spa` — while flags stay lowercase:
-what is chosen still resolves to the flag spelling, so `--template=spa`,
-`SPA`, and `1` all reach the same starter. Behind the group entry:
-
-```text
-? Which AFW Starter?
-  ❯ SPA                 An AFW single-page app — browser-only UI, static deploy, no server
-    FullStack           An AFW fullstack app — loaders, API routes, SSR on demand
-    Docs                An AFW documentation site — MDX docs, sidebar, search, optional blog
-    Component Library   An AFW component library — publishable components, esdev-tested
-
-  ↑/↓ move · 1-9 jump · enter select · esc back
-```
+Menus show the proper name — `Micro-UI`, not `micro-ui` — while flags stay
+lowercase: what is chosen still resolves to the flag spelling, so
+`--template=micro-ui`, `Micro-UI`, and its number all reach the same template.
 
 It is drawn where the cursor already is and is replaced in place by one line
 naming the answer, so the scrollback is left holding a transcript of what was
 asked and what was chosen rather than a cleared screen. `Esc` steps back to
-the previous question — the second AFW menu returns to the first — and `Esc`
+the previous question — a group's menu returns to the first — and `Esc`
 at the first question cancels: nothing is written, and the exit status is
 zero.
 
@@ -193,7 +159,7 @@ reports resolved package versions and whether scaffolding succeeded.
 ```sh
 esdev create my-app --template=react --mode=fullstack
 esdev create my-app --template=api --install=bun
-esdev create my-app --template=spa --package-manager=pnpm --no-install
+esdev create my-app --template=vanilla --package-manager=pnpm --no-install
 esdev create my-app --template=api --yes   # defaults, no questions
 esdev create my-app --no-install
 ```

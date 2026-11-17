@@ -1,9 +1,8 @@
-//! End-to-end tests for the servers the fullstack templates write.
+//! End-to-end tests for the server the React fullstack template writes.
 //!
 //! A created project's dependencies come from npm, which CI does not reach, so
-//! each test scaffolds against a local registry stand-in and replaces only what
-//! a package would have provided — `@afw/server`, which the AFW plugin
-//! generates, and React's `render.tsx` — with a stub. The server file the
+//! the test scaffolds against a local registry stand-in and replaces only what
+//! a package would have provided — React's `render.tsx` — with a stub. The server file the
 //! template wrote runs unchanged: what is under test is its own request
 //! handling.
 
@@ -183,49 +182,6 @@ fn get(port: u16, path: &str) -> (u16, Option<String>, bool) {
         .contains("transfer-encoding: chunked")
         || text.ends_with("0\r\n\r\n");
     (status, content_type, whole && ended)
-}
-
-/// The AFW fullstack server answers a directory with the fallback's 404,
-/// serves a built file with the runtime's type, and misses with a 404.
-#[test]
-fn the_fullstack_server_answers_a_directory_with_a_404() {
-    let dir = create("afw-fullstack", &["--template=fullstack"]);
-    // `@afw/server` as the plugin would generate it, reduced to what decides
-    // a static request: files first, then the fallback.
-    write(
-        &dir,
-        "node_modules/@afw/server/package.json",
-        r#"{ "name": "@afw/server", "type": "module", "exports": "./index.js" }"#,
-    );
-    write(
-        &dir,
-        "node_modules/@afw/server/index.js",
-        "export const createPageRenderer = () => () => null;\n\
-         export function createHandler({ files, fallback }) {\n\
-           return async (request) => (await files(request)) ?? fallback(request);\n\
-         }\n",
-    );
-    // Its plugin is not installed, and running one file needs no config.
-    std::fs::remove_file(dir.join("esdev.json")).expect("remove esdev.json");
-    let dist = dir.join("dist");
-    built_output(&dist);
-    std::fs::copy(dir.join("server.js"), dist.join("server.js")).expect("copy the server");
-
-    let server = run(&dir, "dist/server.js");
-    let (status, _, whole) = get(server.port, "/assets/");
-    assert_eq!(status, 404, "a directory is not a file");
-    assert!(whole, "the response was cut off");
-    let (status, _, whole) = get(server.port, "/assets");
-    assert_eq!(status, 404);
-    assert!(whole);
-    let (status, content_type, whole) = get(server.port, "/assets/app-abc.js");
-    assert_eq!(status, 200);
-    assert_eq!(
-        content_type.as_deref(),
-        Some("text/javascript; charset=utf-8")
-    );
-    assert!(whole);
-    assert_eq!(get(server.port, "/assets/missing.js").0, 404);
 }
 
 /// The same for the React fullstack server's `/assets/`.

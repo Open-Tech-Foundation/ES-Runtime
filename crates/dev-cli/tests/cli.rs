@@ -13105,164 +13105,6 @@ fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The AFW starter set scaffolds through `esdev create`: four templates,
-/// each with its extra axes (language, styling, blog) as flags. stdin is closed
-/// throughout, so every answer here comes from a flag.
-#[test]
-fn afw_templates_scaffold_from_flags() {
-    let parent = watch_dir("c_afw");
-
-    // TypeScript + plain CSS: renames, config, and no Tailwind prepend.
-    let ts = esdev_in(&parent)
-        .args([
-            "create",
-            TEMPLATES,
-            "shop-ts",
-            "--template=spa",
-            "--language=ts",
-            "--styling=css",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(ts.status.success(), "{}", stderr(&ts));
-    let dir = parent.join("shop-ts");
-    assert!(dir.join("app/page.tsx").is_file());
-    assert!(dir.join("tsconfig.json").is_file());
-    assert!(dir.join("app/afw-env.d.ts").is_file());
-    assert!(!dir.join("app/page.jsx").exists());
-    assert!(!dir.join("jsconfig.json").exists());
-    let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
-    assert!(!css.contains("@import"), "{css}");
-    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
-    assert!(manifest.contains(r#""name": "shop-ts""#), "{manifest}");
-    assert!(!manifest.contains("{{name}}"), "a placeholder survived");
-    assert!(
-        manifest.contains(r#""typecheck": "esdev typecheck""#),
-        "the tsconfig has nothing to act on it: {manifest}"
-    );
-    assert!(
-        manifest.contains(r#""typescript""#),
-        "no compiler beside the config: {manifest}"
-    );
-    assert!(
-        manifest.contains(r#""preview": "esdev preview --spa""#),
-        "no preview of what it builds, with its router's fallback: {manifest}"
-    );
-
-    // Unattended, the language takes its default and styling adds nothing:
-    // a framework is only ever added because somebody chose it.
-    let js = esdev_in(&parent)
-        .args(["create", TEMPLATES, "shop-js", "--template=fullstack"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(js.status.success(), "{}", stderr(&js));
-    let dir = parent.join("shop-js");
-    assert!(dir.join("app/page.jsx").is_file());
-    assert!(dir.join("app/api/hello/route.js").is_file());
-    let css = std::fs::read_to_string(dir.join("app/global.css")).expect("read");
-    assert!(!css.contains("tailwindcss"), "nothing was chosen: {css}");
-    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
-    assert!(
-        !manifest.contains("tailwindcss"),
-        "nothing was chosen: {manifest}"
-    );
-    assert!(
-        !manifest.contains("typecheck"),
-        "JavaScript has no tsconfig to check: {manifest}"
-    );
-    assert!(
-        !manifest.contains("preview"),
-        "a server is run, not previewed: {manifest}"
-    );
-
-    // The blog is files plus two patches — or neither.
-    let bare = esdev_in(&parent)
-        .args([
-            "create",
-            TEMPLATES,
-            "manual",
-            "--template=docs",
-            "--no-blog",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(bare.status.success(), "{}", stderr(&bare));
-    let dir = parent.join("manual");
-    assert!(!dir.join("app/blog").exists(), "the blog was not withheld");
-    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
-    assert!(!config.contains("blog:"), "{config}");
-
-    let blogged = esdev_in(&parent)
-        .args(["create", TEMPLATES, "journal", "--template=docs", "--blog"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(blogged.status.success(), "{}", stderr(&blogged));
-    let dir = parent.join("journal");
-    assert!(dir.join("app/blog/hello-world/page.mdx").is_file());
-    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
-    assert!(config.contains("dir: \"blog\""), "{config}");
-    assert!(config.contains("title: \"journal\""), "{config}");
-    let document = std::fs::read_to_string(dir.join("index.html")).expect("read");
-    assert!(document.contains("<title>journal</title>"), "{document}");
-
-    // Unattended and unasked, a docs site is docs: the blog is opt-in.
-    let unasked = esdev_in(&parent)
-        .args(["create", TEMPLATES, "handbook", "--template=docs"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(unasked.status.success(), "{}", stderr(&unasked));
-    let dir = parent.join("handbook");
-    assert!(dir.join("app/docs").is_dir());
-    assert!(!dir.join("app/blog").exists(), "a blog nobody asked for");
-    let config = std::fs::read_to_string(dir.join("afw.config.js")).expect("read");
-    assert!(!config.contains("blog:"), "{config}");
-    let plugins = std::fs::read_to_string(dir.join("esdev.json")).expect("read");
-    assert!(!plugins.contains("blogPostsPlugin"), "{plugins}");
-
-    // The library ships an `esdev test` suite that renders its component.
-    // Running it needs installed dependencies (network), which the scaffold
-    // harness does not have — so this asserts the wiring the run needs: the
-    // CSR compiler plugin with routes off, the DOM cleanup setup, and the
-    // `--dom` script that selects it.
-    let lib = esdev_in(&parent)
-        .args([
-            "create",
-            TEMPLATES,
-            "widgets",
-            "--template=library",
-            "--language=ts",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("spawn esdev create");
-    assert!(lib.status.success(), "{}", stderr(&lib));
-    let dir = parent.join("widgets");
-    assert!(dir.join("index.ts").is_file());
-    assert!(dir.join("src/Counter.tsx").is_file());
-    assert!(!dir.join("bunfig.toml").exists(), "Bun-only file shipped");
-    assert!(
-        stdout(&lib).contains("run test"),
-        "a library has nothing to run dev: {}",
-        stdout(&lib)
-    );
-    let config = std::fs::read_to_string(dir.join("esdev.json")).expect("read");
-    assert!(config.contains(r#""target": "csr""#), "{config}");
-    assert!(config.contains(r#""routes": false"#), "{config}");
-    assert!(config.contains("@opentf/afw-test/setup"), "{config}");
-    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read");
-    assert!(
-        manifest.contains(r#""test": "esdev test --dom""#),
-        "{manifest}"
-    );
-
-    let _ = std::fs::remove_dir_all(&parent);
-}
-
 /// The docs name the chosen manager: `--package-manager` renders into every
 /// usage line, the default is npm, and an unknown name fails before writing.
 #[test]
@@ -13275,7 +13117,8 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
             "create",
             TEMPLATES,
             "shop-pnpm",
-            "--template=spa",
+            "--template=vanilla",
+            "--styling=css",
             "--package-manager=pnpm",
             "--no-install",
         ])
@@ -13334,20 +13177,18 @@ fn create_names_the_chosen_package_manager_in_its_docs() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
-/// An axis flag where it does not apply is refused, like a stray `--mode` —
-/// and a value that is not one is refused with the values that are.
+/// An option flag where it does not apply is refused, like a stray `--mode`
+/// — and a value that is not one is refused with the values that are.
 #[test]
-fn afw_axes_are_refused_where_they_do_not_apply() {
-    let parent = watch_dir("c_afw_axes");
+fn an_option_flag_is_refused_where_it_does_not_apply() {
+    let parent = watch_dir("c_option_flags");
 
     for (template, flag, message) in [
         ("api", "--language=ts", "has no language"),
-        ("docs", "--styling=css", "has no styling"),
-        ("spa", "--blog", "has no blog"),
-        ("spa", "--language=elm", "no language elm"),
-        ("spa", "--styling=sass", "no styling sass"),
+        ("api", "--blog", "has no blog"),
         ("api", "--styling=tailwind", "has no styling"),
         ("vanilla", "--styling=sass", "no styling sass"),
+        ("react", "--mode=spa", "no mode spa"),
     ] {
         let dir = parent.join(format!("refused-{template}"));
         let refused = esdev_in(&parent)
@@ -13370,12 +13211,12 @@ fn afw_axes_are_refused_where_they_do_not_apply() {
         assert!(!dir.exists(), "it wrote a project anyway");
     }
 
-    // The list names the new templates, so the error above is actionable.
+    // The list names the templates, so the error above is actionable.
     let listed = esdev_in(&parent)
         .args(["create", TEMPLATES, "--list"])
         .output()
         .expect("spawn esdev create");
-    for template in ["spa", "fullstack", "docs", "library"] {
+    for template in ["api", "vanilla", "react"] {
         assert!(
             stdout(&listed).contains(template),
             "{template} is not listed:\n{}",
