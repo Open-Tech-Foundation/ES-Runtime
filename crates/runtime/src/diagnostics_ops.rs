@@ -257,9 +257,9 @@ fn metrics(
         OpDecl::sync("diagnostics_metrics", move |_args| {
             let rec = recorder.borrow();
             let loop_metrics = rec.loop_metrics();
-            // Per isolate and read from the thread it runs on — which is this
-            // one, since an op runs on its own agent's thread.
-            let gc_metrics = es_runtime_engine::diagnostics::gc_metrics();
+            // This isolate's own, from its recorder: a thread may serve many
+            // isolates (D227), so nothing per thread would do.
+            let gc_metrics = rec.gc_metrics();
             Ok(Value::Object(vec![
                 ("tick".to_string(), Value::Number(rec.tick() as f64)),
                 (

@@ -644,6 +644,10 @@ pub struct V8Engine {
     /// (its address was handed to V8). `None` for snapshot-builder engines,
     /// which install no heap guard. Dropped after `isolate` (field order).
     _heap_guard: Option<Box<HeapGuard>>,
+    /// The GC callbacks' state, whose address they were registered with. Held
+    /// here as well as by the recorder so it outlives the isolate whatever
+    /// order the slots are released in. Dropped after `isolate` (field order).
+    _gc_state: Option<std::rc::Rc<crate::diagnostics::GcState>>,
 }
 
 impl V8Engine {
@@ -851,9 +855,9 @@ impl V8Engine {
         // for the reason the loop histograms are: `metrics()` is pull-only, so a
         // reader asking for the first time still wants what the heap did before
         // it asked. Skipped for snapshot builders, which run no program.
-        if heap_limit.is_some() {
-            crate::diagnostics::install_gc_metrics(&mut isolate);
-        }
+        let gc_state = heap_limit
+            .is_some()
+            .then(|| crate::diagnostics::install_gc_metrics(&mut isolate, &recorder));
 
         let context = Self::make_context(&mut isolate);
 
@@ -925,6 +929,7 @@ impl V8Engine {
             wasm_imports_fn,
             wasm_exports_fn,
             _heap_guard,
+            _gc_state: gc_state,
         })
     }
 
@@ -1441,6 +1446,36 @@ mod tests {
 
     fn engine() -> V8Engine {
         V8Engine::new(Limits::default()).expect("engine construction")
+    }
+
+    fn gc_count(engine: &V8Engine) -> u64 {
+        engine
+            .diagnostics()
+            .expect("recorder")
+            .borrow()
+            .gc_metrics()
+            .count
+    }
+
+    /// Collections are counted per isolate, not per thread: a second isolate
+    /// made on the thread of one that collected starts from nothing (D227 puts
+    /// many isolates on one thread).
+    #[test]
+    fn gc_metrics_belong_to_the_isolate_not_the_thread() {
+        let _v8 = crate::v8_test_guard();
+        let mut first = engine();
+        first
+            .eval("for (let i = 0; i < 200000; i++) globalThis.x = { i, s: 'a'.repeat(64) };")
+            .expect("churn");
+        assert!(gc_count(&first) > 0, "the churn collected");
+        drop(first);
+
+        let second = engine();
+        assert_eq!(
+            gc_count(&second),
+            0,
+            "another isolate's collections leaked in"
+        );
     }
 
     /// An unreferenced timer is still a timer — it stays in the table and still

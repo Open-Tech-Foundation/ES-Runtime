@@ -439,12 +439,25 @@ pub struct Recorder {
     /// Fed before any subscription's filter, so sampling thins traces and
     /// never counts.
     http_metrics: Option<HttpServerMetrics>,
+    /// This isolate's collections, counted by the GC callbacks. Shared with
+    /// them through their `data` pointer; `None` for an isolate that installs
+    /// none (a snapshot builder).
+    gc: Option<Rc<GcState>>,
 }
 
 impl Recorder {
     /// Records held per subscription before dropping. Per subscription rather
     /// than shared, so one slow consumer cannot evict another's records.
     pub const DEFAULT_BUFFER: usize = 4096;
+
+    /// What this isolate's heap has been doing: collections so far and how
+    /// long each stopped it. Empty for an isolate that counts none.
+    pub fn gc_metrics(&self) -> GcMetrics {
+        self.gc
+            .as_ref()
+            .map(|gc| gc.metrics.borrow().clone())
+            .unwrap_or_default()
+    }
 
     pub(crate) fn new() -> Self {
         Recorder {
@@ -459,6 +472,7 @@ impl Recorder {
             loop_metrics: LoopMetrics::default(),
             clock: None,
             http_metrics: None,
+            gc: None,
         }
     }
 
@@ -1361,25 +1375,29 @@ pub struct GcMetrics {
 
 /// Per-isolate GC accounting.
 ///
-/// A thread-local rather than an isolate slot, because the two V8 callbacks are
-/// `extern "C"` and reaching a slot from one means turning the raw isolate
-/// pointer back into a reference — unsafe for a number that a thread-local can
-/// hold safely. One agent is one isolate on one thread (D48), so the two are the
-/// same scope; a snapshot builder gets its own and never installs the hooks.
+/// Owned by the isolate's [`Recorder`] and reached by the two V8 callbacks
+/// through the `data` pointer they are registered with. Not a thread-local:
+/// one thread may serve many isolates (D227), and a thread-local would add
+/// their collections together.
 ///
-/// `Cell` and not `RefCell`: the prologue runs with an allocation in flight and
-/// must not be able to panic, and a counter needs no borrow.
-struct GcState {
+/// `Cell` and not `RefCell` for the start time: the prologue runs with an
+/// allocation in flight and must not be able to panic, and a counter needs no
+/// borrow.
+pub(crate) struct GcState {
     /// When the collection currently running began, or `None` between them.
     started_at: Cell<Option<Instant>>,
     metrics: RefCell<GcMetrics>,
 }
 
-thread_local! {
-    static GC_STATE: GcState = GcState {
-        started_at: Cell::new(None),
-        metrics: RefCell::new(GcMetrics::default()),
-    };
+/// The state behind a GC callback's `data` pointer.
+///
+/// # Safety
+///
+/// `data` must be the pointer [`install_gc_metrics`] registered: an
+/// `Rc<GcState>` that the engine keeps alive for as long as the isolate is.
+unsafe fn gc_state<'a>(data: *mut std::ffi::c_void) -> Option<&'a GcState> {
+    // SAFETY: per the contract above, a live `GcState` or null.
+    unsafe { data.cast::<GcState>().cast_const().as_ref() }
 }
 
 /// V8 is about to stop the isolate and collect.
@@ -1387,9 +1405,12 @@ unsafe extern "C" fn gc_prologue(
     _isolate: v8::UnsafeRawIsolatePtr,
     _kind: v8::GCType,
     _flags: v8::GCCallbackFlags,
-    _data: *mut std::ffi::c_void,
+    data: *mut std::ffi::c_void,
 ) {
-    GC_STATE.with(|state| state.started_at.set(Some(Instant::now())));
+    // SAFETY: registered by `install_gc_metrics` with this isolate's state.
+    if let Some(state) = unsafe { gc_state(data) } {
+        state.started_at.set(Some(Instant::now()));
+    }
 }
 
 /// V8 has finished collecting and is about to resume the isolate.
@@ -1397,9 +1418,10 @@ unsafe extern "C" fn gc_epilogue(
     _isolate: v8::UnsafeRawIsolatePtr,
     _kind: v8::GCType,
     _flags: v8::GCCallbackFlags,
-    _data: *mut std::ffi::c_void,
+    data: *mut std::ffi::c_void,
 ) {
-    GC_STATE.with(|state| {
+    // SAFETY: registered by `install_gc_metrics` with this isolate's state.
+    if let Some(state) = unsafe { gc_state(data) } {
         let Some(started_at) = state.started_at.take() else {
             // An epilogue with no prologue: V8 nests incremental marking steps
             // inside a collection, so this is a step ending rather than a pause.
@@ -1413,7 +1435,7 @@ unsafe extern "C" fn gc_epilogue(
             metrics.count += 1;
             metrics.pause.observe(pause);
         }
-    });
+    }
 }
 
 /// Starts counting collections on this isolate.
@@ -1428,13 +1450,17 @@ unsafe extern "C" fn gc_epilogue(
 /// this module to embedders, so a `pub` here would put a V8 type on `runtime`'s
 /// public surface — the boundary §3 says a second engine could replace. The
 /// engine installs it itself, as part of isolate setup (`engine.rs`).
-pub(crate) fn install_gc_metrics(isolate: &mut v8::Isolate) {
-    let null = std::ptr::null_mut();
-    isolate.add_gc_prologue_callback(gc_prologue, null, v8::GCType::kGCTypeAll);
-    isolate.add_gc_epilogue_callback(gc_epilogue, null, v8::GCType::kGCTypeAll);
-}
-
-/// What this isolate's heap has been doing.
-pub fn gc_metrics() -> GcMetrics {
-    GC_STATE.with(|state| state.metrics.borrow().clone())
+pub(crate) fn install_gc_metrics(
+    isolate: &mut v8::Isolate,
+    recorder: &Rc<RefCell<Recorder>>,
+) -> Rc<GcState> {
+    let state = Rc::new(GcState {
+        started_at: Cell::new(None),
+        metrics: RefCell::new(GcMetrics::default()),
+    });
+    recorder.borrow_mut().gc = Some(state.clone());
+    let data = Rc::as_ptr(&state).cast_mut().cast::<std::ffi::c_void>();
+    isolate.add_gc_prologue_callback(gc_prologue, data, v8::GCType::kGCTypeAll);
+    isolate.add_gc_epilogue_callback(gc_epilogue, data, v8::GCType::kGCTypeAll);
+    state
 }

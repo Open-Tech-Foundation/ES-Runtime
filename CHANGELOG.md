@@ -39,6 +39,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- `es-runtime-engine`: garbage-collection metrics are counted per isolate
+  rather than per thread, so isolates that share a thread (DECISIONS D227) each
+  report their own. `diagnostics::gc_metrics()` is now
+  `Recorder::gc_metrics()`; `metrics().gc` in `runtime:diagnostics` reports
+  what it did before.
 - **Breaking: a network grant names an address** (DECISIONS D221). A bare
   port in `--allow-listen` or `--allow-net` (`--allow-listen=8080`) granted
   that port on *any* host — and since a program chooses the interface it
