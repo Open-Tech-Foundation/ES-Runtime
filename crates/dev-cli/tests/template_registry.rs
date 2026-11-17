@@ -314,14 +314,9 @@ fn a_conditional_option_and_a_nested_overlay_work_from_a_directory() {
                 if entry.path().is_dir() {
                     stack.push(entry.path());
                 } else {
-                    found.push(
-                        entry
-                            .path()
-                            .strip_prefix(app)
-                            .unwrap()
-                            .to_string_lossy()
-                            .replace('\\', "/"),
-                    );
+                    found.push(es_runtime_default_providers::path::to_slash(
+                        entry.path().strip_prefix(app).unwrap(),
+                    ));
                 }
             }
         }
