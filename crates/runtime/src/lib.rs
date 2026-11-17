@@ -1009,6 +1009,25 @@ impl Runtime {
         self.engine.interrupt_handle()
     }
 
+    /// Gives this runtime's thread to another runtime made on it, until
+    /// [`enter`](Self::enter): a pool thread serving many isolates leaves each
+    /// after its turn (D227). Nothing else may be asked of a left runtime;
+    /// dropping one is fine. Idempotent.
+    ///
+    /// # Panics
+    ///
+    /// If a runtime made or entered on this thread after this one is still
+    /// entered — only the innermost can be left.
+    pub fn leave(&mut self) {
+        self.engine.leave();
+    }
+
+    /// Takes the thread back for this runtime after [`leave`](Self::leave).
+    /// Idempotent.
+    pub fn enter(&mut self) {
+        self.engine.enter();
+    }
+
     /// Compiles and runs `source`, returning the marshaled result. Pending work
     /// it schedules (async ops, timers) is advanced by subsequent [`tick`](Self::tick)s.
     pub fn eval(&mut self, source: &str) -> Result<Value> {
@@ -3121,6 +3140,41 @@ mod tests {
              return `${u.host}|${new Uint8Array(h).length}|${id.length}`;",
         );
         assert_eq!(out, Value::String("x.test|32|36".into()));
+    }
+
+    /// Many runtimes on one thread (D227): each restored from the snapshot,
+    /// left after construction, and entered only for its turns, with async ops
+    /// and timers settling across them.
+    #[test]
+    fn runtimes_on_one_thread_take_turns() {
+        let _g = v8_guard();
+        let blob = Runtime::build_snapshot(&test_providers()).expect("build snapshot");
+        let mut runtimes: Vec<Runtime> = (0..4)
+            .map(|_| {
+                let mut rt =
+                    Runtime::with_snapshot(blob.clone(), test_providers()).expect("restore");
+                rt.leave();
+                rt
+            })
+            .collect();
+        for (i, rt) in runtimes.iter_mut().enumerate() {
+            rt.enter();
+            rt.eval(&format!("globalThis.me = {i};")).expect("eval");
+            rt.leave();
+        }
+        for (i, rt) in runtimes.iter_mut().enumerate().rev() {
+            rt.enter();
+            let out = eval_async(
+                rt,
+                "await new Promise((r) => setTimeout(r, 0)); \
+                 const h = await crypto.subtle.digest('SHA-256', new Uint8Array([me])); \
+                 return `${me}:${new Uint8Array(h).length}`;",
+            );
+            rt.leave();
+            assert_eq!(out, Value::String(format!("{i}:32")));
+        }
+        // Dropped oldest first, every one of them left.
+        drop(runtimes);
     }
 
     #[test]

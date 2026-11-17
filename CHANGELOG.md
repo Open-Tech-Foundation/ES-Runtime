@@ -13,6 +13,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `es-runtime`: `Runtime::leave()` and `Runtime::enter()`, so one thread can
+  hold many runtimes and run each in turn — the base of the pooled `Isolate`
+  (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8
+  would have corrupted its stack of entered isolates without a word.
 - `maxMessageSize` for `runtime:websocket`'s `serve()` and for
   `upgradeWebSocket()`, which also takes `maxBufferedAmount` now: the largest
   message a peer may send (default 64 MiB; past it the connection closes with

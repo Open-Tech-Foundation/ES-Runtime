@@ -519,6 +519,21 @@ pub trait Engine {
     /// (e.g. from a watchdog thread). See [`InterruptHandle`].
     fn interrupt_handle(&self) -> InterruptHandle;
 
+    /// Leaves this engine's isolate on the current thread, so another engine
+    /// made on the same thread can run (D227: a pool thread serving many).
+    /// Nothing may be asked of this engine until [`enter`](Self::enter) — not
+    /// even dropping it is required to wait, since a drop enters it again.
+    /// Idempotent.
+    ///
+    /// An isolate can be left only while it is the innermost one entered on
+    /// its thread, which a thread that leaves each engine after its turn always
+    /// satisfies. Out of order, this panics.
+    fn leave(&mut self) {}
+
+    /// Enters this engine's isolate again on the thread that made it, after
+    /// [`leave`](Self::leave). Idempotent.
+    fn enter(&mut self) {}
+
     /// The capabilities currently granted (DECISIONS.md D7). Lets the caller gate
     /// effects it performs itself — e.g. `runtime` checks `FileSystem` before
     /// loading a module graph — using the same deny-by-default set the ops see.
@@ -590,6 +605,11 @@ pub trait Engine {
 /// by a single thread, which is exactly the embedder's drive model
 /// (ARCHITECTURE.md §5).
 pub struct V8Engine {
+    /// Whether the isolate is entered on its thread, so [`Engine::leave`] can
+    /// give the thread to another isolate between turns. **Declared first on
+    /// purpose**: its drop enters a left isolate again, and everything below
+    /// that touches V8 as it drops needs that.
+    turn: crate::turn::Turn,
     /// The attached debugger, if this build has one at all and something asked
     /// for it (DECISIONS.md D59). **Declared before `isolate` on purpose**: V8's
     /// inspector and its sessions must be torn down while the isolate they
@@ -787,6 +807,8 @@ impl V8Engine {
         limits: Limits,
         heap_limit: Option<usize>,
     ) -> Result<Self> {
+        // Entered by its construction, and innermost: the stack starts here.
+        let turn = crate::turn::Turn::entered(&isolate);
         let max_pending_ops = limits.max_pending_ops as usize;
         let can_block = limits.can_block;
         // Microtasks run only at our explicit checkpoint, never implicitly when
@@ -913,6 +935,7 @@ impl V8Engine {
         };
 
         Ok(V8Engine {
+            turn,
             #[cfg(inspector)]
             inspector: None,
             isolate,
@@ -1292,6 +1315,14 @@ impl Engine for V8Engine {
         self.heap_tripped.load(Ordering::SeqCst)
     }
 
+    fn leave(&mut self) {
+        self.turn.leave(&self.isolate);
+    }
+
+    fn enter(&mut self) {
+        self.turn.enter(&self.isolate);
+    }
+
     fn interrupt_handle(&self) -> InterruptHandle {
         InterruptHandle {
             isolate: self.interrupt.clone(),
@@ -1455,6 +1486,63 @@ mod tests {
             .borrow()
             .gc_metrics()
             .count
+    }
+
+    /// Two isolates made on one thread both run, in any order, when each is
+    /// left after its turn and entered for the next — and drop in any order,
+    /// left or not (D227).
+    #[test]
+    fn isolates_on_one_thread_take_turns() {
+        let _v8 = crate::v8_test_guard();
+        let mut a = engine();
+        a.leave();
+        let mut b = engine();
+        b.leave();
+        fn turn(engine: &mut V8Engine) {
+            engine.enter();
+            engine
+                .eval("globalThis.n = (globalThis.n | 0) + 1")
+                .expect("eval");
+            engine.leave();
+        }
+        for _ in 0..3 {
+            turn(&mut a);
+            turn(&mut b);
+            turn(&mut a);
+        }
+        b.enter();
+        assert_eq!(b.eval("n").expect("eval"), Value::Number(3.0));
+        b.leave();
+        a.enter();
+        assert_eq!(a.eval("n").expect("eval"), Value::Number(6.0));
+        a.leave();
+        // Oldest first, though it was made first: a left isolate is entered
+        // again by its drop.
+        drop(a);
+        drop(b);
+
+        // And an entered one drops as before.
+        let c = engine();
+        drop(c);
+    }
+
+    /// Leaving is refused, by name, unless the isolate is the innermost one
+    /// entered: V8 would otherwise unbalance its own stack without a word.
+    #[test]
+    fn leaving_an_isolate_that_is_not_innermost_panics() {
+        let _v8 = crate::v8_test_guard();
+        let mut outer = engine();
+        let inner = engine();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| outer.leave()));
+        let message = refused.expect_err("out-of-order leave");
+        let message = message
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| message.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(message.contains("innermost"), "{message}");
+        drop(inner);
+        drop(outer);
     }
 
     /// Collections are counted per isolate, not per thread: a second isolate
