@@ -239,14 +239,13 @@ pub(crate) fn install(
     let heads_for_next = req_heads.clone();
     let owned_servers = servers.clone();
     let owned_requests = requests.clone();
-    engine.register_op(OpDecl::r#async("http_next_request", move |args| {
+    engine.register_op(OpDecl::typed_async("http_next_request", move |id: u64| {
         let h = h.clone();
         let bodies = bodies_for_next.clone();
         let heads = heads_for_next.clone();
         let owned_servers = owned_servers.clone();
         let owned_requests = owned_requests.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             let id = owned_servers.check(id)?;
             let reqs = require(&h)?
                 .next_requests(id, MAX_BATCH)
@@ -280,7 +279,7 @@ pub(crate) fn install(
                 flat.push(Value::Bool(has_body));
             }
             Ok(Value::Array(flat))
-        })
+        }
     }))?;
 
     // ---- http_request_headers / http_request_peer (sync, D216) ---------------
@@ -288,8 +287,8 @@ pub(crate) fn install(
     // not copied: the prelude keeps what it was given, so it never asks twice.
     let heads = req_heads.clone();
     let owned = requests.clone();
-    engine.register_op(OpDecl::sync("http_request_headers", move |args| {
-        let rid = owned.check(arg_u64(&args, 0))?;
+    engine.register_op(OpDecl::typed("http_request_headers", move |rid: u64| {
+        let rid = owned.check(rid)?;
         let mut heads = heads.borrow_mut();
         let headers = heads
             .get_mut(&rid)
@@ -311,8 +310,8 @@ pub(crate) fn install(
     // than an address-shaped object full of blanks.
     let heads = req_heads.clone();
     let owned = requests.clone();
-    engine.register_op(OpDecl::sync("http_request_peer", move |args| {
-        let rid = owned.check(arg_u64(&args, 0))?;
+    engine.register_op(OpDecl::typed("http_request_peer", move |rid: u64| {
+        let rid = owned.check(rid)?;
         let heads = heads.borrow();
         let head = heads
             .get(&rid)

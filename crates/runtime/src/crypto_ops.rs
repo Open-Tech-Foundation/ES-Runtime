@@ -32,13 +32,12 @@ use crate::Result;
 
 /// Registers the WebCrypto host ops.
 pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Result<()> {
-    engine.register_op(OpDecl::sync("random_bytes", move |args| {
-        let len = args.first().and_then(Value::as_number).unwrap_or(0.0) as usize;
-        let mut buf = vec![0u8; len];
+    engine.register_op(OpDecl::typed("random_bytes", move |len: u32| {
+        let mut buf = vec![0u8; len as usize];
         entropy.fill(&mut buf).map_err(|e| {
             OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
         })?;
-        Ok(Value::Bytes(buf))
+        Ok(buf)
     }))?;
 
     engine.register_op(OpDecl::sync("subtle_digest", |args| {

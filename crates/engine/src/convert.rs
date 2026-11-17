@@ -69,37 +69,7 @@ fn marshal_inner<'s>(
         // (interim; zero-copy is Phase 8). Bare ArrayBuffers are wrapped as a
         // Uint8Array in the prelude before crossing, so a view suffices here.
         let view = v8::Local::<v8::ArrayBufferView>::try_from(value).expect("checked view");
-        let len = view.byte_length();
-        // `vec![0u8; len]` writes zeros across the whole buffer and then hands it
-        // to `copy_contents`, which immediately overwrites every one of them — a
-        // second full pass over the payload to produce bytes that are discarded
-        // before anything reads them. Copying into uninitialized capacity does
-        // the one pass that was ever needed.
-        //
-        // The remaining pass is *not* worth removing, which was measured rather
-        // than assumed. Handing ops a borrowed `&[u8]` into V8's backing store
-        // instead — a real ABI, built and benchmarked — gained nothing:
-        //
-        //   * `subtle_digest` reads its bytes and keeps none, the shape that
-        //     should win most. The copy is 0.8% of a 4 KiB digest and 0.9% of a
-        //     256 KiB one, because SHA-256 runs at ~0.3 GB/s and a memcpy at
-        //     ~30 GB/s. Unmeasurable either way.
-        //   * `TextDecoder.decode` is 25% copy at 64 KiB, but borrowing cannot
-        //     capture it: the result is a `String`, so the bytes get copied into
-        //     that instead. Two copies before, two after — 8.90µs against 8.91µs.
-        //
-        // The pattern generalizes: an op whose per-byte work is slower than
-        // memcpy hides the copy entirely, and that is every op worth calling.
-        // Borrowing would have bought a public `Arg<'a>` type, a second dispatch
-        // path, and a SharedArrayBuffer data-race hazard to keep reasoning about,
-        // for nothing measurable.
-        let mut buf: Vec<u8> = Vec::with_capacity(len);
-        let written = view.copy_contents_uninit(&mut buf.spare_capacity_mut()[..len]);
-        // SAFETY: `copy_contents_uninit` returns how many bytes it initialized,
-        // writing into the `len` bytes of capacity reserved just above, so
-        // `written <= len` and every byte below it is initialized.
-        unsafe { buf.set_len(written) };
-        Ok(Value::Bytes(buf))
+        Ok(Value::Bytes(view_to_vec(view)))
     } else if value.is_array() {
         enter(value, ancestors)?;
         let array = v8::Local::<v8::Array>::try_from(value).expect("checked array");
@@ -138,6 +108,43 @@ fn marshal_inner<'s>(
     } else {
         Ok(Value::Other(js_to_string(scope, value)))
     }
+}
+
+/// Copies a typed-array or `DataView`'s bytes into an owned buffer, the one
+/// copy the JS→Rust byte crossing makes (shared by [`marshal`] and typed ops'
+/// `Vec<u8>` arguments).
+pub(crate) fn view_to_vec(view: v8::Local<v8::ArrayBufferView>) -> Vec<u8> {
+    let len = view.byte_length();
+    // `vec![0u8; len]` writes zeros across the whole buffer and then hands it
+    // to `copy_contents`, which immediately overwrites every one of them — a
+    // second full pass over the payload to produce bytes that are discarded
+    // before anything reads them. Copying into uninitialized capacity does
+    // the one pass that was ever needed.
+    //
+    // The remaining pass is *not* worth removing, which was measured rather
+    // than assumed. Handing ops a borrowed `&[u8]` into V8's backing store
+    // instead — a real ABI, built and benchmarked — gained nothing:
+    //
+    //   * `subtle_digest` reads its bytes and keeps none, the shape that
+    //     should win most. The copy is 0.8% of a 4 KiB digest and 0.9% of a
+    //     256 KiB one, because SHA-256 runs at ~0.3 GB/s and a memcpy at
+    //     ~30 GB/s. Unmeasurable either way.
+    //   * `TextDecoder.decode` is 25% copy at 64 KiB, but borrowing cannot
+    //     capture it: the result is a `String`, so the bytes get copied into
+    //     that instead. Two copies before, two after — 8.90µs against 8.91µs.
+    //
+    // The pattern generalizes: an op whose per-byte work is slower than
+    // memcpy hides the copy entirely, and that is every op worth calling.
+    // Borrowing would have bought a public `Arg<'a>` type, a second dispatch
+    // path, and a SharedArrayBuffer data-race hazard to keep reasoning about,
+    // for nothing measurable.
+    let mut buf: Vec<u8> = Vec::with_capacity(len);
+    let written = view.copy_contents_uninit(&mut buf.spare_capacity_mut()[..len]);
+    // SAFETY: `copy_contents_uninit` returns how many bytes it initialized,
+    // writing into the `len` bytes of capacity reserved just above, so
+    // `written <= len` and every byte below it is initialized.
+    unsafe { buf.set_len(written) };
+    buf
 }
 
 /// Pushes a container onto the descent path, refusing one that is already on it
@@ -256,7 +263,7 @@ fn out_of_range_message() -> &'static str {
 
 /// Builds a `Uint8Array` whose `ArrayBuffer` takes ownership of `bytes` — no
 /// copy; the Vec becomes the backing store.
-fn bytes_to_uint8array<'s>(
+pub(crate) fn bytes_to_uint8array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bytes: Vec<u8>,
 ) -> v8::Local<'s, v8::Uint8Array> {
@@ -454,6 +461,9 @@ pub(crate) fn js_to_string(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Va
 
 /// Builds a V8 string, falling back to an empty string if `s` exceeds V8's
 /// maximum string length (vanishingly rare; never worth panicking over here).
-fn js_string<'s>(scope: &mut v8::PinScope<'s, '_>, s: &str) -> v8::Local<'s, v8::String> {
+pub(crate) fn js_string<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    s: &str,
+) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, s).unwrap_or_else(|| v8::String::empty(scope))
 }

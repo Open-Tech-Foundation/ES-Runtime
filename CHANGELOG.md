@@ -11,6 +11,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **Typed ops** (DECISIONS D228): `OpDecl::typed` and `OpDecl::typed_async`
+  take a closure over Rust types — `|id: u64, name: String| …` — whose
+  arguments are read straight off the call, with no `Value` or `Vec` in
+  between. A two-number op call costs about half what it did. An argument of
+  the wrong type throws a `TypeError` naming the op and the argument rather
+  than reaching the handler as a default. `OpDecl::sync`/`r#async` stay for
+  variadic and structured ops.
+
+### Changed
+
+- `performance.now()`, `TextEncoder`/`TextDecoder`, `URL`, `crypto`'s random
+  bytes and the HTTP server's per-request ops run on typed ops.
+- Every op call skips the diagnostics recorder unless op spans are subscribed
+  (~3 ns a call).
+
 ## [0.48.0] - 2026-11-17
 
 ### Added

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use es_runtime_common::ExceptionClass;
-use es_runtime_engine::{Engine, OpDecl, OpError, Value};
+use es_runtime_engine::{Engine, OpDecl, OpError};
 
 use crate::Result;
 
@@ -92,84 +92,68 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     // become U+FFFD), which is exactly TextEncoder semantics — so the op is just
     // "hand the bytes back". The owned String's buffer becomes the returned
     // bytes (and ultimately the ArrayBuffer backing store) without a copy.
-    engine.register_op(OpDecl::sync("utf8_encode", |args| {
-        Ok(match args.into_iter().next() {
-            Some(Value::String(s)) => Value::Bytes(s.into_bytes()),
-            _ => Value::Bytes(Vec::new()),
-        })
-    }))?;
+    engine.register_op(OpDecl::typed("utf8_encode", |s: String| Ok(s.into_bytes())))?;
 
     // `(bytes, fatal, ignoreBOM)` → string. V8 builds the JS string natively.
     // The bytes are consumed: valid UTF-8 (the common case) converts in place
     // with no copy; only invalid input takes the lossy-replacement path.
-    engine.register_op(OpDecl::sync("utf8_decode", |args| {
-        let fatal = matches!(args.get(1), Some(Value::Bool(true)));
-        let ignore_bom = matches!(args.get(2), Some(Value::Bool(true)));
-        let mut bytes = match args.into_iter().next() {
-            Some(Value::Bytes(b)) => b,
-            _ => Vec::new(),
-        };
-        if !ignore_bom && bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-            bytes.drain(..3);
-        }
-        match String::from_utf8(bytes) {
-            Ok(s) => Ok(Value::String(s)),
-            Err(_) if fatal => Err(OpError::new(ExceptionClass::TypeError, "invalid UTF-8")),
-            Err(e) => Ok(Value::String(
-                String::from_utf8_lossy(e.as_bytes()).into_owned(),
-            )),
-        }
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "utf8_decode",
+        |mut bytes: Vec<u8>, fatal: bool, ignore_bom: bool| {
+            if !ignore_bom && bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+                bytes.drain(..3);
+            }
+            match String::from_utf8(bytes) {
+                Ok(s) => Ok(s),
+                Err(_) if fatal => Err(OpError::new(ExceptionClass::TypeError, "invalid UTF-8")),
+                Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+            }
+        },
+    ))?;
 
     // `label` → the canonical encoding name, lowercase as the spec's `encoding`
     // attribute reports it. An unknown label is a `RangeError`, which is what
     // the `TextDecoder` constructor must throw.
-    engine.register_op(OpDecl::sync("encoding_for_label", |args| {
-        let label = args.first().and_then(Value::as_str).unwrap_or("");
-        Ok(Value::String(encoding_for(label)?.name().to_lowercase()))
+    engine.register_op(OpDecl::typed("encoding_for_label", |label: String| {
+        Ok(encoding_for(&label)?.name().to_lowercase())
     }))?;
 
     // One-shot decode: no state to keep, so the decoder never leaves the op.
-    engine.register_op(OpDecl::sync("decode_once", |args| {
-        let enc = encoding_for(args.first().and_then(Value::as_str).unwrap_or(""))?;
-        let fatal = matches!(args.get(2), Some(Value::Bool(true)));
-        let ignore_bom = matches!(args.get(3), Some(Value::Bool(true)));
-        // Consumes the argument vector to take the byte buffer by value: the
-        // UTF-8 path below turns it into the result string without copying it,
-        // which borrowing would make impossible.
-        let mut bytes = match args.into_iter().nth(1) {
-            Some(Value::Bytes(b)) => b,
-            _ => Vec::new(),
-        };
+    engine.register_op(OpDecl::typed(
+        "decode_once",
+        |label: String, mut bytes: Vec<u8>, fatal: bool, ignore_bom: bool| {
+            let enc = encoding_for(&label)?;
+            // The byte buffer is taken by value: the UTF-8 path below turns it into
+            // the result string without copying it, which borrowing would make
+            // impossible.
 
-        // UTF-8 is what `new TextDecoder()` gives you, so this is the path
-        // almost every call takes — and for it a decode is a *validation*: the
-        // bytes are already the output. `String::from_utf8` checks them in place
-        // and hands back the same allocation.
-        //
-        // The general path cannot do that. It builds an `encoding_rs::Decoder`
-        // per call and transcodes into a fresh `String` sized by
-        // `max_utf8_buffer_length`, which for UTF-8 input is up to three times
-        // the input length — an allocation and a copy, to produce bytes
-        // identical to the ones it was given.
-        if enc == encoding_rs::UTF_8 {
-            if !ignore_bom && bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-                bytes.drain(..3);
+            // UTF-8 is what `new TextDecoder()` gives you, so this is the path
+            // almost every call takes — and for it a decode is a *validation*: the
+            // bytes are already the output. `String::from_utf8` checks them in place
+            // and hands back the same allocation.
+            //
+            // The general path cannot do that. It builds an `encoding_rs::Decoder`
+            // per call and transcodes into a fresh `String` sized by
+            // `max_utf8_buffer_length`, which for UTF-8 input is up to three times
+            // the input length — an allocation and a copy, to produce bytes
+            // identical to the ones it was given.
+            if enc == encoding_rs::UTF_8 {
+                if !ignore_bom && bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+                    bytes.drain(..3);
+                }
+                return match String::from_utf8(bytes) {
+                    Ok(s) => Ok(s),
+                    Err(_) if fatal => Err(malformed()),
+                    // Same replacement convention as the general path: U+FFFD per
+                    // maximal subpart, which is what `utf8_decode` already relies on.
+                    Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                };
             }
-            return match String::from_utf8(bytes) {
-                Ok(s) => Ok(Value::String(s)),
-                Err(_) if fatal => Err(malformed()),
-                // Same replacement convention as the general path: U+FFFD per
-                // maximal subpart, which is what `utf8_decode` already relies on.
-                Err(e) => Ok(Value::String(
-                    String::from_utf8_lossy(e.as_bytes()).into_owned(),
-                )),
-            };
-        }
 
-        let mut decoder = new_decoder(enc, ignore_bom);
-        Ok(Value::String(decode(&mut decoder, &bytes, fatal, true)?))
-    }))?;
+            let mut decoder = new_decoder(enc, ignore_bom);
+            decode(&mut decoder, &bytes, fatal, true)
+        },
+    ))?;
 
     // Streaming decode. The registry holds one decoder per in-flight stream;
     // `decoder_free` is called when the stream ends, and a `FinalizationRegistry`
@@ -180,37 +164,34 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
 
     let registry = decoders.clone();
     let ids = next_id.clone();
-    engine.register_op(OpDecl::sync("decoder_new", move |args| {
-        let name = args.first().and_then(Value::as_str).unwrap_or("");
-        let ignore_bom = matches!(args.get(1), Some(Value::Bool(true)));
-        let decoder = new_decoder(encoding_for(name)?, ignore_bom);
-        let mut id = ids.borrow_mut();
-        *id += 1;
-        registry.borrow_mut().insert(*id, decoder);
-        Ok(Value::Number(*id as f64))
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "decoder_new",
+        move |name: String, ignore_bom: bool| {
+            let decoder = new_decoder(encoding_for(&name)?, ignore_bom);
+            let mut id = ids.borrow_mut();
+            *id += 1;
+            registry.borrow_mut().insert(*id, decoder);
+            // A handle, read back as a `u64`: exact while under 2^53.
+            Ok(*id as f64)
+        },
+    ))?;
 
     let registry = decoders.clone();
-    engine.register_op(OpDecl::sync("decoder_decode", move |args| {
-        let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-        let fatal = matches!(args.get(2), Some(Value::Bool(true)));
-        let last = matches!(args.get(3), Some(Value::Bool(true)));
-        let bytes = match args.get(1) {
-            Some(Value::Bytes(b)) => b.as_slice(),
-            _ => &[][..],
-        };
-        let mut registry = registry.borrow_mut();
-        let decoder = registry
-            .get_mut(&id)
-            .ok_or_else(|| OpError::type_error("unknown decoder"))?;
-        Ok(Value::String(decode(decoder, bytes, fatal, last)?))
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "decoder_decode",
+        move |id: u64, bytes: Vec<u8>, fatal: bool, last: bool| {
+            let mut registry = registry.borrow_mut();
+            let decoder = registry
+                .get_mut(&id)
+                .ok_or_else(|| OpError::type_error("unknown decoder"))?;
+            decode(decoder, &bytes, fatal, last)
+        },
+    ))?;
 
     let registry = decoders;
-    engine.register_op(OpDecl::sync("decoder_free", move |args| {
-        let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+    engine.register_op(OpDecl::typed("decoder_free", move |id: u64| {
         registry.borrow_mut().remove(&id);
-        Ok(Value::Undefined)
+        Ok(())
     }))?;
 
     Ok(())

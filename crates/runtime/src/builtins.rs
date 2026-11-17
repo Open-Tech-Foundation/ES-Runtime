@@ -236,14 +236,12 @@ fn install_console(engine: &mut dyn Engine, console: Arc<dyn Console>) -> Result
 /// (`performance.timeOrigin`).
 fn install_performance(engine: &mut dyn Engine, clock: Arc<dyn Clock>) -> Result<()> {
     let now_clock = clock.clone();
-    engine.register_op(OpDecl::sync("now", move |_args| {
-        Ok(Value::Number(now_clock.monotonic_micros() as f64 / 1_000.0))
+    engine.register_op(OpDecl::typed("now", move || {
+        Ok(now_clock.monotonic_micros() as f64 / 1_000.0)
     }))?;
 
     // timeOrigin is fixed at construction.
     let origin = clock.wall_ms() as f64;
-    engine.register_op(OpDecl::sync("time_origin", move |_args| {
-        Ok(Value::Number(origin))
-    }))?;
+    engine.register_op(OpDecl::typed("time_origin", move || Ok(origin)))?;
     Ok(())
 }

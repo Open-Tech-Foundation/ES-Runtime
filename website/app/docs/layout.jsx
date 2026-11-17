@@ -165,6 +165,7 @@ const NAV = [
           { title: "Compared", path: "/docs/internals/http/comparison" },
         ],
       },
+      { title: "The host boundary", path: "/docs/internals/ops" },
       { title: "Sockets", path: "/docs/internals/sockets" },
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "TLS trust", path: "/docs/internals/tls" },

@@ -132,6 +132,9 @@ pub enum OpHandler {
     Sync(Box<dyn FnMut(Vec<Value>) -> OpResult>),
     /// Returns a future; the op's JS `Promise` resolves when it completes.
     Async(Box<dyn FnMut(Vec<Value>) -> AsyncOp>),
+    /// Takes and returns Rust types, read straight off the call (DECISIONS
+    /// D228). Built by [`OpDecl::typed`] and [`OpDecl::typed_async`].
+    Typed(crate::typed::TypedHandler),
 }
 
 /// A registration request for one op: its JS name, the capabilities it requires
@@ -179,6 +182,40 @@ impl OpDecl {
             name: name.into(),
             required_capabilities: Vec::new(),
             handler: OpHandler::Async(Box::new(handler)),
+            keeps_loop_alive: true,
+            target_arg: None,
+        }
+    }
+
+    /// Declares a synchronous op over Rust types (DECISIONS D228):
+    /// `OpDecl::typed("add", |a: u32, b: u32| Ok(a + b))`.
+    ///
+    /// Each argument is read as its declared [`OpArg`](crate::typed::OpArg)
+    /// type, and one that is not that type throws a `TypeError` naming the op
+    /// and the argument rather than reaching the handler; so does a call with
+    /// more arguments than the closure takes. A trailing `Option` argument may
+    /// be left out. The result is any [`OpRet`](crate::typed::OpRet).
+    pub fn typed<M>(name: impl Into<String>, handler: impl crate::typed::TypedSync<M>) -> Self {
+        OpDecl {
+            name: name.into(),
+            required_capabilities: Vec::new(),
+            handler: OpHandler::Typed(handler.into_handler()),
+            keeps_loop_alive: true,
+            target_arg: None,
+        }
+    }
+
+    /// Declares an asynchronous op over Rust types: the closure takes
+    /// [`OpArg`](crate::typed::OpArg)s, checked as [`typed`](Self::typed)'s
+    /// are, and returns a future of `Result<R, OpError>`.
+    pub fn typed_async<M>(
+        name: impl Into<String>,
+        handler: impl crate::typed::TypedAsync<M>,
+    ) -> Self {
+        OpDecl {
+            name: name.into(),
+            required_capabilities: Vec::new(),
+            handler: OpHandler::Typed(handler.into_handler()),
             keeps_loop_alive: true,
             target_arg: None,
         }
@@ -385,6 +422,10 @@ pub(crate) struct OpState {
     /// ([`Engine::track_pending_work`](crate::Engine::track_pending_work)): it
     /// captures a stack on every `setTimeout` and every async op.
     pub(crate) track_origins: bool,
+    /// The isolate's span recorder, the one in its slot. Held here too so
+    /// dispatch, which already holds this state, need not look the slot up
+    /// again on every call (~5 ns, D228). Set once, when the isolate is made.
+    pub(crate) recorder: Option<Rc<RefCell<crate::diagnostics::Recorder>>>,
 }
 
 impl OpState {
@@ -408,6 +449,7 @@ impl OpState {
             next_wasm_handle: 1,
             observer: None,
             track_origins: false,
+            recorder: None,
         }
     }
 
@@ -507,32 +549,40 @@ fn op_dispatch_inner(
         return;
     };
 
-    // Marshal every argument before touching op state, so the scope is free.
-    let argc = args.length();
-    let mut argv = Vec::with_capacity(argc.max(0) as usize);
-    for i in 0..argc {
-        // A cyclic or overly deep argument is refused here rather than being
-        // descended into: the descent runs on the native stack, and overflowing
-        // it aborts the isolate instead of throwing.
-        match marshal(scope, args.get(i)) {
-            Ok(value) => argv.push(value),
-            Err(err) => {
-                throw(scope, &err);
-                return;
+    // A `Value` op's arguments are marshaled before the op table is borrowed:
+    // marshaling reads object properties, which runs JS, which may call
+    // another op. A typed op reads its own later, with the table released
+    // (`typed.rs`), so a denied call never reads its arguments at all.
+    let idx = op_id as usize;
+    let legacy = match state_rc.borrow().ops.get(idx) {
+        Some(entry) => !matches!(entry.handler, OpHandler::Typed(_)),
+        None => {
+            throw(
+                scope,
+                &OpError::new(ExceptionClass::Error, format!("unknown op id {op_id}")),
+            );
+            return;
+        }
+    };
+    let mut argv = Vec::new();
+    if legacy {
+        let argc = args.length();
+        argv.reserve(argc.max(0) as usize);
+        for i in 0..argc {
+            // A cyclic or overly deep argument is refused here rather than being
+            // descended into: the descent runs on the native stack, and
+            // overflowing it aborts the isolate instead of throwing.
+            match marshal(scope, args.get(i)) {
+                Ok(value) => argv.push(value),
+                Err(err) => {
+                    throw(scope, &err);
+                    return;
+                }
             }
         }
     }
 
     let mut state = state_rc.borrow_mut();
-    let idx = op_id as usize;
-    if op_id < 0 || idx >= state.ops.len() {
-        drop(state);
-        throw(
-            scope,
-            &OpError::new(ExceptionClass::Error, format!("unknown op id {op_id}")),
-        );
-        return;
-    }
 
     // Anything watching capability checks hears about them here, before the
     // refusal below rather than after it: a denial is the most interesting thing
@@ -571,6 +621,8 @@ fn op_dispatch_inner(
     // Compute the outcome under the field borrow, then release it before using
     // the scope to marshal results / build the promise.
     enum Outcome {
+        /// A typed op that has already set its result.
+        Done,
         Ok(Value),
         Err(OpError),
         Async(AsyncOp),
@@ -584,33 +636,38 @@ fn op_dispatch_inner(
 
     // The gate: one mask test, false for every program nothing is watching, and
     // the op's name is not even cloned unless it comes back true.
-    let span = crate::diagnostics::recorder(scope).and_then(|recorder| {
-        let name = state.ops[idx].name.as_str();
-        // The diagnostics module's own ops are not recorded. They exist only
-        // because something is watching, so recording them would put the cost of
-        // observing into the thing being observed — `span()` would contain the
-        // op that opened it, and every subscription would show itself working.
-        if name.starts_with("diagnostics_") {
-            return None;
-        }
-        crate::diagnostics::OpenSpan::open(
-            &recorder,
-            crate::diagnostics::SpanKind::Op,
-            // Copied only once `open` has decided the span is wanted.
-            || std::rc::Rc::from(name),
-            || {
-                (
-                    crate::async_context::current_span(scope),
-                    crate::async_context::current_trace(scope),
-                )
-            },
-            // An op has no observable gap between becoming runnable and
-            // starting, so its queue delay is reported as zero rather than
-            // invented (see `diagnostics::SpanKind::Op`).
-            None,
-        )
-        .map(|span| (recorder, span))
-    });
+    let span = state
+        .recorder
+        .as_ref()
+        .filter(|recorder| recorder.borrow().wants(crate::diagnostics::SpanKind::Op))
+        .cloned()
+        .and_then(|recorder| {
+            let name = state.ops[idx].name.as_str();
+            // The diagnostics module's own ops are not recorded. They exist only
+            // because something is watching, so recording them would put the cost of
+            // observing into the thing being observed — `span()` would contain the
+            // op that opened it, and every subscription would show itself working.
+            if name.starts_with("diagnostics_") {
+                return None;
+            }
+            crate::diagnostics::OpenSpan::open(
+                &recorder,
+                crate::diagnostics::SpanKind::Op,
+                // Copied only once `open` has decided the span is wanted.
+                || std::rc::Rc::from(name),
+                || {
+                    (
+                        crate::async_context::current_span(scope),
+                        crate::async_context::current_trace(scope),
+                    )
+                },
+                // An op has no observable gap between becoming runnable and
+                // starting, so its queue delay is reported as zero rather than
+                // invented (see `diagnostics::SpanKind::Op`).
+                None,
+            )
+            .map(|span| (recorder, span))
+        });
     // Under `diagnostics:detail`, the thing the op is acting *on* — which for
     // every op that has one is its first string argument: a path for the
     // filesystem, a URL for fetch and net, the statement for a query. Taken
@@ -624,7 +681,11 @@ fn op_dispatch_inner(
         if !recorder.borrow().wants_detail() {
             return None;
         }
-        match state.ops[idx].target_arg {
+        let target_arg = state.ops[idx].target_arg;
+        if !legacy {
+            return typed_target(scope, &args, target_arg);
+        }
+        match target_arg {
             // Named explicitly, for an op whose first string is not what it acts
             // on (see `OpDecl::target_arg`).
             Some(index) => argv.get(index),
@@ -636,23 +697,49 @@ fn op_dispatch_inner(
         .map(std::rc::Rc::from)
     });
 
-    let outcome = match &mut state.ops[idx].handler {
-        OpHandler::Sync(handler) => match handler(argv) {
-            Ok(value) => Outcome::Ok(value),
-            Err(err) => Outcome::Err(err),
-        },
-        OpHandler::Async(handler) => Outcome::Async(handler(argv)),
+    let typed = match &state.ops[idx].handler {
+        OpHandler::Typed(handler) => Some(handler.clone()),
+        _ => None,
+    };
+    let outcome = if let Some(handler) = typed {
+        // Released first: reading the arguments may run JS (see above).
+        drop(state);
+        let called = match &handler.0 {
+            crate::typed::TypedKind::Sync(op) => {
+                op.call(scope, &args, &mut rv).map(|()| Outcome::Done)
+            }
+            crate::typed::TypedKind::Async(op) => op.call(scope, &args).map(Outcome::Async),
+        };
+        match called {
+            Ok(outcome) => outcome,
+            Err(crate::typed::sealed::CallError::Op(err)) => Outcome::Err(err),
+            Err(crate::typed::sealed::CallError::Args(err)) => {
+                Outcome::Err(err.into_op_error(&state_rc.borrow().ops[idx].name))
+            }
+        }
+    } else {
+        let outcome = match &mut state.ops[idx].handler {
+            OpHandler::Sync(handler) => match handler(argv) {
+                Ok(value) => Outcome::Ok(value),
+                Err(err) => Outcome::Err(err),
+            },
+            OpHandler::Async(handler) => Outcome::Async(handler(argv)),
+            OpHandler::Typed(_) => unreachable!("typed ops are dispatched above"),
+        };
+        drop(state);
+        outcome
     };
 
     match outcome {
+        Outcome::Done => {
+            close_span(span, crate::diagnostics::SpanStatus::Ok, target, None);
+        }
         Outcome::Ok(value) => {
-            drop(state);
             close_span(span, crate::diagnostics::SpanStatus::Ok, target, None);
             let js = value_to_js(scope, value);
             rv.set(js);
         }
         Outcome::Err(err) => {
-            drop(state);
             close_span(
                 span,
                 crate::diagnostics::SpanStatus::Error,
@@ -662,6 +749,7 @@ fn op_dispatch_inner(
             throw(scope, &err);
         }
         Outcome::Async(mut future) => {
+            let mut state = state_rc.borrow_mut();
             // Poll once before registering. Plenty of "async" ops are only async
             // in shape: a provider that answers from memory, or one whose work is
             // a single fast syscall, hands back `std::future::ready(..)` — the
@@ -766,6 +854,24 @@ fn op_dispatch_inner(
             rv.set(promise.into());
         }
     }
+}
+
+/// The `target` attribute for a typed op's span: argument `target_arg` if it
+/// is a string, else the first string argument — the same rule a `Value` op
+/// follows, read off the call because a typed op has no marshaled arguments.
+fn typed_target(
+    scope: &v8::PinScope<'_, '_>,
+    args: &v8::FunctionCallbackArguments,
+    target_arg: Option<usize>,
+) -> Option<Rc<str>> {
+    let value = match target_arg {
+        Some(index) => Some(args.get(index as i32)),
+        None => (0..args.length())
+            .map(|i| args.get(i))
+            .find(|v| v.is_string()),
+    }?;
+    let string = v8::Local::<v8::String>::try_from(value).ok()?;
+    Some(Rc::from(string.to_rust_string_lossy(scope)))
 }
 
 /// Closes an op span, if one was opened. A no-op — and not even a borrow — when

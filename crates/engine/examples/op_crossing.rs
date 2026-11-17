@@ -7,6 +7,9 @@
 //!   argument marshaled into a `Value`, collected in a `Vec`, the op state
 //!   borrowed, capabilities and the diagnostics gate checked, the result
 //!   marshaled back.
+//! * **typed op** — the same through a typed handler (`OpDecl::typed`): the
+//!   same checks, with each argument read as its declared Rust type and the
+//!   result set directly.
 //! * **v8 slow** — a bare V8 `FunctionTemplate` callback reading the same
 //!   arguments straight off `FunctionCallbackArguments`. The floor any
 //!   callback-based dispatch can reach; the gap to the op row is ours.
@@ -99,6 +102,24 @@ fn engine_rows() {
             ))
         }))
         .expect("bytes_len");
+    engine
+        .register_op(OpDecl::typed("typed_nop", || Ok(0u32)))
+        .expect("typed_nop");
+    engine
+        .register_op(OpDecl::typed("typed_add_u32", |a: u32, b: u32| {
+            Ok(a.wrapping_add(b))
+        }))
+        .expect("typed_add_u32");
+    engine
+        .register_op(OpDecl::typed("typed_str_len", |s: String| {
+            Ok(s.len() as u32)
+        }))
+        .expect("typed_str_len");
+    engine
+        .register_op(OpDecl::typed("typed_bytes_len", |b: Vec<u8>| {
+            Ok(b.len() as u32)
+        }))
+        .expect("typed_bytes_len");
     engine.eval(SETUP).expect("setup");
 
     let mut time = |name: &str, call: &str| {
@@ -111,6 +132,10 @@ fn engine_rows() {
     time("op: add_u32(i, 1)", "__ops.add_u32(i, 1)");
     time("op: str_len(12 chars)", "__ops.str_len(s)");
     time("op: bytes_len(1 KiB)", "__ops.bytes_len(b)");
+    time("typed op: nop()", "__ops.typed_nop()");
+    time("typed op: add_u32(i, 1)", "__ops.typed_add_u32(i, 1)");
+    time("typed op: str_len(12 chars)", "__ops.typed_str_len(s)");
+    time("typed op: bytes_len(1 KiB)", "__ops.typed_bytes_len(b)");
 }
 
 // --- bare V8 floors --------------------------------------------------------

@@ -118,69 +118,70 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     // setter, which is the only call that could have used it.
     let cache: Rc<RefCell<ParsedUrls>> = Rc::new(RefCell::new(ParsedUrls::default()));
 
-    engine.register_op(OpDecl::sync("url_parse", |args| {
-        let input = args.first().and_then(Value::as_str).unwrap_or("");
-        let base = args.get(1).and_then(Value::as_str);
-        Ok(match parse(input, base) {
-            Some(url) => components_value(&url),
-            None => Value::Null,
-        })
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "url_parse",
+        |input: String, base: Option<String>| {
+            Ok(match parse(&input, base.as_deref()) {
+                Some(url) => components_value(&url),
+                None => Value::Null,
+            })
+        },
+    ))?;
 
     let c = cache.clone();
-    engine.register_op(OpDecl::sync("url_set", move |args| {
-        let href = args.first().and_then(Value::as_str).unwrap_or("");
-        let component = args.get(1).and_then(Value::as_str).unwrap_or("");
-        let value = args.get(2).and_then(Value::as_str).unwrap_or("");
+    engine.register_op(OpDecl::typed(
+        "url_set",
+        move |href: String, component: String, value: String| {
+            let (href, component, value) = (href.as_str(), component.as_str(), value.as_str());
 
-        // `href` replaces the URL rather than modifying it, so the cached parse
-        // of the *old* href is of no use — but the new one is worth keeping.
-        if component == "href" {
-            return Ok(match Url::parse(value) {
-                Ok(url) => {
+            // `href` replaces the URL rather than modifying it, so the cached parse
+            // of the *old* href is of no use — but the new one is worth keeping.
+            if component == "href" {
+                return Ok(match Url::parse(value) {
+                    Ok(url) => {
+                        let out = components_value(&url);
+                        c.borrow_mut().put(url);
+                        out
+                    }
+                    Err(_) => Value::Null,
+                });
+            }
+
+            let cached = c.borrow_mut().take(href);
+            let url = match cached {
+                Some(url) => url,
+                None => match Url::parse(href) {
+                    Ok(url) => url,
+                    Err(_) => return Ok(Value::Null),
+                },
+            };
+            Ok(match apply_component(url, component, value) {
+                Some(url) => {
                     let out = components_value(&url);
                     c.borrow_mut().put(url);
                     out
                 }
-                Err(_) => Value::Null,
-            });
-        }
-
-        let cached = c.borrow_mut().take(href);
-        let url = match cached {
-            Some(url) => url,
-            None => match Url::parse(href) {
-                Ok(url) => url,
-                Err(_) => return Ok(Value::Null),
-            },
-        };
-        Ok(match apply_component(url, component, value) {
-            Some(url) => {
-                let out = components_value(&url);
-                c.borrow_mut().put(url);
-                out
-            }
-            None => Value::Null,
-        })
-    }))?;
+                None => Value::Null,
+            })
+        },
+    ))?;
 
     // Lazy `.origin` (rarely read; needs origin logic, not slicing — opaque
     // origins serialize as "null"). `href` is canonical, so re-parsing is safe.
     let c = cache;
-    engine.register_op(OpDecl::sync("url_origin", move |args| {
-        let href = args.first().and_then(Value::as_str).unwrap_or("");
-        let cached = c.borrow_mut().take(href);
+    engine.register_op(OpDecl::typed("url_origin", move |href: String| {
+        let cached = c.borrow_mut().take(&href);
         let url = match cached {
             Some(url) => url,
-            None => match Url::parse(href) {
+            None => match Url::parse(&href) {
                 Ok(url) => url,
-                Err(_) => return Ok(Value::Null),
+                Err(_) => return Ok(None),
             },
         };
         let origin = url.origin().ascii_serialization();
         // Read-only: put it straight back, since `.origin` does not change the URL.
         c.borrow_mut().put(url);
-        Ok(Value::String(origin))
+        Ok(Some(origin))
     }))?;
     Ok(())
 }

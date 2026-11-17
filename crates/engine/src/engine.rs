@@ -877,6 +877,7 @@ impl V8Engine {
         let recorder =
             std::rc::Rc::new(std::cell::RefCell::new(crate::diagnostics::Recorder::new()));
         isolate.set_slot(recorder.clone());
+        op_state.borrow_mut().recorder = Some(recorder.clone());
         crate::module::install_import_meta_callback(&mut isolate);
         crate::module::install_dynamic_import_callback(&mut isolate);
 

@@ -50,6 +50,7 @@ mod sysmem;
 mod text;
 pub mod trace;
 mod turn;
+pub mod typed;
 mod value;
 
 pub use cpu::CpuBudget;

@@ -1,0 +1,89 @@
+---
+title: "Internals: the host boundary"
+description: How a Web API call reaches Rust, what one crossing costs, why arguments are checked rather than coerced, and why bytes are copied.
+---
+
+# Internals: the host boundary
+
+Every API the runtime implements in Rust — `performance.now()`, `URL`,
+`TextDecoder`, `fetch`, the filesystem — is JavaScript in the prelude calling a
+host function, an **op**. This page is about that call: what it costs, and the
+rules it follows.
+
+The decision and what was rejected are in
+[DECISIONS D228](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+## Two kinds of op
+
+A **typed op** declares its Rust argument types, and each argument is read
+straight off the call as that type. Most hot ops are typed.
+
+A **`Value` op** receives its arguments marshaled into a generic value first.
+It remains for ops whose arguments have no fixed shape — `http_respond` takes a
+response's headers as trailing arguments — and for ops not yet moved over.
+
+Both run the same checks before the handler: the op's capabilities, the
+permission trace when one is attached, and a diagnostics span when op spans are
+subscribed.
+
+## What a call costs
+
+Measured by
+[`crates/engine/examples/op_crossing.rs`](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/crates/engine/examples/op_crossing.rs):
+each row is a JavaScript loop calling one function, release build, Linux x86-64
+(i7-8700K), best of 5. A plain JavaScript call in the same loop costs ~1 ns.
+
+| call | `Value` op | typed op | bare V8 callback | V8 fast call |
+| --- | --- | --- | --- | --- |
+| no arguments | 43 ns | 38 ns | 11 ns | 3.3 ns |
+| two `u32` | 97 ns | 46 ns | 21 ns | 3.6 ns |
+| 12-character string | 111 ns | 68 ns | 40 ns | — |
+| 1 KiB `Uint8Array` | 113 ns | 70 ns | 16 ns | — |
+
+The op is usually a small part of an API's cost. Against the same build with
+every op `Value`-based (`bench/op-cost.js`, best of 3): `new Request(url)`
+802 → 708 ns, `new URL` 706 → 650 ns, `TextEncoder.encode` of 11 bytes
+453 → 428 ns, `performance.now()` 73 → 70 ns.
+
+- **Typed arguments are where the gain is.** A `Value` op probes each argument
+  through several V8 calls before reading it, then holds it in a heap-allocated
+  list. A typed op asks V8 the one question its declared type needs.
+- **The rest is fixed per call:** finding the op's state, the capability check,
+  and the diagnostics gate — about 27 ns above V8's own floor.
+- **A V8 fast call** — optimized code calling Rust directly — would save a
+  further 7–17 ns, and only for ops whose arguments and result are numbers or
+  booleans. It is not used yet.
+
+## Arguments are checked, not coerced
+
+A typed op refuses an argument of the wrong type with a `TypeError` naming the op
+and the argument, before its handler runs:
+
+```text
+TypeError: random_bytes: argument 1 must be an unsigned 32-bit integer
+```
+
+Ops are called by the runtime's own prelude, which converts what a program
+passed — `String(input)`, `Boolean(options.fatal)` — before calling one. An op
+that receives the wrong type is a bug in the prelude, and a silent default
+(`0`, `""`) would hide it.
+
+- An integer is never rounded or wrapped: `1.5`, `-1` and `2 ** 32` are all
+  refused as a `u32`. `-0` is zero.
+- A 64-bit integer takes a safe integer (within ±2<sup>53</sup>−1) or a `BigInt`.
+- A string's lone surrogates become U+FFFD, as a WebIDL `USVString`'s do.
+- An optional argument may be `undefined`, `null` or left out.
+
+A denied op reads none of its arguments, so a getter on an argument object never
+runs for a call that was refused.
+
+## Bytes are copied in, moved out
+
+A typed array passed to an op is copied into Rust memory. A byte buffer returned
+from one becomes the `Uint8Array`'s backing store without a copy.
+
+Borrowing the caller's buffer instead was built and measured. It gained nothing
+measurable, because an op worth calling with bytes does per-byte work slower than
+a memory copy: hashing runs at ~0.3 GB/s, a copy at ~30 GB/s. It would also hand
+Rust a view of memory that JavaScript can change during the call, and that
+asynchronous ops outlive.
