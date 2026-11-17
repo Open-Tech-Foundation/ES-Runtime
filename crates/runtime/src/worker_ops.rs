@@ -174,6 +174,7 @@ fn install_parent(
                     load_capabilities: load_capabilities(parent),
                     limits: worker_limits(parent_limits, memory_mb)?,
                     isolate: false,
+                    cpu_time_ms: None,
                 };
                 let id = require(&host)?.spawn(spec).await.map_err(map_err)?;
                 Ok(Value::Number(owned.own(id) as f64))
@@ -354,10 +355,18 @@ pub(crate) fn install_isolates(
             let url = arg_str(&args, 0);
             let name = arg_str(&args, 1);
             let memory_mb = arg_u64(&args, 2);
+            let cpu_time_ms = arg_u64(&args, 3);
             let parent = caps.get();
             Box::pin(async move {
                 let (specifier, source) = read_entry(loader, &url).await?;
-                let spec = isolate_spec(specifier, source, name, parent_limits, memory_mb)?;
+                let spec = isolate_spec(
+                    specifier,
+                    source,
+                    name,
+                    parent_limits,
+                    memory_mb,
+                    cpu_time_ms,
+                )?;
                 // Its static graph reads files as this agent could; nothing
                 // the isolate's code runs holds any of it.
                 let spec = WorkerSpec {
@@ -384,9 +393,17 @@ pub(crate) fn install_isolates(
             let source = arg_str(&args, 0);
             let name = arg_str(&args, 1);
             let memory_mb = arg_u64(&args, 2);
+            let cpu_time_ms = arg_u64(&args, 3);
             Box::pin(async move {
                 let specifier = source_specifier(&name);
-                let spec = isolate_spec(specifier, source, name, parent_limits, memory_mb)?;
+                let spec = isolate_spec(
+                    specifier,
+                    source,
+                    name,
+                    parent_limits,
+                    memory_mb,
+                    cpu_time_ms,
+                )?;
                 let id = require_isolates(&host)?
                     .spawn(spec)
                     .await
@@ -401,13 +418,15 @@ pub(crate) fn install_isolates(
 }
 
 /// What every isolate is started with: no capability, no environment, a
-/// thread it must not block, and the parent's memory ceiling or a lower one.
+/// thread it must not block, the parent's memory ceiling or a lower one, and a
+/// CPU budget a turn when one was asked for (`0` is none).
 fn isolate_spec(
     specifier: String,
     source: String,
     name: String,
     parent_limits: es_runtime_common::Limits,
     memory_mb: u64,
+    cpu_time_ms: u64,
 ) -> std::result::Result<WorkerSpec, OpError> {
     Ok(WorkerSpec {
         specifier,
@@ -420,6 +439,7 @@ fn isolate_spec(
         // `Atomics.wait` throws there, as on the agent driving the loop.
         limits: worker_limits(parent_limits, memory_mb)?.with_can_block(false),
         isolate: true,
+        cpu_time_ms: (cpu_time_ms > 0).then_some(cpu_time_ms),
     })
 }
 

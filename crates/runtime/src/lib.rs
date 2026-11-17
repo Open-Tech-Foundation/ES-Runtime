@@ -85,9 +85,9 @@ const ISOLATE_DENIAL: &str =
     "an isolate is computation only; pass it what it needs through a host function";
 
 pub use es_runtime_engine::{
-    AsyncOp, CapabilityObserver, Engine, HAS_INSPECTOR, InspectorOptions, InspectorTransport,
-    InterruptHandle, ModuleEvalState, ModuleId, NO_INSPECTOR_MESSAGE, OpDecl, OpError, OpResult,
-    SharedObserver, TurnHandle, V8Engine, Value,
+    AsyncOp, CapabilityObserver, CpuBudget, Engine, HAS_INSPECTOR, InspectorOptions,
+    InspectorTransport, InterruptHandle, ModuleEvalState, ModuleId, NO_INSPECTOR_MESSAGE, OpDecl,
+    OpError, OpResult, SharedObserver, TurnHandle, V8Engine, Value,
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,

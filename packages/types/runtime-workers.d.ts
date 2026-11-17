@@ -365,6 +365,12 @@ declare module "runtime:workers" {
     /** Heap ceiling in megabytes; at most this program's own. */
     memory?: number;
     /**
+     * Most CPU milliseconds one turn may use — from when the isolate gets its
+     * thread until it next waits. Past it the isolate is terminated with
+     * `ERR_ISOLATE_CPU_LIMIT`. Default: no limit.
+     */
+    cpuTime?: number;
+    /**
      * Not accepted: an isolate is computation only and can be granted nothing.
      * Use `host` functions, or a `Worker`.
      */

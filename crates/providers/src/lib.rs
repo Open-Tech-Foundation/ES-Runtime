@@ -1992,6 +1992,11 @@ pub struct WorkerSpec {
     /// `Worker`: computation only, its messages in the isolate envelope, and
     /// its entry module's exports served to the parent once it has evaluated.
     pub isolate: bool,
+    /// The most CPU time, in milliseconds, one turn of an `Isolate` may take —
+    /// from when it is given its pool thread until it next waits — before it
+    /// is terminated (D227). `None` for no limit; a `Worker` has its own thread
+    /// and is never given one.
+    pub cpu_time_ms: Option<u64>,
 }
 
 /// One event from a worker agent, surfaced by [`WorkerHost::recv`].

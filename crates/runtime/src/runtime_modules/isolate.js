@@ -48,6 +48,13 @@ function isolateRebuildError(pieces) {
     ? ISOLATE_ERROR_CLASSES[pieces.name]
     : Error;
   const error = new Class(String(pieces?.message ?? "isolate call failed"));
+  // The host names its own failures by code — `ERR_ISOLATE_CPU_LIMIT` — and
+  // a code is what `ERR_ISOLATE_TERMINATED` is read by, so they arrive as one.
+  if (typeof pieces?.code !== "string" && /^ERR_ISOLATE_[A-Z_]+$/.test(pieces?.name ?? "")) {
+    error.code = pieces.name;
+    if (pieces.stack) error.stack = pieces.stack;
+    return error;
+  }
   if (pieces?.name && pieces.name !== error.name) error.name = pieces.name;
   if (pieces?.stack) error.stack = pieces.stack;
   if (typeof pieces?.code === "string") error.code = pieces.code;
@@ -102,7 +109,19 @@ function isolateHost(value) {
   return host;
 }
 
-const ISOLATE_OPTIONS = new Set(["name", "host", "memory"]);
+function isolateCpuTime(value) {
+  if (value === undefined || value === null) return 0;
+  const ms = Number(value);
+  if (!Number.isInteger(ms) || ms <= 0) {
+    throw new TypeError(
+      'Isolate option "cpuTime" must be a positive whole number of milliseconds, ' +
+        `not ${JSON.stringify(value)}`,
+    );
+  }
+  return ms;
+}
+
+const ISOLATE_OPTIONS = new Set(["name", "host", "memory", "cpuTime"]);
 
 /**
  * A small, sandboxed agent on a shared pool of threads.
@@ -129,7 +148,7 @@ class Isolate extends EventTarget {
   /**
    * @param {URL | string | { source: string, name?: string }} code The module
    *   to run: a file's URL, or its source text.
-   * @param {{ name?: string, host?: Record<string, Function>, memory?: number }} [options]
+   * @param {{ name?: string, host?: Record<string, Function>, memory?: number, cpuTime?: number }} [options]
    */
   constructor(code, options = {}) {
     super();
@@ -149,6 +168,7 @@ class Isolate extends EventTarget {
     }
     this.#host = isolateHost(opts.host);
     const memory = isolateMemory(opts.memory);
+    const cpuTime = isolateCpuTime(opts.cpuTime);
 
     let start;
     if (code !== null && typeof code === "object" && !(code instanceof URL)) {
@@ -156,11 +176,11 @@ class Isolate extends EventTarget {
         throw new TypeError("Isolate code must be a module URL or { source: string }");
       }
       const name = code.name === undefined ? String(opts.name ?? "") : String(code.name);
-      start = () => __ops.isolate_spawn_source(code.source, name, memory);
+      start = () => __ops.isolate_spawn_source(code.source, name, memory, cpuTime);
     } else {
       const url = new URL(String(code), __ops.worker_base()).href;
       const name = opts.name === undefined ? "" : String(opts.name);
-      start = () => __ops.isolate_spawn_file(url, name, memory);
+      start = () => __ops.isolate_spawn_file(url, name, memory, cpuTime);
     }
 
     this.#exports = new Promise((resolve, reject) => {

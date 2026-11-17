@@ -106,7 +106,7 @@ pub struct WasmModuleInfo {
 /// another thread while the engine is driven on its own.
 #[derive(Clone)]
 pub struct InterruptHandle {
-    isolate: v8::IsolateHandle,
+    pub(crate) isolate: v8::IsolateHandle,
     /// Latches that a termination was asked for.
     ///
     /// V8's own flag answers a narrower question than it appears to: it reports
@@ -1571,6 +1571,44 @@ mod tests {
         // And an entered one drops as before.
         let c = engine();
         drop(c);
+    }
+
+    /// A CPU budget, checked from another thread as the pool's watchdog
+    /// checks it, terminates a turn that spins past it — and says so — but
+    /// leaves one that finishes inside it alone (D227).
+    #[test]
+    fn a_cpu_budget_ends_a_turn_that_spins_and_only_that() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let budget = crate::CpuBudget::new(30, engine.interrupt_handle());
+
+        let watching = std::sync::Arc::new(AtomicBool::new(true));
+        let watchdog = {
+            let (budget, watching) = (budget.clone(), watching.clone());
+            std::thread::spawn(move || {
+                while watching.load(Ordering::SeqCst) {
+                    budget.check();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            })
+        };
+
+        budget.begin_turn();
+        let short = engine.eval("let n = 0; for (let i = 0; i < 1000; i++) n += i; n");
+        budget.end_turn();
+        assert_eq!(short.expect("short turn"), Value::Number(499_500.0));
+        assert!(!budget.exceeded(), "a short turn was charged");
+
+        budget.begin_turn();
+        let spun = engine.eval("for (;;) {}");
+        budget.end_turn();
+        watching.store(false, Ordering::SeqCst);
+        watchdog.join().expect("watchdog");
+        assert!(matches!(spun, Err(Error::Terminated { .. })), "{spun:?}");
+        assert!(
+            budget.exceeded(),
+            "the budget did not say it ended the turn"
+        );
     }
 
     /// A turn handle enters and leaves without borrowing the engine, and does

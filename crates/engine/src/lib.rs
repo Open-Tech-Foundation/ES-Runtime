@@ -34,6 +34,7 @@
 mod async_context;
 mod bson;
 mod convert;
+mod cpu;
 pub mod diagnostics;
 mod engine;
 pub mod error;
@@ -50,6 +51,7 @@ pub mod trace;
 mod turn;
 mod value;
 
+pub use cpu::CpuBudget;
 pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};
 pub use error::{Error, Result};
 pub use inspector::{HAS_INSPECTOR, InspectorOptions, InspectorTransport, NO_INSPECTOR_MESSAGE};

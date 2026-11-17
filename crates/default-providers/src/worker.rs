@@ -745,6 +745,12 @@ async fn run_agent(
     } else {
         None
     };
+    // An isolate's CPU budget a turn (D227), enforced only where turns exist.
+    let budget = match (pooled, spec.cpu_time_ms) {
+        (true, Some(ms)) => Some(es_runtime::CpuBudget::new(ms, runtime.interrupt_handle())),
+        _ => None,
+    };
+    let isolate = spec.isolate;
 
     // Publish the interrupt handle now, so a `terminate()` racing startup can
     // still stop this isolate rather than waiting out its first long task.
@@ -849,9 +855,33 @@ async fn run_agent(
         Ok(())
     };
     let outcome = match turn {
-        Some(turn) => Entered::new(turn, drive).await,
+        Some(turn) => Entered::new(turn, budget.clone(), drive).await,
         None => drive.await,
     };
+    // Whatever the drive made of its termination, a budget that ended it is
+    // the reason, and the one a parent can act on.
+    let outcome = match &budget {
+        Some(budget) if budget.exceeded() => Err(UncaughtError::new(
+            "ERR_ISOLATE_CPU_LIMIT",
+            format!(
+                "isolate terminated: a turn used more than its {} ms of CPU",
+                budget.limit_ms()
+            ),
+            String::new(),
+        )),
+        _ => outcome,
+    };
+    // An isolate's heap limit has its own code (D227), so a parent handling
+    // `ERR_ISOLATE_*` sees every limit an isolate can reach under one prefix.
+    let outcome = outcome.map_err(|mut error| {
+        if isolate && error.name == "ERR_WORKER_OUT_OF_MEMORY" {
+            error.name = "ERR_ISOLATE_MEMORY_LIMIT".to_string();
+            error.message = error
+                .message
+                .replacen("worker terminated", "isolate terminated", 1);
+        }
+        error
+    });
 
     if let Err(error) = outcome {
         report(error);
@@ -894,13 +924,21 @@ async fn run_agent(
 /// isolate would leave every later turn on the thread refused.
 struct Entered<F> {
     turn: es_runtime::TurnHandle,
+    /// The isolate's CPU budget a turn, when it has one: each poll is a turn,
+    /// begun here and posted where the pool's watchdog can see it.
+    budget: Option<Arc<es_runtime::CpuBudget>>,
     inner: std::pin::Pin<Box<F>>,
 }
 
 impl<F> Entered<F> {
-    fn new(turn: es_runtime::TurnHandle, inner: F) -> Self {
+    fn new(
+        turn: es_runtime::TurnHandle,
+        budget: Option<Arc<es_runtime::CpuBudget>>,
+        inner: F,
+    ) -> Self {
         Entered {
             turn,
+            budget,
             inner: Box::pin(inner),
         }
     }
@@ -913,16 +951,87 @@ impl<F: std::future::Future> std::future::Future for Entered<F> {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<F::Output> {
-        struct Leave<'a>(&'a es_runtime::TurnHandle);
+        /// Ends the turn and leaves the isolate, even if the poll panics.
+        struct Leave<'a>(
+            &'a es_runtime::TurnHandle,
+            Option<&'a es_runtime::CpuBudget>,
+        );
         impl Drop for Leave<'_> {
             fn drop(&mut self) {
+                if let Some(budget) = self.1 {
+                    budget.end_turn();
+                    POOL_TURN.with(|turn| {
+                        if let Some(turn) = turn.get() {
+                            turn.end();
+                        }
+                    });
+                }
                 self.0.leave();
             }
         }
         let this = &mut *self;
         this.turn.enter();
-        let _leave = Leave(&this.turn);
+        if let Some(budget) = &this.budget {
+            budget.begin_turn();
+            POOL_TURN.with(|turn| {
+                if let Some(turn) = turn.get() {
+                    turn.begin(budget.clone());
+                }
+            });
+        }
+        let _leave = Leave(&this.turn, this.budget.as_deref());
         this.inner.as_mut().poll(cx)
+    }
+}
+
+/// The turn running on one pool thread, as its watchdog sees it.
+struct TurnSlot {
+    running: std::sync::Mutex<Option<(Arc<es_runtime::CpuBudget>, std::time::Instant)>>,
+    watchdog: std::thread::Thread,
+}
+
+impl TurnSlot {
+    fn begin(&self, budget: Arc<es_runtime::CpuBudget>) {
+        if let Ok(mut running) = self.running.lock() {
+            *running = Some((budget, std::time::Instant::now()));
+        }
+        self.watchdog.unpark();
+    }
+
+    fn end(&self) {
+        if let Ok(mut running) = self.running.lock() {
+            *running = None;
+        }
+    }
+}
+
+thread_local! {
+    /// On a pool thread, where it posts its budgeted turns; unset elsewhere.
+    static POOL_TURN: std::cell::OnceCell<Arc<TurnSlot>> = const { std::cell::OnceCell::new() };
+}
+
+/// The pool's watchdog: for each thread running a budgeted turn whose wall
+/// time has passed the budget, asks the isolate to check its CPU time — CPU
+/// time cannot be ahead of wall time, so nothing earlier could be over. It
+/// looks every 2 ms while any budgeted turn runs and sleeps otherwise; the
+/// first such turn wakes it.
+fn watch(slots: &[Arc<TurnSlot>]) {
+    loop {
+        let mut running = false;
+        for slot in slots {
+            let current = slot.running.lock().ok().and_then(|r| r.clone());
+            if let Some((budget, started)) = current {
+                running = true;
+                if started.elapsed().as_secs_f64() * 1000.0 >= budget.limit_ms() {
+                    budget.check();
+                }
+            }
+        }
+        if running {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        } else {
+            std::thread::park();
+        }
     }
 }
 
@@ -974,7 +1083,7 @@ impl IsolatePool {
 
     fn threads(&self) -> Result<&[PoolThread], ProviderError> {
         self.threads
-            .get_or_init(|| (0..self.size).map(start_pool_thread).collect())
+            .get_or_init(|| start_pool(self.size))
             .as_deref()
             .map_err(|err| ProviderError::Other(err.clone()))
     }
@@ -1004,13 +1113,50 @@ impl IsolatePool {
     }
 }
 
-fn start_pool_thread(index: usize) -> Result<PoolThread, String> {
+/// The pool's threads and the watchdog that enforces their isolates' CPU
+/// budgets. The watchdog is made first, so each thread can be told where to
+/// post its turns.
+fn start_pool(size: usize) -> Result<Vec<PoolThread>, String> {
+    let (handle, slots) = {
+        let (tell, told) = std::sync::mpsc::channel::<Vec<Arc<TurnSlot>>>();
+        let handle = std::thread::Builder::new()
+            .name("isolate-pool-watchdog".into())
+            .spawn(move || {
+                if let Ok(slots) = told.recv() {
+                    watch(&slots);
+                }
+            })
+            .map_err(|err| format!("isolate pool watchdog could not start: {err}"))?;
+        let watchdog = handle.thread().clone();
+        let slots: Vec<Arc<TurnSlot>> = (0..size)
+            .map(|_| {
+                Arc::new(TurnSlot {
+                    running: std::sync::Mutex::new(None),
+                    watchdog: watchdog.clone(),
+                })
+            })
+            .collect();
+        let _ = tell.send(slots.clone());
+        (handle, slots)
+    };
+    drop(handle);
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, slot)| start_pool_thread(index, slot))
+        .collect()
+}
+
+fn start_pool_thread(index: usize, slot: Arc<TurnSlot>) -> Result<PoolThread, String> {
     let (jobs, mut inbox) = mpsc::unbounded_channel::<Job>();
     std::thread::Builder::new()
         // The same stack as every other JS thread (D189).
         .stack_size(WORKER_STACK)
         .name(format!("isolate-pool-{index}"))
         .spawn(move || {
+            POOL_TURN.with(|turn| {
+                let _ = turn.set(slot);
+            });
             let Ok(tokio_runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -1179,6 +1325,7 @@ mod tests {
             load_capabilities: es_runtime_common::CapabilitySet::none(),
             limits: es_runtime_common::Limits::default(),
             isolate: false,
+            cpu_time_ms: None,
         }
     }
 

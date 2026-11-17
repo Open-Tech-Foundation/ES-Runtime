@@ -366,7 +366,18 @@ the module has evaluated, through one locked hook, and calls that arrived
 earlier wait rather than finding bindings in their temporal dead zone. Guest
 code is never given a way to reach a module it was not handed.
 
+**A CPU budget a turn.** `cpuTime` bounds a turn — one stretch of an isolate's
+code from when its thread enters it until it next waits — not a call: calls
+interleave inside one isolate, and CPU cannot be charged to one of them without
+guessing. Only the thread running the isolate can read its own CPU clock, so the
+check runs there. The pool's watchdog, one thread parked unless a budgeted turn
+is running, asks V8 to interrupt a turn once its wall time passes the budget;
+the interrupt runs on the isolate's thread, compares that thread's CPU time with
+the turn's start, and terminates the isolate if it is over. CPU time cannot be
+ahead of wall time, so a turn under budget costs two clock reads, and a machine
+too busy to run the thread never counts against the isolate.
+
 **Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
-throws, and no synchronous op is reachable. A call that loops forever holds up
-the other isolates on its thread until `terminate()` stops it. A pool holds up
+throws, and no synchronous op is reachable. Without `cpuTime`, a call that loops
+forever holds up the other isolates on its thread until `terminate()` stops it. A pool holds up
 to 10,000 live isolates.

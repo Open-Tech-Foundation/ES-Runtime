@@ -58,6 +58,7 @@ const rule = new Isolate(
   {
     host: { log: (line: string) => console.log(line) },
     memory: 16,
+    cpuTime: 50,
   },
 );
 const doubled: Promise<unknown> = rule.exports.then(({ f }) => f(21));

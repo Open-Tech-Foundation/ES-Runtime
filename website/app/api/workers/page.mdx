@@ -420,6 +420,7 @@ const iso = new Isolate(code, options);
 | `options.name` | `string` | The isolate's name. Default `""`. |
 | `options.host` | `{ [name]: function }` | Functions the isolate may call. Each runs in the parent, with the parent's permissions. Default none. |
 | `options.memory` | `number` | Heap ceiling in megabytes, at most the parent's own. Default: the parent's. |
+| `options.cpuTime` | `number` | Most CPU milliseconds one turn may use — from when the isolate gets its thread until it next waits. Default: no limit. |
 
 Any other option throws a `TypeError`, `permissions` included: an isolate can be
 granted nothing.
@@ -445,5 +446,7 @@ capability work.
 | Code | Meaning |
 | --- | --- |
 | `ERR_ISOLATE_TERMINATED` | The isolate was terminated or has ended. |
+| `ERR_ISOLATE_CPU_LIMIT` | A turn used more than `cpuTime`; the isolate was terminated. |
+| `ERR_ISOLATE_MEMORY_LIMIT` | The isolate reached its `memory` ceiling and was terminated. |
 | `ERR_CAPABILITY_DENIED` | Inside an isolate: what was asked for reaches outside it. |
 

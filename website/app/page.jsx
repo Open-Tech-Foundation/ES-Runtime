@@ -227,8 +227,8 @@ const isolatePoints = [
     body: "host functions are the one way out. Hand over getUser(id), not fetch: each runs in your program, with your permissions.",
   },
   {
-    title: "Stopped when you say",
-    body: "terminate() ends a call stuck in a loop at once, and every waiting call rejects. The other isolates carry on.",
+    title: "Stopped when it runs away",
+    body: "A cpuTime budget ends a loop that never yields, and terminate() ends an isolate whenever you say. The others carry on.",
   },
 ];
 

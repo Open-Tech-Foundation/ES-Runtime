@@ -4683,7 +4683,8 @@ plugin.terminate();
 | `new Isolate({ source, name? }, options?)` | Module source text. Needs `workers`; imports only `runtime:` modules. |
 | `options.name` | The isolate's name. |
 | `options.host` | `{ name: function }` the isolate calls through `host`; each runs in the parent with its permissions. |
-| `options.memory` | Heap ceiling in MB, at most the parent's. |
+| `options.memory` | Heap ceiling in MB, at most the parent's. Past it: `ERR_ISOLATE_MEMORY_LIMIT`. |
+| `options.cpuTime` | Most CPU ms one turn may use (until the isolate next waits). Past it: `ERR_ISOLATE_CPU_LIMIT`. |
 | `exports` | Promise of the exported functions, each an async call. Rejects if the module throws while loading. |
 | `postMessage(message)`, `onmessage`, `onerror` | One-way messages and failures, as on `Worker`. |
 | `terminate()`, `unref()`, `ref()` | As on `Worker`; waiting calls reject with `ERR_ISOLATE_TERMINATED`. |

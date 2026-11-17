@@ -24,6 +24,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `terminate()`. Starting one needs `--allow-workers`, and `--allow-imports`
   from a file. Inside one, `runtime:workers` exports only `host`, and every
   denial says to use it.
+- `cpuTime` for `Isolate` (DECISIONS D227): the most CPU time, in
+  milliseconds, one turn may use — from when the isolate gets its thread until
+  it next waits — before it is terminated with `ERR_ISOLATE_CPU_LIMIT`. CPU,
+  not wall time: waiting and a busy machine never count. An endless loop or
+  `await` chain is stopped soon after its budget, and the isolates sharing its
+  thread carry on. An isolate that reaches its `memory` ceiling now reports
+  `ERR_ISOLATE_MEMORY_LIMIT`.
 - `es-runtime`: `Runtime::leave()` and `Runtime::enter()`, so one thread can
   hold many runtimes and run each in turn — the base of the pooled `Isolate`
   (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8

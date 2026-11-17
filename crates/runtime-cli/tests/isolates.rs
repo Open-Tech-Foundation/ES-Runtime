@@ -340,3 +340,165 @@ fn starting_an_isolate_needs_workers_and_a_file_needs_imports() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(lines(&out), ["ERR_CAPABILITY_DENIED workers"]);
 }
+
+// ---- cpuTime (D227 phase 3) -------------------------------------------------
+
+/// A turn that spins past its budget is ended with `ERR_ISOLATE_CPU_LIMIT`,
+/// soon after the budget — and an endless `await` chain is one turn too.
+#[test]
+fn cpu_time_ends_a_turn_that_spins() {
+    let out = run(
+        "cpu-spin",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        for (const body of ["for (;;) {}", "for (;;) await null;"]) {
+          const iso = new Isolate({ source: `export async function go() { ${body} }` }, { cpuTime: 50 });
+          iso.onerror = (e) => e.preventDefault();
+          const { go } = await iso.exports;
+          const start = performance.now();
+          try { await go(); } catch (e) {
+            const ms = performance.now() - start;
+            console.log(e.code, ms >= 40 && ms < 2000);
+          }
+          try { await go(); } catch (e) { console.log(e.code); }
+        }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        [
+            "ERR_ISOLATE_CPU_LIMIT true",
+            "ERR_ISOLATE_TERMINATED",
+            "ERR_ISOLATE_CPU_LIMIT true",
+            "ERR_ISOLATE_TERMINATED",
+        ]
+    );
+}
+
+/// The budget is a turn's, not a call's, and waiting is not in a turn: work in
+/// short turns, and a long wait on a host function, both finish.
+#[test]
+fn cpu_time_counts_turns_and_not_waiting() {
+    let out = run(
+        "cpu-turns",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const iso = new Isolate({ source: `
+          import { host } from "runtime:workers";
+          const burn = (ms) => { const end = performance.now() + ms; while (performance.now() < end) {} };
+          export async function work() {
+            for (let k = 0; k < 8; k++) { burn(20); await new Promise((r) => setTimeout(r, 0)); }
+            return "worked";
+          }
+          export const wait = () => host.slow();
+        ` }, {
+          cpuTime: 60,
+          host: { slow: () => new Promise((r) => setTimeout(() => r("waited"), 300)) },
+        });
+        const { work, wait } = await iso.exports;
+        console.log(await work());
+        console.log(await wait());
+        iso.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["worked", "waited"]);
+}
+
+/// A module whose top level runs past the budget never serves its exports.
+#[test]
+fn cpu_time_covers_the_module_loading() {
+    let out = run(
+        "cpu-load",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const iso = new Isolate(
+          { source: "const end = performance.now() + 2000; while (performance.now() < end) {} export const x = 1;" },
+          { cpuTime: 50 },
+        );
+        iso.onerror = (e) => { e.preventDefault(); console.log("error:", e.error.code); };
+        try { await iso.exports; } catch (e) { console.log("exports:", e.code); }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        [
+            "error: ERR_ISOLATE_CPU_LIMIT",
+            "exports: ERR_ISOLATE_CPU_LIMIT"
+        ]
+    );
+}
+
+/// While one isolate spins, the isolates sharing the pool keep answering, and
+/// the spinner is ended by its budget.
+#[test]
+fn a_spinning_isolate_does_not_hold_the_pool_past_its_budget() {
+    let out = run(
+        "cpu-neighbours",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const spinner = new Isolate({ source: "export const spin = () => { for (;;) {} };" }, { cpuTime: 100 });
+        spinner.onerror = (e) => e.preventDefault();
+        const others = Array.from({ length: 40 }, (_, k) => new Isolate({ source: `export const id = () => ${k};` }));
+        const spun = (await spinner.exports).spin().catch((e) => e.code);
+        const ids = await Promise.all(others.map(async (o) => (await o.exports).id()));
+        console.log(ids.length, await spun);
+        for (const o of others) o.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["40 ERR_ISOLATE_CPU_LIMIT"]);
+}
+
+#[test]
+fn cpu_time_must_be_a_positive_whole_number() {
+    let out = run(
+        "cpu-option",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        for (const cpuTime of [0, -5, 1.5, "fast"]) {
+          try { new Isolate({ source: "" }, { cpuTime }); console.log("accepted", cpuTime); }
+          catch (e) { console.log(e.name); }
+        }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        ["TypeError", "TypeError", "TypeError", "TypeError"]
+    );
+}
+
+/// Reaching the heap ceiling is `ERR_ISOLATE_MEMORY_LIMIT`, under the same
+/// prefix as the other limits an isolate can reach.
+#[test]
+fn an_isolate_out_of_memory_is_its_own_code() {
+    let out = run(
+        "memory",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const iso = new Isolate(
+          { source: "const a = []; export const grow = () => { for (;;) a.push(new Array(1e5).fill({ x: 1 })); };" },
+          { memory: 16 },
+        );
+        iso.onerror = (e) => e.preventDefault();
+        try { await (await iso.exports).grow(); } catch (e) { console.log(e.code, /16MB/.test(e.message)); }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["ERR_ISOLATE_MEMORY_LIMIT true"]);
+}

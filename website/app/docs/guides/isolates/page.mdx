@@ -141,14 +141,35 @@ iso.onmessage = (e) => console.log(e.data); // 42
 iso.postMessage(21);
 ```
 
-## Memory and ending
+## Memory and CPU
 
 `memory` caps the isolate's heap, in megabytes, at no more than your program's
-own:
+own. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use —
+one stretch of the isolate's code, from when it gets its thread until it next
+waits:
 
 ```js
-new Isolate(code, { memory: 32 });
+new Isolate(code, { memory: 32, cpuTime: 50 });
 ```
+
+A loop that never ends, `for (;;) await null` included, is one turn, so it is
+stopped soon after its budget. Waiting is not in a turn: an isolate waiting on a
+host function or a timer uses none of it. Work that awaits between short pieces
+is never stopped, and never holds its thread either.
+
+Past either limit the isolate is terminated. Its waiting calls reject with
+`ERR_ISOLATE_CPU_LIMIT` or `ERR_ISOLATE_MEMORY_LIMIT`, and later calls with
+`ERR_ISOLATE_TERMINATED`.
+
+```js
+try {
+  await rule.evaluate(order);
+} catch (e) {
+  if (e.code === "ERR_ISOLATE_CPU_LIMIT") disableRule(tenant);
+}
+```
+
+## Ending
 
 `terminate()` stops an isolate at once, even one stuck in a loop. Calls still
 waiting reject with `ERR_ISOLATE_TERMINATED`, and so does any later call.
@@ -170,8 +191,9 @@ while it idles.
 
 - An isolate is not a hard security boundary. It keeps code apart from your
   program's data and permissions, not from attacks on the CPU itself.
-- Isolates on one pool thread take turns. A call that loops forever holds up
-  the others on its thread until you `terminate()` it.
+- Isolates on one pool thread take turns. Without `cpuTime`, a call that loops
+  forever holds up the others on its thread until you `terminate()` it. Give
+  isolates running code you don't control a `cpuTime`.
 - From inside an isolate, `cwd()` is refused, so `resolve()` of a relative path
   is too. `join()` and the rest of `runtime:path` work.
 
