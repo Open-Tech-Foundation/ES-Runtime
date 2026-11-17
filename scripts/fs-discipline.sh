@@ -49,6 +49,8 @@ crates/runtime/src/lib.rs|/proc/self/statm for memory stats; the rest is tests
 crates/runtime/src/mongodb/spec_tests.rs|test-only: reads the fetched MongoDB specification suites
 crates/engine/src/sysinfo.rs|/proc/self/status for process stats
 crates/engine/src/sysmem.rs|/proc and cgroup files for memory limits
+crates/engine/examples/isolate_locker.rs|a benchmark probe (D227): /proc/self/status for its own resident memory
+crates/default-providers/examples/isolate_density.rs|a benchmark probe (D227): /proc/self/status for its own resident memory
 '
 
 dirs=()
