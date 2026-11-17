@@ -934,6 +934,15 @@ RUNTIMES="esrun deno" SERVER=scripts/hono.js bench/cpu-per-request.sh
 the crossing between JS and the host (`performance.now`, `new URL`, `atob`,
 `randomUUID`, …). It runs unmodified on every runtime; run it under each.
 
+`crates/engine/examples/op_crossing.rs` isolates the crossing itself: the same
+loop calling an op through the engine's dispatch, a bare V8 callback, and a V8
+fast call, for no arguments, two numbers, a short string and 1 KiB of bytes. The
+gap between the first two is the dispatch's own cost (DECISIONS D228).
+
+```sh
+cargo run --release --example op_crossing -p es-runtime-engine
+```
+
 For a profile with function names, build `cargo build --profile profiling -p
 es-runtime-cli` (release settings, unstripped). Call graphs through Rust code
 need frame pointers as well: `CARGO_TARGET_DIR=target/fp RUSTFLAGS="-C
