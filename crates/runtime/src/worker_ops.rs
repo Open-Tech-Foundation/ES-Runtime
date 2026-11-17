@@ -437,9 +437,24 @@ fn isolate_spec(
         load_capabilities: CapabilitySet::none(),
         // A pool thread is shared, so an isolate is not allowed to park it:
         // `Atomics.wait` throws there, as on the agent driving the loop.
-        limits: worker_limits(parent_limits, memory_mb)?.with_can_block(false),
+        limits: isolate_limits(parent_limits, memory_mb)?,
         isolate: true,
         cpu_time_ms: (cpu_time_ms > 0).then_some(cpu_time_ms),
+    })
+}
+
+/// An isolate's ceilings: a worker's, on a thread it must not block — so
+/// `Atomics.wait` throws there, as on the agent driving the loop — and with its
+/// `ArrayBuffer`s held to the same number of megabytes as its heap, since
+/// V8's heap ceiling does not reach them (D227).
+fn isolate_limits(
+    parent: es_runtime_common::Limits,
+    memory_mb: u64,
+) -> std::result::Result<es_runtime_common::Limits, OpError> {
+    let limits = worker_limits(parent, memory_mb)?.with_can_block(false);
+    Ok(match limits.heap_limit_bytes {
+        Some(bytes) if memory_mb > 0 => limits.with_buffer_limit_bytes(bytes),
+        _ => limits,
     })
 }
 

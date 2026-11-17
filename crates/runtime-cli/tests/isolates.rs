@@ -502,3 +502,43 @@ fn an_isolate_out_of_memory_is_its_own_code() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(lines(&out), ["ERR_ISOLATE_MEMORY_LIMIT true"]);
 }
+
+/// `memory` holds an isolate's `ArrayBuffer`s too, which V8's heap ceiling
+/// does not: live buffers past it end the isolate, one buffer larger than it
+/// is refused, and buffers that are garbage do not count once collected.
+#[test]
+fn memory_counts_array_buffers() {
+    let out = run(
+        "buffers",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const cases = {
+          hold: "const kept = []; export const go = () => { for (let i = 0; i < 100; i++) kept.push(new ArrayBuffer(1 << 20)); return kept.length; };",
+          one: "export const go = () => new Uint8Array(32 << 20).length;",
+          churn: "export const go = () => { let mb = 0; for (let i = 0; i < 60; i++) mb += new Uint8Array(8 << 20).length >> 20; return mb; };",
+        };
+        for (const [name, source] of Object.entries(cases)) {
+          const iso = new Isolate({ source }, { memory: 16 });
+          iso.onerror = (e) => e.preventDefault();
+          try { console.log(name, await (await iso.exports).go()); }
+          catch (e) { console.log(name, e.code ?? e.name); }
+          iso.terminate();
+        }
+        const free = new Isolate({ source: "export const go = () => new Uint8Array(64 << 20).length >> 20;" });
+        console.log("unlimited", await (await free.exports).go());
+        free.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        [
+            "hold ERR_ISOLATE_MEMORY_LIMIT",
+            "one ERR_ISOLATE_MEMORY_LIMIT",
+            "churn 480",
+            "unlimited 64"
+        ]
+    );
+}

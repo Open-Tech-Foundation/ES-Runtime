@@ -377,6 +377,20 @@ the turn's start, and terminates the isolate if it is over. CPU time cannot be
 ahead of wall time, so a turn under budget costs two clock reads, and a machine
 too busy to run the thread never counts against the isolate.
 
+**Buffers count.** V8's heap ceiling covers the JS heap only; an
+`ArrayBuffer`'s bytes come from a separate allocator. An isolate given `memory`
+gets an allocator of its own that counts what its buffers hold and refuses an
+allocation past the same ceiling. It refuses rather than terminates: a dead
+buffer keeps its bytes until a collection, and V8 answers a refusal by
+collecting and trying again, so a loop that allocates and drops buffers runs,
+and only live data past the ceiling fails — ending the isolate with
+`ERR_ISOLATE_MEMORY_LIMIT`. V8 returns a dead buffer's bytes only when it
+finalises the sweep, later and on the isolate's own thread, so during its retry
+an isolate may borrow against those frees, up to twice the ceiling; no single
+buffer may be larger than the ceiling. Making the sweep synchronous would close
+the gap too, but V8's switch for it applies to every isolate in the process, and
+it slowed the main program's churn of 64 KiB and 1 MiB buffers.
+
 **Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
 throws, and no synchronous op is reachable. Without `cpuTime`, a call that loops
 forever holds up the other isolates on its thread until `terminate()` stops it. A pool holds up

@@ -362,7 +362,10 @@ declare module "runtime:workers" {
      * here, with this program's authority — a grant, so hand over narrow ones.
      */
     host?: Record<string, (...args: any[]) => unknown>;
-    /** Heap ceiling in megabytes; at most this program's own. */
+    /**
+     * Ceiling in megabytes for the heap and, separately, for `ArrayBuffer`
+     * storage; at most this program's own.
+     */
     memory?: number;
     /**
      * Most CPU milliseconds one turn may use — from when the isolate gets its

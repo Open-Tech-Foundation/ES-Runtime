@@ -49,6 +49,13 @@ pub struct Limits {
     /// A worker agent sets this `true`: blocking there stops only its own
     /// thread, which is what `Atomics.wait` is for.
     pub can_block: bool,
+
+    /// Most bytes this agent's `ArrayBuffer`s may hold together, or `None` for
+    /// no ceiling of their own. V8's heap ceiling does not cover them: a
+    /// buffer's bytes are allocated outside the JS heap. An `Isolate` (D227)
+    /// is given one beside its heap ceiling; past it, the agent is terminated
+    /// as if it had reached its heap ceiling.
+    pub buffer_limit_bytes: Option<usize>,
 }
 
 impl Limits {
@@ -99,11 +106,22 @@ impl Limits {
         self
     }
 
+    /// Returns these limits with a ceiling on the agent's `ArrayBuffer`
+    /// storage. See [`buffer_limit_bytes`](Self::buffer_limit_bytes).
+    #[must_use]
+    pub fn with_buffer_limit_bytes(mut self, bytes: usize) -> Self {
+        self.buffer_limit_bytes = Some(bytes);
+        self
+    }
+
     /// Validates the limits, rejecting values that would defeat enforcement
     /// (e.g. a zero heap cap). Returns [`Error::Config`] on the first problem.
     pub fn validate(&self) -> Result<()> {
         if self.heap_limit_bytes == Some(0) {
             return Err(Error::Config("heap_limit_bytes must be non-zero".into()));
+        }
+        if self.buffer_limit_bytes == Some(0) {
+            return Err(Error::Config("buffer_limit_bytes must be non-zero".into()));
         }
         if self.max_stack_depth == 0 {
             return Err(Error::Config("max_stack_depth must be non-zero".into()));
@@ -123,6 +141,7 @@ impl Default for Limits {
             max_pending_ops: Limits::DEFAULT_MAX_PENDING_OPS,
             // The default agent is the one driving the loop. See `can_block`.
             can_block: false,
+            buffer_limit_bytes: None,
         }
     }
 }
@@ -144,6 +163,19 @@ mod tests {
         };
         let err = limits.validate().unwrap_err();
         assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn zero_buffer_limit_is_rejected() {
+        assert!(Limits::default().buffer_limit_bytes.is_none());
+        let limits = Limits::default().with_buffer_limit_bytes(0);
+        assert!(matches!(limits.validate(), Err(Error::Config(_))));
+        assert!(
+            Limits::default()
+                .with_buffer_limit_bytes(1 << 20)
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]

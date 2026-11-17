@@ -144,7 +144,10 @@ iso.postMessage(21);
 ## Memory and CPU
 
 `memory` caps the isolate's heap, in megabytes, at no more than your program's
-own. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use —
+own, and caps its `ArrayBuffer` storage at the same size — buffers live outside
+the heap, so a heap limit alone would not hold them. Buffers that are garbage
+don't count once they are collected; until then, an isolate may briefly hold up
+to twice its `memory` in buffers. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use —
 one stretch of the isolate's code, from when it gets its thread until it next
 waits:
 

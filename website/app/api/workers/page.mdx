@@ -419,7 +419,7 @@ const iso = new Isolate(code, options);
 | | `{ source, name? }` | Module source text. Needs `workers`. Imports only `runtime:` modules. |
 | `options.name` | `string` | The isolate's name. Default `""`. |
 | `options.host` | `{ [name]: function }` | Functions the isolate may call. Each runs in the parent, with the parent's permissions. Default none. |
-| `options.memory` | `number` | Heap ceiling in megabytes, at most the parent's own. Default: the parent's. |
+| `options.memory` | `number` | Ceiling in megabytes for the heap and, separately, for `ArrayBuffer` storage; at most the parent's own. Default: the parent's heap ceiling, and no buffer ceiling. |
 | `options.cpuTime` | `number` | Most CPU milliseconds one turn may use — from when the isolate gets its thread until it next waits. Default: no limit. |
 
 Any other option throws a `TypeError`, `permissions` included: an isolate can be

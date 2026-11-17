@@ -31,6 +31,10 @@ namespace) is unstable and may change between minor releases until the API freez
   `await` chain is stopped soon after its budget, and the isolates sharing its
   thread carry on. An isolate that reaches its `memory` ceiling now reports
   `ERR_ISOLATE_MEMORY_LIMIT`.
+- An `Isolate`'s `memory` ceiling holds its `ArrayBuffer`s too, which V8's heap
+  limit does not reach: live buffers past it end the isolate with
+  `ERR_ISOLATE_MEMORY_LIMIT`, while buffers that are garbage stop counting
+  once collected. `es-runtime-common`: `Limits::buffer_limit_bytes`.
 - `es-runtime`: `Runtime::leave()` and `Runtime::enter()`, so one thread can
   hold many runtimes and run each in turn — the base of the pooled `Isolate`
   (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8

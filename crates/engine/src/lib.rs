@@ -33,6 +33,7 @@
 
 mod async_context;
 mod bson;
+mod buffers;
 mod convert;
 mod cpu;
 pub mod diagnostics;

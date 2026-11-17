@@ -706,6 +706,7 @@ impl V8Engine {
         crate::ensure_v8_initialized();
 
         let (params, ceiling) = sized_params(&limits, v8::CreateParams::default());
+        let params = crate::buffers::install(limits.buffer_limit_bytes, params);
         let isolate = v8::Isolate::new(params);
         Self::wire(isolate, false, limits, Some(ceiling))
     }
@@ -759,6 +760,7 @@ impl V8Engine {
                 .external_references(crate::op::external_references())
                 .snapshot_blob(snapshot.into()),
         );
+        let params = crate::buffers::install(limits.buffer_limit_bytes, params);
         let isolate = v8::Isolate::new(params);
         Self::wire(isolate, ops_baked, limits, Some(ceiling))
     }
