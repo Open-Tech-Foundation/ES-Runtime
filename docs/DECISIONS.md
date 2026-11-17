@@ -4772,3 +4772,38 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 - **Rejected: preparing implicitly** (keeping some isolates warm by default). A program that never makes an isolate would pay for them, and how many to keep is the program's call.
 
 **Consequences:** the security model is one sentence: an isolate can compute, and reaches out only through what it is handed. The engine's isolate can be left between turns and entered again on the thread that owns it; outside the engine that is a turn guard, and no other crate names V8's enter/exit. `providers` gains a pool host trait and `default-providers` its implementation. `Worker` is unchanged and stays the tool for parallel CPU work and blocking code.
+
+### D228 — Typed ops, and V8 fast calls for scalar ops; the byte crossing keeps its copy · *Accepted (2026-11-18)* · *amends D3a's marshaling; re-examines and keeps D3a's zero-copy deferral*
+
+**Context:** every op is `FnMut(Vec<Value>) -> OpResult`. Each call marshals every argument into the generic `Value` enum, collects them in a fresh `Vec`, and the handler then matches the enum back into the Rust type it wanted, defaulting on anything else (`utf8_encode` turns a non-string into empty bytes). D216's HTTP profile put op calls at ~11% of user time. That bounds what this can win on a served request; loops of small calls (`performance.now`, URL, encoding, handle ops) stand to win more.
+
+**Measured first** (`crates/engine/examples/op_crossing.rs`, release build, i7-8700K, best of 5, three runs agreeing within 2%). Each row is a JS loop calling one function; a plain JS call in the same loop costs ~1 ns.
+
+| call | our op | bare V8 callback | V8 fast call |
+| --- | --- | --- | --- |
+| no arguments | 42 ns | 10.5 ns | 3.2 ns |
+| two `u32` | 89 ns | 20.6 ns | 3.5 ns |
+| 12-char string | 101 ns | 38 ns | — |
+| 1 KiB `Uint8Array` | 105 ns | 15 ns (no copy) | — |
+
+- **Most of the cost is ours, not V8's:** 32 ns above V8's own callback with no arguments, ~66 ns with two numbers. Each number argument costs ~22 ns, because `marshal` asks `is_undefined`/`is_null`/`is_boolean`/`is_number` before reading it — each a call across the FFI — and then wraps it in a `Value` inside a heap `Vec`. The fixed part is two isolate-slot lookups (op state, diagnostics recorder), an `Rc` clone and a `RefCell` borrow.
+- **A fast call saves a further 7–17 ns** over the bare callback. Smaller than what typed ops remove, and only reachable from optimized code.
+- **The byte copy is not where the time goes:** the 1 KiB row is 105 ns against a memcpy of ~35 ns, and D3a's audit already measured borrowing as no gain on the ops that take bytes.
+
+**Decision:**
+- **Typed ops.** `OpDecl::sync`/`r#async` accept a closure over Rust types — `|id: u32, path: String| …` — through a trait over closure arity (axum's `Handler` shape). No proc macro, no new crate. `engine` implements `FromV8Arg` for `bool`, `i32`, `u32`, `f64`, `i64`/`u64`, `String`, `Vec<u8>`, `Option<T>` and `Value` (the escape hatch for a structured argument), and `IntoV8Ret` for the same plus `()`. Each closure type gets its own monomorphized dispatch that reads arguments straight off `FunctionCallbackArguments`: no `Vec`, no enum. No V8 type reaches `runtime`, so the engine boundary holds. Ops taking `Vec<Value>` keep working; ops move over hot first, by measurement, not all 375 at once.
+- **Arguments are checked, not defaulted.** A wrong type, or a missing argument that is not `Option`, throws `TypeError` naming the op and the argument's position. Ops are called by our own prelude, so a mismatch is our bug, and a silent default hides it. Numbers into integer types are refused if not integral or out of range, rather than wrapped.
+- **Fast calls for scalar ops.** An op whose arguments are all `bool`/integer/`f64` and whose result is one of those or `()` also gets a V8 fast-call overload, generated from the same signature as a static `extern "C"` function and `CFunctionInfo`, both appended to `external_references()` so a snapshot restores them. The fast path keeps every check the slow one makes, in the same order: capabilities, the observer, and the diagnostics span. Since V8 12.6 a fast callback may open a scope, re-enter JS and throw (Node's `adding-v8-fast-api.md`), so it shares the slow path's code rather than being a second, weaker one. It ships only where `op_crossing` shows it faster.
+- **The byte crossing keeps its copy** (D3a stands). Rust→JS already moves the `Vec` into the backing store. JS→Rust borrowing was built and measured as no gain (`convert.rs`), needs an `unsafe` borrow that async ops outlive, and invites `SharedArrayBuffer` races. It reopens only for a measured workload where the memcpy is a large share.
+
+**How others do it:** Deno's `#[op2]` proc macro declares typed arguments and opts scalar signatures into fast calls with `#[op2(fast)]`; strings are fast only when Latin-1, and buffers cross as a borrowed slice with a warning that JS may change it under re-entry, or as a copy (`deno_core` `ops/op2/README.md`). Node registers fast variants with `SetFastMethod` on a handful of hot bindings and passes typed arrays as `v8::Local<v8::Value>`, since V8 no longer has a typed-array fast type. Both reserve fast calls for a few hot ops, which is where this leaves them too.
+
+**Rejected:**
+- **A proc macro (Deno's shape):** it brings `syn`/`quote` into the engine's build and a code generator to keep correct, for what a trait over arity gives with ordinary generics.
+- **Fast calls for strings:** V8's fast string type is sequential one-byte only, so any other string takes the slow path anyway, and string ops are dominated by the conversion, not the call (38 ns of the bare callback's string row).
+- **Fast calls for bytes:** no typed-array fast type exists in V8 152; reading the buffer through a `Value` is the borrow D3a rejected.
+- **Lenient defaults kept for compatibility:** nothing outside the prelude calls ops, so there is nobody to be compatible with.
+
+**Phases:** (0) the `op_crossing` measurement — done. (1) typed ops and their argument checks, with the hot ops moved over. (2) fast-call overloads for scalar ops, each kept only if measured faster. Each phase lands with unit tests for every conversion's edge cases (NaN, negatives, past 2³², non-integers, lone surrogates, missing arguments, BigInt overflow); phase 2 adds tests that force optimization and assert the fast and slow paths agree, deny the same capabilities, record the same spans, and survive a snapshot restore.
+
+**Consequences:** `OpDecl`'s constructors become generic; `Value`-taking handlers still compile. A prelude bug that passed the wrong type now throws instead of producing a default. `engine` gains the conversion traits and, in phase 2, its first `unsafe extern "C"` callbacks outside V8's slow path.
