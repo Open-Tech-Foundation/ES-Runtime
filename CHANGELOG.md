@@ -17,6 +17,12 @@ namespace) is unstable and may change between minor releases until the API freez
   hold many runtimes and run each in turn — the base of the pooled `Isolate`
   (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8
   would have corrupted its stack of entered isolates without a word.
+- `es-runtime-default-providers`: `IsolatePool` and
+  `ThreadWorkerHost::on_pool()` — the worker host over a few threads that
+  drive many agents between them, each pinned to the thread it starts on and
+  entered only for its turns (DECISIONS D227). `Runtime::turn_handle()` is what
+  a pool thread enters and leaves an agent's isolate with while its drive owns
+  the runtime.
 - `maxMessageSize` for `runtime:websocket`'s `serve()` and for
   `upgradeWebSocket()`, which also takes `maxBufferedAmount` now: the largest
   message a peer may send (default 64 MiB; past it the connection closes with

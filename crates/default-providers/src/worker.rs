@@ -13,6 +13,15 @@
 //! `Runtime` with the ordinary [`Driver`](crate::Driver). The runtime crate
 //! still owns no loop; this file is the only place a thread is created, and it
 //! is the seam a scheduler-backed host replaces wholesale.
+//!
+//! # Or a pool
+//!
+//! [`ThreadWorkerHost::on_pool`] is the same host over an [`IsolatePool`]: a
+//! few threads, each driving many agents on one single-threaded tokio runtime
+//! (D227). An agent is built on the pool thread it is given and never leaves
+//! it; the thread enters its isolate for each poll of its drive and leaves it
+//! after, so the agents on a thread take turns. No `Locker` is involved,
+//! because no isolate is ever touched by a second thread.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -183,9 +192,10 @@ struct Live {
     interrupt: Mutex<Option<es_runtime::InterruptHandle>>,
     /// Set by `terminate` and by `self.close()`; the worker's loop checks it.
     closed: Arc<AtomicBool>,
+    /// How to wait for the agent to be over: its thread, or its pool task.
     // A std mutex: only ever held to swap the handle in or out, never across an
     // await.
-    join: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    join: std::sync::Mutex<Option<Ending>>,
     /// The workers this one started. HTML terminates a worker's own workers
     /// along with it, and ids are otherwise flat, so this is the only record of
     /// who belongs to whom.
@@ -201,7 +211,31 @@ struct Live {
     parent: Option<u64>,
 }
 
-/// A [`WorkerHost`] that runs each agent on its own OS thread.
+/// What a finished agent leaves to wait on.
+enum Ending {
+    /// Its own OS thread, joined.
+    Thread(std::thread::JoinHandle<()>),
+    /// Its task on a pool thread, which says when it is done.
+    Task(tokio::sync::oneshot::Receiver<()>),
+}
+
+impl Ending {
+    async fn wait(self) {
+        match self {
+            // Joining blocks, so it goes to the blocking pool rather than
+            // stalling the caller's reactor.
+            Ending::Thread(join) => {
+                let _ = tokio::task::spawn_blocking(move || join.join()).await;
+            }
+            Ending::Task(done) => {
+                let _ = done.await;
+            }
+        }
+    }
+}
+
+/// A [`WorkerHost`] that runs each agent on its own OS thread — or, built with
+/// [`on_pool`](Self::on_pool), on a thread of an [`IsolatePool`].
 pub struct ThreadWorkerHost {
     factory: Arc<dyn WorkerRuntimeFactory>,
     registry: Arc<std::sync::Mutex<HashMap<u64, Arc<Live>>>>,
@@ -217,6 +251,8 @@ pub struct ThreadWorkerHost {
     /// an unbounded `new Worker()` in a loop is a way to exhaust both — the
     /// same reasoning as the child-process provider's `max_children`.
     max_workers: usize,
+    /// Where agents run: `None` for a thread each, or the pool they share.
+    pool: Option<Arc<IsolatePool>>,
 }
 
 impl ThreadWorkerHost {
@@ -231,6 +267,24 @@ impl ThreadWorkerHost {
             agent_threads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
             max_workers: Self::DEFAULT_MAX_WORKERS,
+            pool: None,
+        }
+    }
+
+    /// Default ceiling on concurrently live agents on a pool. Far above a
+    /// thread host's, because an agent there costs an isolate heap and no
+    /// thread; it still exists, so a loop of `new Isolate()` ends in an error
+    /// rather than in exhausted memory.
+    pub const DEFAULT_MAX_POOLED: usize = 10_000;
+
+    /// Builds a host whose agents share `pool`'s threads instead of having one
+    /// each. The agents `factory` builds must not block a thread: a blocked
+    /// agent holds up every other agent on its pool thread.
+    pub fn on_pool(factory: Arc<dyn WorkerRuntimeFactory>, pool: Arc<IsolatePool>) -> Self {
+        ThreadWorkerHost {
+            max_workers: Self::DEFAULT_MAX_POOLED,
+            pool: Some(pool),
+            ..Self::new(factory)
         }
     }
 
@@ -315,6 +369,37 @@ impl WorkerHost for ThreadWorkerHost {
 
         let thread_live = live.clone();
         let registry = self.registry.clone();
+
+        if let Some(pool) = &self.pool {
+            let (done, ending) = tokio::sync::oneshot::channel();
+            if let Ok(mut slot) = live.join.lock() {
+                *slot = Some(Ending::Task(ending));
+            }
+            let job: Job = Box::new(move || {
+                Box::pin(async move {
+                    run_agent(
+                        &factory,
+                        spec,
+                        scope,
+                        &to_parent,
+                        &thread_live,
+                        &closed,
+                        &registry,
+                        true,
+                    )
+                    .await;
+                    let _ = done.send(());
+                })
+            });
+            return match pool.run(job) {
+                Ok(()) => Box::pin(async move { Ok(id) }),
+                Err(err) => {
+                    retire(&self.registry, id);
+                    Box::pin(async move { Err(err) })
+                }
+            };
+        }
+
         let agent_threads = self.agent_threads.clone();
         let thread = std::thread::Builder::new()
             // The same stack as the main thread on every OS (D189), rather
@@ -346,7 +431,7 @@ impl WorkerHost for ThreadWorkerHost {
         match thread {
             Ok(handle) => {
                 if let Ok(mut slot) = live.join.lock() {
-                    *slot = Some(handle);
+                    *slot = Some(Ending::Thread(handle));
                 }
                 Box::pin(async move { Ok(id) })
             }
@@ -401,11 +486,9 @@ impl WorkerHost for ThreadWorkerHost {
             // would never go quiet.
             if matches!(event, Some(WorkerIncoming::Closed) | None) {
                 retire(&registry, id);
-                let join = live.join.lock().ok().and_then(|mut slot| slot.take());
-                if let Some(join) = join {
-                    // Already finishing, but joining still blocks; keep it off
-                    // the caller's reactor.
-                    let _ = tokio::task::spawn_blocking(move || join.join()).await;
+                let ending = live.join.lock().ok().and_then(|mut slot| slot.take());
+                if let Some(ending) = ending {
+                    ending.wait().await;
                 }
             }
             Ok(event)
@@ -506,13 +589,11 @@ async fn stop_live(live: &Live) {
     }
 }
 
-/// Waits for a stopped worker's thread to end.
+/// Waits for a stopped worker's thread, or pool task, to end.
 async fn join_live(live: &Live) {
-    let join = live.join.lock().ok().and_then(|mut slot| slot.take());
-    if let Some(join) = join {
-        // Joining blocks, so it goes to the blocking pool rather than stalling
-        // the caller's reactor.
-        let _ = tokio::task::spawn_blocking(move || join.join()).await;
+    let ending = live.join.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(ending) = ending {
+        ending.wait().await;
     }
 }
 
@@ -585,8 +666,8 @@ fn fail_agent(scope: &ThreadScope, failure: DriveFailure) {
     }
 }
 
-/// The worker thread's body: build the runtime, load under the parent's
-/// authority, narrow, evaluate, drive.
+/// The worker thread's body: a single-threaded tokio runtime of its own, and
+/// the agent driven on it.
 fn run_worker(
     factory: &Arc<dyn WorkerRuntimeFactory>,
     spec: WorkerSpec,
@@ -596,10 +677,6 @@ fn run_worker(
     closed: &Arc<AtomicBool>,
     registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
 ) {
-    let report = |error: UncaughtError| {
-        let _ = to_parent.send(WorkerIncoming::Error { error });
-    };
-
     // A single-threaded tokio runtime: this agent's own reactor, so its timers
     // and sockets are driven here rather than on the parent's.
     let tokio_runtime = match tokio::runtime::Builder::new_current_thread()
@@ -608,12 +685,41 @@ fn run_worker(
     {
         Ok(rt) => rt,
         Err(err) => {
-            report(UncaughtError::from_message(format!(
-                "worker runtime could not start: {err}"
-            )));
+            let _ = to_parent.send(WorkerIncoming::Error {
+                error: UncaughtError::from_message(format!(
+                    "worker runtime could not start: {err}"
+                )),
+            });
             let _ = to_parent.send(WorkerIncoming::Closed);
             return;
         }
+    };
+    tokio_runtime.block_on(run_agent(
+        factory, spec, scope, to_parent, live, closed, registry, false,
+    ));
+}
+
+/// One agent's whole life: build the runtime, load under the parent's
+/// authority, narrow, evaluate, drive, and report how it ended.
+///
+/// `pooled` says the agent shares its thread with others (D227): its isolate
+/// is left as soon as it is built, and entered only while its drive is being
+/// polled, so the agents on a pool thread take turns. Nothing between the build
+/// and the drive may await with the isolate still entered — another agent's
+/// turn could start in that gap.
+#[allow(clippy::too_many_arguments)]
+async fn run_agent(
+    factory: &Arc<dyn WorkerRuntimeFactory>,
+    spec: WorkerSpec,
+    scope: Arc<ThreadScope>,
+    to_parent: &mpsc::UnboundedSender<WorkerIncoming>,
+    live: &Arc<Live>,
+    closed: &Arc<AtomicBool>,
+    registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
+    pooled: bool,
+) {
+    let report = |error: UncaughtError| {
+        let _ = to_parent.send(WorkerIncoming::Error { error });
     };
 
     let (mut runtime, loader) = match factory.build(&spec, scope.clone()) {
@@ -626,14 +732,20 @@ fn run_worker(
             return;
         }
     };
+    let turn = if pooled {
+        runtime.leave();
+        runtime.turn_handle()
+    } else {
+        None
+    };
 
     // Publish the interrupt handle now, so a `terminate()` racing startup can
     // still stop this isolate rather than waiting out its first long task.
-    tokio_runtime.block_on(async {
-        *live.interrupt.lock().await = Some(runtime.interrupt_handle());
-    });
+    *live.interrupt.lock().await = Some(runtime.interrupt_handle());
 
-    let outcome = tokio_runtime.block_on(async {
+    // Owns the runtime, so the runtime is dropped inside it — on a pool, while
+    // its isolate is entered for that last poll.
+    let drive = async move {
         // Phase 1 — load and link the static graph under the *parent's*
         // authority. No guest code runs during instantiation, so nothing the
         // worker's author wrote executes under the wider set.
@@ -712,7 +824,11 @@ fn run_worker(
             return Err(out_of_memory(&runtime));
         }
         Ok(())
-    });
+    };
+    let outcome = match turn {
+        Some(turn) => Entered::new(turn, drive).await,
+        None => drive.await,
+    };
 
     if let Err(error) = outcome {
         report(error);
@@ -738,7 +854,7 @@ fn run_worker(
         .flat_map(|child| take_subtree(registry, child))
         .collect();
     if !orphans.is_empty() {
-        tokio_runtime.block_on(terminate_all(&orphans));
+        terminate_all(&orphans).await;
     }
     // This worker's own entry is deliberately left in place: `recv` retires it
     // when the parent sees the `Closed` below, and removing it from here would
@@ -746,6 +862,152 @@ fn run_worker(
     // messages still queued in it would go nowhere.
 
     let _ = to_parent.send(WorkerIncoming::Closed);
+}
+
+/// A future whose isolate is entered for each poll and left after it, so
+/// other agents on the same pool thread can have their turns in between.
+///
+/// Left again even if the poll panics: a panic that unwound past an entered
+/// isolate would leave every later turn on the thread refused.
+struct Entered<F> {
+    turn: es_runtime::TurnHandle,
+    inner: std::pin::Pin<Box<F>>,
+}
+
+impl<F> Entered<F> {
+    fn new(turn: es_runtime::TurnHandle, inner: F) -> Self {
+        Entered {
+            turn,
+            inner: Box::pin(inner),
+        }
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for Entered<F> {
+    type Output = F::Output;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<F::Output> {
+        struct Leave<'a>(&'a es_runtime::TurnHandle);
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                self.0.leave();
+            }
+        }
+        let this = &mut *self;
+        this.turn.enter();
+        let _leave = Leave(&this.turn);
+        this.inner.as_mut().poll(cx)
+    }
+}
+
+/// Work for a pool thread: made on the spawning side, where it must be `Send`,
+/// and turned into its future on the pool thread, where it need not be — the
+/// runtime it builds never leaves that thread.
+type Job = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> + Send>;
+
+/// A few OS threads that drive many agents between them (D227).
+///
+/// Each thread runs one single-threaded tokio runtime and a `LocalSet`, and
+/// every agent placed on it is a local task there. An agent goes to the thread
+/// with the fewest agents when it starts and stays there for its life:
+/// measured, moving isolates between threads was never faster and needs a
+/// `Locker` on every turn.
+///
+/// The threads start with the first agent, so a program that never makes one
+/// pays for none, and they are made after V8 is initialised — as V8 requires
+/// of any thread that will run JavaScript.
+pub struct IsolatePool {
+    size: usize,
+    threads: std::sync::OnceLock<Result<Vec<PoolThread>, String>>,
+}
+
+struct PoolThread {
+    jobs: mpsc::UnboundedSender<Job>,
+    /// Agents placed here and not yet finished.
+    load: Arc<AtomicUsize>,
+}
+
+impl IsolatePool {
+    /// A pool of `size` threads; at least one.
+    pub fn new(size: usize) -> Self {
+        IsolatePool {
+            size: size.max(1),
+            threads: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// A pool with a thread for each core the process may use.
+    pub fn sized_to_cores() -> Self {
+        Self::new(std::thread::available_parallelism().map_or(4, std::num::NonZero::get))
+    }
+
+    /// How many threads the pool has, or will have once started.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    fn threads(&self) -> Result<&[PoolThread], ProviderError> {
+        self.threads
+            .get_or_init(|| (0..self.size).map(start_pool_thread).collect())
+            .as_deref()
+            .map_err(|err| ProviderError::Other(err.clone()))
+    }
+
+    /// Places `job` on the least-loaded thread.
+    fn run(&self, job: Job) -> Result<(), ProviderError> {
+        let threads = self.threads()?;
+        let Some(thread) = threads
+            .iter()
+            .min_by_key(|thread| thread.load.load(Ordering::SeqCst))
+        else {
+            return Err(ProviderError::Other("isolate pool has no threads".into()));
+        };
+        thread.load.fetch_add(1, Ordering::SeqCst);
+        let load = thread.load.clone();
+        let counted: Job = Box::new(move || {
+            let inner = job();
+            Box::pin(async move {
+                inner.await;
+                load.fetch_sub(1, Ordering::SeqCst);
+            })
+        });
+        thread.jobs.send(counted).map_err(|_| {
+            thread.load.fetch_sub(1, Ordering::SeqCst);
+            ProviderError::Other("isolate pool thread has stopped".into())
+        })
+    }
+}
+
+fn start_pool_thread(index: usize) -> Result<PoolThread, String> {
+    let (jobs, mut inbox) = mpsc::unbounded_channel::<Job>();
+    std::thread::Builder::new()
+        // The same stack as every other JS thread (D189).
+        .stack_size(WORKER_STACK)
+        .name(format!("isolate-pool-{index}"))
+        .spawn(move || {
+            let Ok(tokio_runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                // Dropping the inbox makes every later `run` on this thread
+                // fail with a message, rather than queue work nothing runs.
+                return;
+            };
+            let local = tokio::task::LocalSet::new();
+            local.block_on(&tokio_runtime, async move {
+                while let Some(job) = inbox.recv().await {
+                    tokio::task::spawn_local(job());
+                }
+            });
+        })
+        .map_err(|err| format!("isolate pool thread could not start: {err}"))?;
+    Ok(PoolThread {
+        jobs,
+        load: Arc::new(AtomicUsize::new(0)),
+    })
 }
 
 /// A [`Process`] view for a worker agent: everything the host one reports, but
@@ -820,6 +1082,107 @@ impl es_runtime_providers::Process for WorkerProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A factory for agents that need nothing: fresh prelude, no imports.
+    fn bare_factory() -> Arc<dyn WorkerRuntimeFactory> {
+        Arc::new(|spec: &WorkerSpec, scope: Arc<dyn WorkerScope>| {
+            let providers = es_runtime::HostProviders::new(
+                Arc::new(crate::SystemClock::new()),
+                Arc::new(crate::NullConsole),
+                Arc::new(crate::testing::MockTransport::constant(
+                    crate::testing::MockResponse::ok(""),
+                )),
+                Arc::new(crate::OsEntropy),
+            )
+            .with_worker_scope(scope);
+            let engine = es_runtime::V8Engine::new(spec.limits)
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            let runtime = Runtime::new(Box::new(engine), providers)
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            let loader: Arc<dyn ModuleLoader> = Arc::new(crate::DenyModuleLoader);
+            Ok((runtime, loader))
+        })
+    }
+
+    fn spec(source: &str) -> WorkerSpec {
+        WorkerSpec {
+            specifier: "file:///agent.js".into(),
+            source: source.into(),
+            name: String::new(),
+            env: None,
+            capabilities: es_runtime_common::CapabilitySet::none(),
+            load_capabilities: es_runtime_common::CapabilitySet::none(),
+            limits: es_runtime_common::Limits::default(),
+        }
+    }
+
+    /// Many agents on a pool of two threads all start, run, answer, and stop
+    /// (D227): each built on its pool thread, left between turns, and entered
+    /// for each — with timers settling while the others take theirs.
+    #[test]
+    fn many_agents_share_a_pool_of_two_threads() {
+        const AGENTS: usize = 24;
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio");
+        let pool = Arc::new(IsolatePool::new(2));
+        let host = ThreadWorkerHost::on_pool(bare_factory(), pool);
+        tokio.block_on(async {
+            let mut ids = Vec::new();
+            for _ in 0..AGENTS {
+                let id = host
+                    .spawn(spec(
+                        "await new Promise((r) => setTimeout(r, 5)); postMessage('up');",
+                    ))
+                    .await
+                    .expect("spawn");
+                ids.push(id);
+            }
+            for &id in &ids {
+                match host.recv(id).await.expect("recv") {
+                    Some(WorkerIncoming::Message(bytes)) => assert!(!bytes.is_empty()),
+                    Some(WorkerIncoming::Error { error }) => panic!("agent failed: {error:?}"),
+                    other => panic!("agent {id} ended without answering: {}", other.is_some()),
+                }
+            }
+            for &id in &ids {
+                host.terminate(id).await.expect("terminate");
+            }
+        });
+    }
+
+    /// An agent stuck in a loop on a pool thread is stopped by `terminate`,
+    /// and the agents sharing its thread go on.
+    #[test]
+    fn terminating_a_spinning_agent_frees_its_pool_thread() {
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio");
+        let pool = Arc::new(IsolatePool::new(1));
+        let host = ThreadWorkerHost::on_pool(bare_factory(), pool);
+        tokio.block_on(async {
+            let spinning = host
+                .spawn(spec("postMessage('spinning'); for (;;) {}"))
+                .await
+                .expect("spawn");
+            assert!(matches!(
+                host.recv(spinning).await.expect("recv"),
+                Some(WorkerIncoming::Message(_))
+            ));
+            let waiting = host
+                .spawn(spec("postMessage('after');"))
+                .await
+                .expect("spawn");
+            host.terminate(spinning).await.expect("terminate");
+            assert!(matches!(
+                host.recv(waiting).await.expect("recv"),
+                Some(WorkerIncoming::Message(_))
+            ));
+            host.terminate(waiting).await.expect("terminate");
+        });
+    }
 
     /// A `Live` with nothing attached: these tests are about the registry's
     /// bookkeeping, not about running an agent, and building one for real would

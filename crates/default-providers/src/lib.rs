@@ -113,4 +113,4 @@ pub use task::TokioTaskSpawner;
 pub use telemetry::OtlpHttpSink;
 pub use timers::TokioTimers;
 pub use trust::{TrustSource, TrustStore};
-pub use worker::{ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory};
+pub use worker::{IsolatePool, ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory};

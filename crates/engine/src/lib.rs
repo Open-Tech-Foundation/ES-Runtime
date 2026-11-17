@@ -56,6 +56,7 @@ pub use inspector::{HAS_INSPECTOR, InspectorOptions, InspectorTransport, NO_INSP
 pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use trace::{CapabilityObserver, SharedObserver};
+pub use turn::TurnHandle;
 pub use value::Value;
 
 use std::sync::{Once, OnceLock};

@@ -534,6 +534,13 @@ pub trait Engine {
     /// [`leave`](Self::leave). Idempotent.
     fn enter(&mut self) {}
 
+    /// [`leave`](Self::leave) and [`enter`](Self::enter) without a borrow of
+    /// the engine, for a pool thread to wrap around a drive that owns it.
+    /// `None` for an engine with no isolate to give up.
+    fn turn_handle(&self) -> Option<crate::TurnHandle> {
+        None
+    }
+
     /// The capabilities currently granted (DECISIONS.md D7). Lets the caller gate
     /// effects it performs itself — e.g. `runtime` checks `FileSystem` before
     /// loading a module graph — using the same deny-by-default set the ops see.
@@ -1316,11 +1323,15 @@ impl Engine for V8Engine {
     }
 
     fn leave(&mut self) {
-        self.turn.leave(&self.isolate);
+        self.turn.leave();
     }
 
     fn enter(&mut self) {
-        self.turn.enter(&self.isolate);
+        self.turn.enter();
+    }
+
+    fn turn_handle(&self) -> Option<crate::TurnHandle> {
+        Some(self.turn.handle())
     }
 
     fn interrupt_handle(&self) -> InterruptHandle {
@@ -1524,6 +1535,30 @@ mod tests {
         // And an entered one drops as before.
         let c = engine();
         drop(c);
+    }
+
+    /// A turn handle enters and leaves without borrowing the engine, and does
+    /// nothing once the engine is gone — a drive that ends drops its runtime
+    /// in the middle of the poll the handle wraps.
+    #[test]
+    fn a_turn_handle_outlives_its_engine_harmlessly() {
+        let _v8 = crate::v8_test_guard();
+        let mut a = engine();
+        let handle = a.turn_handle().expect("handle");
+        handle.leave();
+        let mut b = engine();
+        b.leave();
+        handle.enter();
+        assert_eq!(a.eval("1 + 1").expect("eval"), Value::Number(2.0));
+        handle.leave();
+        b.enter();
+        assert_eq!(b.eval("2 + 2").expect("eval"), Value::Number(4.0));
+        b.leave();
+        handle.enter();
+        drop(a);
+        handle.leave();
+        handle.enter();
+        drop(b);
     }
 
     /// Leaving is refused, by name, unless the isolate is the innermost one

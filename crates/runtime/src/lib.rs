@@ -82,7 +82,7 @@ pub use es_runtime_engine::diagnostics;
 pub use es_runtime_engine::{
     AsyncOp, CapabilityObserver, Engine, HAS_INSPECTOR, InspectorOptions, InspectorTransport,
     InterruptHandle, ModuleEvalState, ModuleId, NO_INSPECTOR_MESSAGE, OpDecl, OpError, OpResult,
-    SharedObserver, V8Engine, Value,
+    SharedObserver, TurnHandle, V8Engine, Value,
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
@@ -1026,6 +1026,14 @@ impl Runtime {
     /// Idempotent.
     pub fn enter(&mut self) {
         self.engine.enter();
+    }
+
+    /// [`leave`](Self::leave) and [`enter`](Self::enter) without borrowing the
+    /// runtime: what a pool thread wraps around a drive that owns it. Once the
+    /// runtime is dropped, both do nothing. `None` for an engine with no
+    /// isolate to give up.
+    pub fn turn_handle(&self) -> Option<TurnHandle> {
+        self.engine.turn_handle()
     }
 
     /// Compiles and runs `source`, returning the marshaled result. Pending work
