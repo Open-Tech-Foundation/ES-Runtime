@@ -17,7 +17,9 @@
 // HTML and the hydrated page agree; motion starts after mount, pauses while the
 // panel is off screen, and transitions honour `prefers-reduced-motion`.
 //
-// The panel is dark in both site themes, like the other diagrams.
+// The panel is dark in both site themes, like the other diagrams. Text on it
+// meets WCAG AA (4.5:1): headings are zinc-100 (16:1 on zinc-900), secondary
+// labels zinc-400 (6.8:1); zinc-500 (3.7:1) is too faint for text this small.
 
 import { fade, fly, scale } from "@opentf/afw/transition";
 
@@ -211,19 +213,19 @@ export default function IsolatesDiagram() {
     >
       {/* ---- the program: what the isolates may ask for -------------------- */}
       <div className="grid grid-cols-2 gap-3 md:flex md:flex-col md:gap-4">
-        <div className="col-span-2 text-[11px] tracking-[0.14em] text-zinc-500">YOUR PROGRAM</div>
+        <div className="col-span-2 text-[11px] tracking-[0.14em] text-zinc-100">YOUR PROGRAM</div>
         <div className="rounded-xl bg-zinc-800 p-4 ring-1 ring-zinc-700">
           <div className="text-[13px] text-zinc-200">host</div>
           <div className="mt-2 space-y-1 text-[12px]">
             <div className="text-emerald-300">getUser(id)</div>
             <div className="text-emerald-300">log(line)</div>
           </div>
-          <div className="mt-3 border-t border-zinc-700 pt-3 text-[11px] leading-relaxed text-zinc-500">
+          <div className="mt-3 border-t border-zinc-700 pt-3 text-[11px] leading-relaxed text-zinc-400">
             the only way out
           </div>
         </div>
         <div className="rounded-xl bg-zinc-900 p-4 ring-1 ring-zinc-800">
-          <div className="text-[11px] tracking-[0.14em] text-zinc-500">INSIDE AN ISOLATE</div>
+          <div className="text-[11px] tracking-[0.14em] text-zinc-100">INSIDE AN ISOLATE</div>
           <div className="mt-2 space-y-1 text-[12px]">
             <div className="text-zinc-300">✓ compute</div>
             <div className="text-rose-300">✗ files</div>
@@ -235,15 +237,15 @@ export default function IsolatesDiagram() {
 
       {/* ---- the pool -------------------------------------------------------- */}
       <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex items-baseline justify-between text-[11px] tracking-[0.14em] text-zinc-500">
+        <div className="flex items-baseline justify-between text-[11px] tracking-[0.14em] text-zinc-100">
           <span>
             ISOLATE POOL<span className="hidden sm:inline"> · ONE THREAD PER CORE</span>
           </span>
-          <span className="shrink-0 text-zinc-400">{lanes.flat().length} live</span>
+          <span className="shrink-0 text-zinc-300">{lanes.flat().length} live</span>
         </div>
         {THREADS.map((t) => (
           <div key={t} className="flex min-h-[3.25rem] items-center gap-3 rounded-xl bg-zinc-900/70 px-3 py-2 ring-1 ring-zinc-800">
-            <div className="w-16 shrink-0 text-[11px] text-zinc-500">thread {t + 1}</div>
+            <div className="w-16 shrink-0 text-[11px] text-zinc-400">thread {t + 1}</div>
             <div className="flex flex-wrap gap-1.5">
               {lanes[t].map((item) => (
                 <span
