@@ -13,6 +13,13 @@ ignore = [
     # and cannot drop it without v8 doing so upstream. Re-evaluate when v8
     # removes the dependency.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained-only, transitive via the v8 crate, no fix available" },
+    # `chrono` is unmaintained (RUSTSEC-2026-0543; informational, not a
+    # vulnerability) with no safe upgrade. It reaches us only transitively, as a
+    # hard dependency of the embedded SQLite engine (es-runtime-default-providers
+    # → turso_core / turso_ext → chrono), which uses it for SQL's date and time
+    # functions; no turso feature drops it, and no stable turso release after
+    # 0.8.3 exists. Re-evaluate when turso moves to `jiff` or `time`.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained-only, transitive via turso_core/turso_ext, no fix available" },
     # `rsa` — "Marvin Attack" timing sidechannel (RUSTSEC-2023-0071, medium).
     # Fixed upstream in 0.10 (constant-time arithmetic, blinding, implicit
     # rejection); we pin 0.10.0-rc.20 (DECISIONS.md D203). The advisory still
