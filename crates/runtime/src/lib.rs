@@ -79,6 +79,11 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
 pub use es_runtime_engine::diagnostics;
+/// What every capability denial inside an `Isolate` ends with (D227): the
+/// remedy a flag or a grant would be elsewhere does not exist there.
+const ISOLATE_DENIAL: &str =
+    "an isolate is computation only; pass it what it needs through a host function";
+
 pub use es_runtime_engine::{
     AsyncOp, CapabilityObserver, Engine, HAS_INSPECTOR, InspectorOptions, InspectorTransport,
     InterruptHandle, ModuleEvalState, ModuleId, NO_INSPECTOR_MESSAGE, OpDecl, OpError, OpResult,
@@ -261,6 +266,7 @@ pub struct HostProviders {
     web_socket: Option<Arc<dyn WebSocketProvider>>,
     commands: Option<Arc<dyn CommandProvider>>,
     workers: Option<Arc<dyn WorkerHost>>,
+    isolates: Option<Arc<dyn WorkerHost>>,
     worker_scope: Option<Arc<dyn WorkerScope>>,
     broadcast: Option<Arc<dyn BroadcastHub>>,
     ports: Option<Arc<dyn PortHub>>,
@@ -294,6 +300,7 @@ impl HostProviders {
             web_socket: None,
             commands: None,
             workers: None,
+            isolates: None,
             worker_scope: None,
             broadcast: None,
             ports: None,
@@ -404,6 +411,14 @@ impl HostProviders {
     #[must_use]
     pub fn with_workers(mut self, workers: Arc<dyn WorkerHost>) -> Self {
         self.workers = Some(workers);
+        self
+    }
+
+    /// The host `Isolate`s run on (DECISIONS D227): a [`WorkerHost`] over a
+    /// pool, whose agents are built computation-only. Absent, `new Isolate()`
+    /// is refused.
+    pub fn with_isolates(mut self, isolates: Arc<dyn WorkerHost>) -> Self {
+        self.isolates = Some(isolates);
         self
     }
 
@@ -528,6 +543,10 @@ impl HostProviders {
         self.workers.clone()
     }
 
+    fn isolates(&self) -> Option<Arc<dyn WorkerHost>> {
+        self.isolates.clone()
+    }
+
     fn worker_scope(&self) -> Option<Arc<dyn WorkerScope>> {
         self.worker_scope.clone()
     }
@@ -595,6 +614,9 @@ pub struct Runtime {
     /// "add `--allow-imports`" is the wrong advice inside one, and the right
     /// advice is unreachable from where the failure happens.
     is_worker: bool,
+    /// Whether this agent is an `Isolate` (D227), which is given the light
+    /// `runtime:workers` — `host`, and nothing that reaches out.
+    is_isolate: bool,
     /// A read-only mirror of the engine's capability set, shared with the ops
     /// that report on it (`runtime:process` `permissions`, D38).
     ///
@@ -638,6 +660,10 @@ impl Runtime {
             module_loader: Rc::new(RefCell::new(None)),
             handle_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
+            is_isolate: providers
+                .worker_scope
+                .as_ref()
+                .is_some_and(|scope| scope.is_isolate()),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
             host_modules: HashMap::new(),
             telemetry: None,
@@ -659,6 +685,9 @@ impl Runtime {
         runtime.engine.eval(&prelude::source())?;
         runtime.engine.eval(&prelude::post_snapshot_source())?;
         runtime.wire_telemetry(&providers);
+        if runtime.is_isolate {
+            runtime.engine.set_denial_note(ISOLATE_DENIAL);
+        }
         Ok(runtime)
     }
 
@@ -859,6 +888,10 @@ impl Runtime {
             module_loader: Rc::new(RefCell::new(None)),
             handle_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
+            is_isolate: providers
+                .worker_scope
+                .as_ref()
+                .is_some_and(|scope| scope.is_isolate()),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
             host_modules: HashMap::new(),
             telemetry: None,
@@ -885,6 +918,9 @@ impl Runtime {
         // now, in a real isolate, so its wrappers are installed per-launch.
         runtime.engine.eval(&prelude::post_snapshot_source())?;
         runtime.wire_telemetry(&providers);
+        if runtime.is_isolate {
+            runtime.engine.set_denial_note(ISOLATE_DENIAL);
+        }
         Ok(runtime)
     }
 
@@ -1034,6 +1070,13 @@ impl Runtime {
     /// isolate to give up.
     pub fn turn_handle(&self) -> Option<TurnHandle> {
         self.engine.turn_handle()
+    }
+
+    /// Calls the prelude hook `hook` with the namespace of `module`, once it
+    /// has evaluated — how an isolate's prelude is handed the exports it
+    /// serves (D227). `Ok(false)` when the hook is absent.
+    pub fn deliver_module_namespace(&mut self, module: ModuleId, hook: &str) -> Result<bool> {
+        Ok(self.engine.deliver_module_namespace(module, hook)?)
     }
 
     /// Compiles and runs `source`, returning the marshaled result. Pending work
@@ -1277,7 +1320,12 @@ impl Runtime {
         // A baked module first, then whatever the embedder added
         // ([`register_module`](Self::register_module) refuses to shadow one, so
         // the order here is a formality rather than a policy).
-        let source: Rc<str> = match runtime_modules::source(specifier) {
+        let baked = if self.is_isolate {
+            runtime_modules::isolate_source(specifier)
+        } else {
+            runtime_modules::source(specifier)
+        };
+        let source: Rc<str> = match baked {
             Some(baked) => Rc::from(baked),
             None => self.host_modules.get(specifier).cloned().ok_or_else(|| {
                 Error::ModuleLoad(format!("unknown built-in module {specifier:?}"))
@@ -1412,7 +1460,10 @@ impl Runtime {
         if granted {
             return Ok(());
         }
-        let remedy = if self.is_worker {
+        let remedy = if self.is_isolate {
+            "an isolate is computation only and imports nothing at run time — \
+             import what it needs statically, or pass it in through a host function"
+        } else if self.is_worker {
             "this worker was not granted the \"imports\" permission — grant it at \
              the spawn, new Worker(url, { permissions: [\"imports\"] })"
         } else {

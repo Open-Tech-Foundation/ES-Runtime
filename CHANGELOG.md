@@ -13,6 +13,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`Isolate` in `runtime:workers`** (DECISIONS D227): small sandboxed agents
+  for code you don't control — plugins, customer rules, code a model wrote —
+  on a pool of threads shared by all of them, so a process can hold thousands
+  (a `Worker` costs a thread each and a process may hold 64). An isolate is
+  computation only: it holds no capability and can be granted none, and
+  reaches the outside only through the `host` functions it is handed.
+  `new Isolate(url | { source, name }, { host, memory })`, `await
+  isolate.exports` for its exported functions, `postMessage`/`onmessage`,
+  `terminate()`. Starting one needs `--allow-workers`, and `--allow-imports`
+  from a file. Inside one, `runtime:workers` exports only `host`, and every
+  denial says to use it.
 - `es-runtime`: `Runtime::leave()` and `Runtime::enter()`, so one thread can
   hold many runtimes and run each in turn — the base of the pooled `Isolate`
   (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8

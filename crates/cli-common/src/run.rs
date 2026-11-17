@@ -14,11 +14,11 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
-    HttpTransport, Jail, NodeModuleLoader, OsEntropy, OtlpHttpSink, ProcessBroadcastHub,
-    ProcessPortHub, SystemClock, SystemCommands, SystemEmbeddedDb, SystemFileSystem,
-    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers, TrustStore, WorkerProcess,
-    path,
+    HttpTransport, IsolatePool, IsolateProcess, Jail, NoNetTransport, NodeModuleLoader, OsEntropy,
+    OtlpHttpSink, ProcessBroadcastHub, ProcessPortHub, SystemClock, SystemCommands,
+    SystemEmbeddedDb, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
+    SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTaskSpawner, TokioTimers,
+    TrustStore, WorkerProcess, path,
 };
 use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 
@@ -1051,39 +1051,35 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         Some(programs) => SystemCommands::new().with_allowlist(programs.clone()),
         None => SystemCommands::new(),
     };
-    let providers = HostProviders::new(
-        clock.clone(),
-        config
-            .console
-            .clone()
-            .unwrap_or_else(|| Arc::new(StdoutConsole)),
-        net,
-        Arc::new(OsEntropy),
-    )
-    .with_process(process.clone())
-    .with_signals(signals.clone())
-    .with_file_system(file_system.clone())
-    // `runtime:db`'s embedded engine resolves through the *same* filesystem
-    // view, so a database is scoped by `--allow-read`/`--allow-write` exactly
-    // as a file is — and the write-ahead log the engine opens beside it is
-    // judged by the same list, rather than by nothing.
-    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(jail.clone())))
-    .with_sync_file_system(sync_file_system)
-    .with_net_provider(Arc::new(system_net))
-    .with_http_server(http_server.clone())
-    .with_web_socket(Arc::new(web_socket))
-    // Child processes for runtime:system. Unrestricted unless
-    // `--allow-run=<programs>` named the ones that may be spawned (D38) — the
-    // same provider seam an embedder uses to grant Run without granting a shell.
-    .with_commands(Arc::new(commands))
-    // BroadcastChannel's agent cluster is this process: every worker the binary
-    // starts shares the hub, so a channel opened in one reaches the rest.
-    .with_broadcast(Arc::new(ProcessBroadcastHub::new()))
-    // MessagePort queues, so a port transferred into a worker keeps working.
-    .with_ports(Arc::new(ProcessPortHub::new()))
-    // CPU-bound work off the event loop — `runtime:images` pipelines (D159) —
-    // on tokio's blocking pool, which every worker shares.
-    .with_task_spawner(Arc::new(TokioTaskSpawner));
+    let console: Arc<dyn es_runtime_providers::Console> = config
+        .console
+        .clone()
+        .unwrap_or_else(|| Arc::new(StdoutConsole));
+    let providers = HostProviders::new(clock.clone(), console.clone(), net, Arc::new(OsEntropy))
+        .with_process(process.clone())
+        .with_signals(signals.clone())
+        .with_file_system(file_system.clone())
+        // `runtime:db`'s embedded engine resolves through the *same* filesystem
+        // view, so a database is scoped by `--allow-read`/`--allow-write` exactly
+        // as a file is — and the write-ahead log the engine opens beside it is
+        // judged by the same list, rather than by nothing.
+        .with_embedded_db(Arc::new(SystemEmbeddedDb::new(jail.clone())))
+        .with_sync_file_system(sync_file_system)
+        .with_net_provider(Arc::new(system_net))
+        .with_http_server(http_server.clone())
+        .with_web_socket(Arc::new(web_socket))
+        // Child processes for runtime:system. Unrestricted unless
+        // `--allow-run=<programs>` named the ones that may be spawned (D38) — the
+        // same provider seam an embedder uses to grant Run without granting a shell.
+        .with_commands(Arc::new(commands))
+        // BroadcastChannel's agent cluster is this process: every worker the binary
+        // starts shares the hub, so a channel opened in one reaches the rest.
+        .with_broadcast(Arc::new(ProcessBroadcastHub::new()))
+        // MessagePort queues, so a port transferred into a worker keeps working.
+        .with_ports(Arc::new(ProcessPortHub::new()))
+        // CPU-bound work off the event loop — `runtime:images` pipelines (D159) —
+        // on tokio's blocking pool, which every worker shares.
+        .with_task_spawner(Arc::new(TokioTaskSpawner));
     // OpenTelemetry export, when the command line asked for it. Installed as a
     // *provider*, so the spans leave the process without the program holding
     // `net` to reach the collector or `diagnostics` to read its own traces
@@ -1222,6 +1218,33 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     )));
     let _ = worker_host_slot.set(workers.clone());
     let providers = providers.with_workers(workers.clone());
+
+    // Isolates (D227): many small agents on a pool of threads, computation
+    // only. Built from a bundle of their own rather than the program's — a
+    // clock, the console, entropy and their channel, and no filesystem,
+    // database, sockets, commands, process or workers — so an isolate holds
+    // nothing to reach out with even before its empty capability set refuses
+    // it. The pool's threads start with the first isolate.
+    let isolate_clock = clock.clone();
+    let isolate_console = console.clone();
+    let isolate_loader = loader.clone();
+    let isolates = Arc::new(ThreadWorkerHost::on_pool(
+        Arc::new(move |spec: &WorkerSpec, scope: Arc<dyn WorkerScope>| {
+            let providers = HostProviders::new(
+                isolate_clock.clone(),
+                isolate_console.clone(),
+                Arc::new(NoNetTransport),
+                Arc::new(OsEntropy),
+            )
+            .with_worker_scope(scope)
+            .with_process(Arc::new(IsolateProcess));
+            let runtime = Runtime::with_snapshot_and_limits(SNAPSHOT, spec.limits, providers)
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            Ok((runtime, isolate_loader.clone()))
+        }),
+        Arc::new(IsolatePool::sized_to_cores()),
+    ));
+    let providers = providers.with_isolates(isolates);
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.

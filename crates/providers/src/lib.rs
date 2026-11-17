@@ -1988,6 +1988,10 @@ pub struct WorkerSpec {
     /// worker owns its thread, so `Atomics.wait` blocking it is exactly what
     /// the call is for, where on the agent driving the loop it is a hang.
     pub limits: es_runtime_common::Limits,
+    /// Whether the agent is an `Isolate` (DECISIONS D227) rather than a
+    /// `Worker`: computation only, its messages in the isolate envelope, and
+    /// its entry module's exports served to the parent once it has evaluated.
+    pub isolate: bool,
 }
 
 /// One event from a worker agent, surfaced by [`WorkerHost::recv`].
@@ -2177,6 +2181,12 @@ pub trait WorkerScope: Send + Sync {
     /// inside it. The same string as [`WorkerSpec::specifier`], handed back to
     /// the agent that is running it.
     fn url(&self) -> String;
+
+    /// Whether this agent is an `Isolate` (DECISIONS D227) — the same answer
+    /// as [`WorkerSpec::isolate`] for the spec it was started from.
+    fn is_isolate(&self) -> bool {
+        false
+    }
 
     /// Sends one structured-clone payload to the parent agent. Synchronous,
     /// for the reason [`WorkerHost::post`] gives.

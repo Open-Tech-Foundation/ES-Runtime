@@ -176,6 +176,22 @@ impl NetTransport for HttpTransport {
     }
 }
 
+/// A [`NetTransport`] that sends nothing: what an `Isolate` is given
+/// (DECISIONS D227). An isolate holds no capability, so `fetch` is refused
+/// before it ever reaches a transport; this is the second wall, so that a
+/// mistake in the first is a refusal and not a request.
+pub struct NoNetTransport;
+
+impl NetTransport for NoNetTransport {
+    fn fetch(&self, _request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
+        Box::pin(async {
+            Err(ProviderError::Other(
+                "an isolate is computation only and cannot fetch — ask a host function to".into(),
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,3 +451,4 @@ mod tests {
         server.await.unwrap();
     }
 }
+

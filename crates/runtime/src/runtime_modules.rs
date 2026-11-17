@@ -60,8 +60,25 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:archive" => Some(include_str!("runtime_modules/archive.js")),
         "runtime:system" => Some(include_str!("runtime_modules/system.js")),
         "runtime:wasi" => Some(include_str!("runtime_modules/wasi.js")),
-        "runtime:workers" => Some(include_str!("runtime_modules/workers.js")),
+        // `Isolate` (D227) shares the module's scope, appended after the
+        // durable workers.
+        "runtime:workers" => Some(concat!(
+            include_str!("runtime_modules/workers.js"),
+            include_str!("runtime_modules/isolate.js")
+        )),
         _ => None,
+    }
+}
+
+/// [`source`] as an `Isolate` sees it (D227): the same modules, except that
+/// `runtime:workers` is the light one — `host`, and nothing that reaches out.
+/// The full module would import `runtime:db`, `runtime:fs` and the durable
+/// workers into every isolate that only wanted `host`, and none of it could
+/// run there.
+pub(crate) fn isolate_source(specifier: &str) -> Option<&'static str> {
+    match specifier {
+        "runtime:workers" => Some(include_str!("runtime_modules/workers_in_isolate.js")),
+        _ => source(specifier),
     }
 }
 

@@ -348,4 +348,60 @@ declare module "runtime:workers" {
    * — and releases this process's hold on the directory.
    */
   export function shutdown(): Promise<void>;
+
+  // ---- Isolate (D227) -------------------------------------------------------
+
+  /** The module an {@link Isolate} runs: a file's URL, or its source text. */
+  export type IsolateCode = URL | string | { source: string; name?: string };
+
+  export interface IsolateOptions {
+    /** Reported as the isolate's `name`. */
+    name?: string;
+    /**
+     * Functions the isolate may call back, through `host` inside it. Each runs
+     * here, with this program's authority — a grant, so hand over narrow ones.
+     */
+    host?: Record<string, (...args: any[]) => unknown>;
+    /** Heap ceiling in megabytes; at most this program's own. */
+    memory?: number;
+    /**
+     * Not accepted: an isolate is computation only and can be granted nothing.
+     * Use `host` functions, or a `Worker`.
+     */
+    permissions?: never;
+  }
+
+  /** An isolate's exported functions, as async calls into it. */
+  export type IsolateExports = Readonly<Record<string, (...args: any[]) => Promise<any>>>;
+
+  /**
+   * A small, sandboxed agent on a shared pool of threads, for code this
+   * program does not control. It computes, and reaches the outside only through
+   * the `host` functions it is handed. Starting one needs `workers`; from a
+   * file, `imports` too.
+   */
+  export class Isolate extends EventTarget {
+    constructor(code: IsolateCode, options?: IsolateOptions);
+    /**
+     * The module's exported functions. Resolves once the module has evaluated;
+     * rejects if it fails to, or if the isolate ends first.
+     */
+    readonly exports: Promise<IsolateExports>;
+    onmessage: ((event: MessageEvent) => void) | null;
+    onerror: ((event: ErrorEvent) => void) | null;
+    /** Sends `message` to the isolate's `onmessage`, by structured clone. */
+    postMessage(message: unknown): void;
+    /** Stops it now; waiting calls reject with `ERR_ISOLATE_TERMINATED`. */
+    terminate(): void;
+    /** Stops this isolate from keeping the process alive. */
+    unref(): void;
+    /** Undoes {@link Isolate.unref}. */
+    ref(): void;
+  }
+
+  /**
+   * Inside an isolate: the functions its parent handed it, each returning a
+   * promise. `undefined` anywhere else.
+   */
+  export const host: Readonly<Record<string, (...args: any[]) => Promise<any>>> | undefined;
 }

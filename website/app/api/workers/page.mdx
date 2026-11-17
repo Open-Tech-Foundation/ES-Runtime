@@ -79,6 +79,8 @@ serve(async (request) => {
 | `startAlarms` | `function` | `startAlarms({ classes })` — begins servicing alarms in this process. |
 | `shutdown` | `async function` | Closes every open worker and releases the directory. |
 | `DurableError`, `DurableErrorCode` | `class`, `object` | The failures, and their stable codes. |
+| `Isolate` | `class` | A small sandboxed agent on a shared pool — see [Isolate](#isolate). |
+| `host` | `object` | Inside an isolate, the functions its parent handed it; `undefined` elsewhere. |
 
 ## The class
 
@@ -398,3 +400,50 @@ onSignal("SIGTERM", async () => {
 | `ERR_DURABLE_SHUTDOWN` | Shutting down, or that worker has been closed. |
 | `ERR_DURABLE_SHARD_LOST` | The shard running the worker ended while a call was in flight. |
 | `ERR_DURABLE_CYCLE` | The call would close a loop of workers waiting on each other; the message names it. |
+
+## Isolate
+
+A small, sandboxed agent for code you don't control, on a pool of threads
+shared with every other isolate (DECISIONS D227). It computes, and reaches the
+outside only through `host`. How to use it: [Isolates](/docs/guides/isolates).
+
+```js
+import { Isolate } from "runtime:workers";
+
+const iso = new Isolate(code, options);
+```
+
+| Parameter | | |
+| --- | --- | --- |
+| `code` | `URL \| string` | A module file, resolved like a `Worker` URL. Needs `workers` and `imports`. |
+| | `{ source, name? }` | Module source text. Needs `workers`. Imports only `runtime:` modules. |
+| `options.name` | `string` | The isolate's name. Default `""`. |
+| `options.host` | `{ [name]: function }` | Functions the isolate may call. Each runs in the parent, with the parent's permissions. Default none. |
+| `options.memory` | `number` | Heap ceiling in megabytes, at most the parent's own. Default: the parent's. |
+
+Any other option throws a `TypeError`, `permissions` included: an isolate can be
+granted nothing.
+
+| Member | |
+| --- | --- |
+| `exports` | `Promise` of the module's exported functions, each an async call into the isolate. Resolves once the module has evaluated; rejects if it throws while loading or the isolate ends first. |
+| `postMessage(message)` | Sends `message` to the isolate's `onmessage`, by structured clone. |
+| `onmessage`, `onerror` | Event handlers; `addEventListener` works too. An `error` nothing calls `preventDefault()` on is logged. |
+| `terminate()` | Stops it at once. Waiting and later calls reject with `ERR_ISOLATE_TERMINATED`. |
+| `unref()`, `ref()` | Whether the isolate keeps the process alive. It does from the start. |
+
+Arguments and results cross by structured clone. A thrown error keeps its
+standard class, `message`, `stack` and `code`; a result that cannot be cloned
+rejects with `DataCloneError`.
+
+**Inside an isolate**, `runtime:workers` exports only `host`, a stub that calls
+the parent's function of each name and resolves with its result. Every
+capability is refused there, with `ERR_CAPABILITY_DENIED`: files, network,
+environment, `import()` of a file, workers. `runtime:` modules that need no
+capability work.
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_ISOLATE_TERMINATED` | The isolate was terminated or has ended. |
+| `ERR_CAPABILITY_DENIED` | Inside an isolate: what was asked for reaches outside it. |
+

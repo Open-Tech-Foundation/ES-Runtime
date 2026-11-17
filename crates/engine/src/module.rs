@@ -215,7 +215,7 @@ impl ModuleRegistry {
         id
     }
 
-    fn module(&self, id: ModuleId) -> Result<v8::Global<v8::Module>> {
+    pub(crate) fn module(&self, id: ModuleId) -> Result<v8::Global<v8::Module>> {
         self.by_id
             .get(&id)
             .cloned()

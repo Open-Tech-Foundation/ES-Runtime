@@ -117,6 +117,7 @@
     // The worker's stack, not the pump's: the frames that matter are the ones
     // in the agent that failed, and this realm's are noise.
     if (failure.stack) error.stack = failure.stack;
+    if (typeof failure.code === "string") error.code = failure.code;
     return error;
   }
 
@@ -604,6 +605,128 @@
     };
   }
 
+  // ---- an Isolate's envelope (D227) ------------------------------------------
+  //
+  // An isolate shares one channel with its parent for three things: the
+  // messages its code posts, calls to its exports, and its calls to the `host`
+  // functions it was handed. So every message is a frame — an array whose first
+  // element says which:
+  //
+  //   parent → isolate   [0, data]                  a message for `onmessage`
+  //                      [1, id, name, args]        call export `name`
+  //                      [4, id, ok, value]         a host call's outcome
+  //   isolate → parent   [0, data]                  a message for `onmessage`
+  //                      [2, id, ok, value]         an export call's outcome
+  //                      [3, id, name, args]        call host function `name`
+  //                      [5, names]                 serving: the exported functions
+  //
+  // A failed call's value is the error in pieces — `{ name, message, stack,
+  // code }` — since an Error does not keep its class across a structured clone.
+  // `runtime:workers`' `Isolate` is the other end.
+  function errorPieces(error) {
+    const isObject = error !== null && typeof error === "object";
+    return {
+      name: isObject && error.name !== undefined ? String(error.name) : "Error",
+      message:
+        isObject && error.message !== undefined ? String(error.message) : String(error),
+      stack: isObject && typeof error.stack === "string" ? error.stack : "",
+      code: isObject && typeof error.code === "string" ? error.code : undefined,
+    };
+  }
+
+  function installIsolateEnvelope(post) {
+    let served = null;
+    const early = [];
+    const hostCalls = new Map();
+    let nextHostCall = 1;
+
+    // An outcome that will not clone — a function returned, a class instance
+    // with private state — is reported as the failure it is, rather than lost.
+    const answer = (id, ok, value) => {
+      try {
+        post([2, id, ok, value]);
+      } catch (error) {
+        post([2, id, false, errorPieces(error)]);
+      }
+    };
+
+    async function call(id, name, args) {
+      try {
+        const fn = Object.hasOwn(served, name) ? served[name] : undefined;
+        if (typeof fn !== "function") {
+          throw new TypeError(`this isolate exports no function named ${JSON.stringify(name)}`);
+        }
+        answer(id, true, await fn(...args));
+      } catch (error) {
+        answer(id, false, errorPieces(error));
+      }
+    }
+
+    // Called by the host, once, with the entry module's namespace, after it
+    // has evaluated. Calls that arrived first were held, not refused.
+    Object.defineProperty(globalThis, "__isolate_serve", {
+      value(namespace) {
+        if (served !== null) return false;
+        served = namespace;
+        post([5, Object.keys(namespace).filter((k) => typeof namespace[k] === "function")]);
+        for (const [id, name, args] of early.splice(0)) call(id, name, args);
+        return true;
+      },
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+
+    // `host`: a stub whose every property is a function that calls the
+    // parent's function of that name and resolves with what it returned.
+    // `then` is absent, so the stub is not mistaken for a promise by `await`.
+    const host = new Proxy(Object.freeze(Object.create(null)), {
+      get(_, name) {
+        if (typeof name !== "string" || name === "then") return undefined;
+        return (...args) =>
+          new Promise((resolve, reject) => {
+            const id = nextHostCall++;
+            hostCalls.set(id, { resolve, reject });
+            try {
+              post([3, id, name, args]);
+            } catch (error) {
+              hostCalls.delete(id);
+              reject(error);
+            }
+          });
+      },
+    });
+    Object.defineProperty(globalThis, "__isolate_host", {
+      value: host,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+
+    // Returns the data of a frame meant for `onmessage`, or `undefined` once
+    // the frame has been handled here.
+    return function receive(frame, deliver) {
+      if (!Array.isArray(frame)) return;
+      switch (frame[0]) {
+        case 0:
+          deliver(frame[1]);
+          return;
+        case 1:
+          if (served === null) early.push([frame[1], frame[2], frame[3]]);
+          else call(frame[1], frame[2], frame[3]);
+          return;
+        case 4: {
+          const pending = hostCalls.get(frame[1]);
+          if (pending === undefined) return;
+          hostCalls.delete(frame[1]);
+          if (frame[2]) pending.resolve(frame[3]);
+          else pending.reject(rebuildError(frame[3]));
+          return;
+        }
+      }
+    };
+  }
+
   function installWorkerScope(info) {
     const { WorkerNavigator, navigator } = makeNavigator();
     const { WorkerLocation, location } = makeLocation(info.url);
@@ -631,7 +754,7 @@
         return info.name;
       }
       postMessage(message, options) {
-        __ops.worker_self_post(serialize(message, options));
+        __ops.worker_self_post(serialize(isolate ? [0, message] : message, options));
       }
       /**
        * How many messages this worker has sent to its parent and the parent has
@@ -676,6 +799,12 @@
     delete globalThis.self;
 
     Object.setPrototypeOf(globalThis, DedicatedWorkerGlobalScope.prototype);
+
+    // An isolate's messages are frames (see above); a worker's are the data.
+    const isolate = info.isolate === true;
+    const envelope = isolate
+      ? installIsolateEnvelope((frame) => __ops.worker_self_post(serialize(frame)))
+      : null;
 
     Object.defineProperty(globalThis, "onmessage", handlerSlot(globalThis, "message"));
     Object.defineProperty(
@@ -729,7 +858,10 @@
           globalThis.dispatchEvent(fired(new MessageEvent("messageerror")));
           continue;
         }
-        globalThis.dispatchEvent(fired(new MessageEvent("message", { data, ports })));
+        const deliver = (payload) =>
+          globalThis.dispatchEvent(fired(new MessageEvent("message", { data: payload, ports })));
+        if (envelope === null) deliver(data);
+        else envelope(data, deliver);
       }
     })();
   }

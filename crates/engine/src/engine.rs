@@ -278,6 +278,12 @@ pub trait Engine {
     /// (DECISIONS.md D7). Deny-by-default: the initial set grants nothing.
     fn set_capabilities(&mut self, capabilities: CapabilitySet);
 
+    /// A sentence every capability denial in this engine ends with, for an
+    /// agent whose remedy is not a flag or a grant (an `Isolate`, D227).
+    fn set_denial_note(&mut self, note: &str) {
+        let _ = note;
+    }
+
     /// Polls pending async ops once; resolves/rejects the JS promises of any
     /// that completed and returns how many were settled. Poll-on-tick: there is
     /// no reactor, so readiness is observed only when this is called
@@ -533,6 +539,17 @@ pub trait Engine {
     /// Enters this engine's isolate again on the thread that made it, after
     /// [`leave`](Self::leave). Idempotent.
     fn enter(&mut self) {}
+
+    /// Calls the global hook `hook` with the namespace of `module`, which must
+    /// have evaluated. How an isolate's prelude reaches the exports it serves
+    /// (D227) without guest code being given a way to reach any module it was
+    /// not handed: the host chooses the module, and the hook is a locked
+    /// prelude function. An exception from the hook is reported like one from
+    /// any host-invoked callback; `false` when the hook is absent.
+    fn deliver_module_namespace(&mut self, module: ModuleId, hook: &str) -> Result<bool> {
+        let _ = (module, hook);
+        Ok(false)
+    }
 
     /// [`leave`](Self::leave) and [`enter`](Self::enter) without a borrow of
     /// the engine, for a pool thread to wrap around a drive that owns it.
@@ -1075,6 +1092,10 @@ impl Engine for V8Engine {
         self.op_state.borrow_mut().capabilities = capabilities;
     }
 
+    fn set_denial_note(&mut self, note: &str) {
+        self.op_state.borrow_mut().denial_note = Some(std::rc::Rc::from(note));
+    }
+
     fn poll_async_ops(&mut self) -> usize {
         crate::op::poll_async_ops(&mut self.isolate, &self.context, &self.op_state)
     }
@@ -1332,6 +1353,21 @@ impl Engine for V8Engine {
 
     fn turn_handle(&self) -> Option<crate::TurnHandle> {
         Some(self.turn.handle())
+    }
+
+    fn deliver_module_namespace(&mut self, module: ModuleId, hook: &str) -> Result<bool> {
+        let module = self.modules.borrow().module(module)?;
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let module = v8::Local::new(scope, &module);
+        if module.get_status() != v8::ModuleStatus::Evaluated {
+            return Err(Error::Internal(
+                "a module's namespace is delivered only once it has evaluated".into(),
+            ));
+        }
+        let namespace = module.get_module_namespace();
+        Ok(crate::op::call_dispatch_hook(scope, hook, &[namespace]).is_some())
     }
 
     fn interrupt_handle(&self) -> InterruptHandle {

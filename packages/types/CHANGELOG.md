@@ -15,6 +15,10 @@ itself.
 
 ### Added
 
+- `Isolate`, `IsolateOptions`, `IsolateCode`, `IsolateExports` and `host` in
+  `runtime:workers` (DECISIONS D227): small sandboxed agents on a shared pool,
+  reached through their exports and the `host` functions they are handed.
+  `permissions` is typed `never`, since an isolate can be granted nothing.
 - `import.meta.env` — `MODE`, `DEV`, `PROD` and `PUBLIC_*` names
   (`string | undefined`) — as `esdev build` compiles it into a bundle; the
   `ImportMetaEnv` interface merges, so a project can declare its own variables.

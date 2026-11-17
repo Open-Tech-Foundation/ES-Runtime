@@ -4058,11 +4058,6 @@ async function shutdown() {
 }
 
 export { DurableWorker, configure, startAlarms, shutdown, DurableError, DurableErrorCode };
-export default {
-  DurableWorker,
-  configure,
-  startAlarms,
-  shutdown,
-  DurableError,
-  DurableErrorCode,
-};
+// The default export is at the end of isolate.js, which is appended to this
+// file to make the module: an object literal here would read `Isolate` before
+// its class declaration had run.

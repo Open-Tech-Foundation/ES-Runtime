@@ -161,6 +161,10 @@ pub(crate) fn install(
         providers.entropy(),
         providers.task_spawner(),
     )?;
+    // Isolates (D227) take the same grant and loader as workers, read after
+    // the workers' install has taken its own.
+    let capabilities_for_isolates = capabilities.clone();
+    let module_loader_for_isolates = module_loader.clone();
     // Worker ops: spawn (Worker capability); post/recv/terminate by worker id.
     // The scope half is installed unconditionally but only *works* on a runtime
     // a WorkerHost built — that asymmetry is what tells the prelude which agent
@@ -173,6 +177,13 @@ pub(crate) fn install(
         module_loader,
         entry_specifier,
         handle_refs,
+        &inventory,
+    )?;
+    crate::worker_ops::install_isolates(
+        engine,
+        providers.isolates(),
+        capabilities_for_isolates,
+        module_loader_for_isolates,
         &inventory,
     )?;
     // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the

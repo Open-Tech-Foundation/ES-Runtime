@@ -297,10 +297,43 @@ struct TimerEntry {
 
 /// Op table and pending-work registries, shared with the in-isolate dispatch
 /// and reject callbacks via an isolate slot.
+/// A capability denial with the agent's note after it: the same class and
+/// code as the bare one, so code that tests `code === "ERR_CAPABILITY_DENIED"`
+/// is unaffected, and a sentence a reader can act on.
+struct NotedDenial {
+    missing: es_runtime_common::Capability,
+    note: std::rc::Rc<str>,
+}
+
+impl std::fmt::Display for NotedDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} — {}",
+            CommonError::CapabilityDenied(self.missing),
+            self.note
+        )
+    }
+}
+
+impl es_runtime_common::IntoException for NotedDenial {
+    fn exception_class(&self) -> es_runtime_common::ExceptionClass {
+        CommonError::CapabilityDenied(self.missing).exception_class()
+    }
+
+    fn exception_code(&self) -> Option<es_runtime_common::ErrorCode> {
+        CommonError::CapabilityDenied(self.missing).exception_code()
+    }
+}
+
 pub(crate) struct OpState {
     ops: Vec<OpEntry>,
     /// Capabilities granted to ops; deny-by-default (DECISIONS.md D7).
     pub capabilities: CapabilitySet,
+    /// What every capability denial in this agent adds after the bare
+    /// refusal, when the usual remedy — a flag, a grant — is not one this
+    /// agent can take (an `Isolate`, D227).
+    pub denial_note: Option<std::rc::Rc<str>>,
     pending_async: Vec<PendingAsync>,
     timers: HashMap<TimerId, TimerEntry>,
     /// Timers created since the last [`take_new_timers`](Self::take_new_timers),
@@ -359,6 +392,7 @@ impl OpState {
         OpState {
             ops: Vec::new(),
             capabilities: CapabilitySet::none(),
+            denial_note: None,
             pending_async: Vec::new(),
             timers: HashMap::new(),
             new_timers: Vec::new(),
@@ -525,8 +559,12 @@ fn op_dispatch_inner(
         .copied()
         .find(|cap| !state.capabilities.contains(*cap))
     {
+        let note = state.denial_note.clone();
         drop(state);
-        throw(scope, &CommonError::CapabilityDenied(missing));
+        match note {
+            None => throw(scope, &CommonError::CapabilityDenied(missing)),
+            Some(note) => throw(scope, &NotedDenial { missing, note }),
+        }
         return;
     }
 

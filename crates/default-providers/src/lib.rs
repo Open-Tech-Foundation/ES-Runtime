@@ -94,7 +94,7 @@ pub use entropy::OsEntropy;
 pub use host_allowlist::HostAllowlist;
 pub use jail::Jail;
 pub use modules::{DenyModuleLoader, FsModuleLoader, ModuleFiles, is_module_file};
-pub use net::HttpTransport;
+pub use net::{HttpTransport, NoNetTransport};
 pub use node_modules::NodeModuleLoader;
 pub use path_allowlist::PathAllowlist;
 pub use ports::ProcessPortHub;
@@ -113,4 +113,6 @@ pub use task::TokioTaskSpawner;
 pub use telemetry::OtlpHttpSink;
 pub use timers::TokioTimers;
 pub use trust::{TrustSource, TrustStore};
-pub use worker::{IsolatePool, ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory};
+pub use worker::{
+    IsolatePool, IsolateProcess, ThreadWorkerHost, WorkerProcess, WorkerRuntimeFactory,
+};

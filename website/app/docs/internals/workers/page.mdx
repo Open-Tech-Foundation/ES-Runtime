@@ -315,3 +315,58 @@ object-URL store is per-isolate, where the spec scopes it to the agent cluster.
 A worker's URL must name a file, so `data:` and `blob:` are refused there too.
 Neither is planned — both schemes carry code and data around a page, and here
 the file is already on disk and the bytes already cross by `postMessage`.
+
+## Isolates
+
+An `Isolate` (DECISIONS D227) is an agent built for density: an isolate, a
+prelude and a channel, with no thread of its own. Isolates share a pool with
+one thread per core, started with the first isolate, so a program that never
+makes one pays for none.
+
+**Pinned, and entered per turn.** Each isolate is made on the pool thread with
+the fewest isolates and never leaves it. That thread runs one single-threaded
+tokio runtime, and every isolate on it is a task there. Before each poll of an
+isolate's task the thread enters its isolate, and after the poll it leaves it,
+so the isolates on a thread take turns. No `v8::Locker` is involved: V8 needs
+one only for an isolate that more than one thread touches. The engine keeps its
+own copy of each thread's stack of entered isolates, because V8 does not check
+the order in a release build, and a wrong order corrupts that stack silently.
+
+**Why not migrate.** A work-stealing pool would let any thread run any isolate.
+That needs a `Locker` on every turn, and every piece of engine state hanging off
+an isolate made safe to move between threads. It was also never faster.
+
+**What it costs.** Release build, 12 cores, 1,000 isolates, from
+`bash bench/probe-isolates.sh`:
+
+| | |
+| --- | --- |
+| Idle isolate restored from the prelude snapshot | 1.65–1.77 MiB |
+| Idle bare V8 context | 1.19–1.31 MiB |
+| Idle `Worker`, for comparison | about 4 MB, and an OS thread |
+| Restoring one from the snapshot | about 2.9 ms |
+| One turn, entered and left on its own thread | 1.0 µs |
+| One turn under `Locker`, pinned | 1.5 µs |
+
+A turn here is one call of a trivial function, the floor under any real work.
+Most of a `Worker`'s cost is its thread, its loop and its providers, not V8.
+
+**Computation only, built that way.** An isolate's runtime is built from a
+provider set of its own: a clock, the console, entropy and its channel. There is
+no filesystem, database, socket, command or worker provider, and its network
+transport refuses every request. So an isolate holds nothing to reach out with
+even before its empty capability set refuses it. Each denial ends with a
+sentence naming `host`, because the usual remedy, a flag or a grant, does not
+exist there.
+
+**The envelope.** An isolate's messages, calls to its exports and its calls to
+`host` share one channel, so every message is a frame whose first element says
+which. The host hands the isolate's prelude the entry module's namespace once
+the module has evaluated, through one locked hook, and calls that arrived
+earlier wait rather than finding bindings in their temporal dead zone. Guest
+code is never given a way to reach a module it was not handed.
+
+**Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
+throws, and no synchronous op is reachable. A call that loops forever holds up
+the other isolates on its thread until `terminate()` stops it. A pool holds up
+to 10,000 live isolates.

@@ -953,7 +953,7 @@ the required capability has been granted.
 | `runtime:images`  | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimeimages) |
 | `runtime:pdf`     | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimepdf) |
 | `runtime:archive` | Available   | None — `FileRead` / `FileWrite` for a `file()` source / destination | [↓](#runtimearchive) |
-| `runtime:workers` | Available   | `FileRead` / `FileWrite` — the same grants its state files need | [↓](#runtimeworkers) |
+| `runtime:workers` | Available   | `FileRead` / `FileWrite` for durable workers; `Worker` (+ `FileSystem` from a file) for `Isolate` | [↓](#runtimeworkers) |
 | `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
 | `runtime:test`    | Available — **`esdev` only** | none | [↓](#runtimetest) |
 | `runtime:watch`   | Available — **`esdev` only** | `FileRead` | [↓](#runtimewatch) |
@@ -4658,6 +4658,39 @@ Starting shards needs `--allow-workers` and `--allow-imports`.
 `startAlarms()` runs on the owning agent; calling it inside a shard throws.
 
 ---
+
+### `Isolate`
+
+A small sandboxed agent on a shared pool of threads (DECISIONS D227): it
+computes, holds no capability and can be granted none, and reaches the outside
+only through the `host` functions it is handed.
+
+```js
+import { Isolate } from "runtime:workers";
+
+const plugin = new Isolate(new URL("./plugin.js", import.meta.url), {
+  host: { log: (...a) => console.log(...a) },
+  memory: 32,
+});
+const { transform } = await plugin.exports;
+await transform("hello");
+plugin.terminate();
+```
+
+| | |
+| --- | --- |
+| `new Isolate(url, options?)` | A module file. Needs `workers` and `imports`. |
+| `new Isolate({ source, name? }, options?)` | Module source text. Needs `workers`; imports only `runtime:` modules. |
+| `options.name` | The isolate's name. |
+| `options.host` | `{ name: function }` the isolate calls through `host`; each runs in the parent with its permissions. |
+| `options.memory` | Heap ceiling in MB, at most the parent's. |
+| `exports` | Promise of the exported functions, each an async call. Rejects if the module throws while loading. |
+| `postMessage(message)`, `onmessage`, `onerror` | One-way messages and failures, as on `Worker`. |
+| `terminate()`, `unref()`, `ref()` | As on `Worker`; waiting calls reject with `ERR_ISOLATE_TERMINATED`. |
+
+Any other option throws, `permissions` included. Inside an isolate
+`runtime:workers` exports only `host`, and every capability is refused with
+`ERR_CAPABILITY_DENIED` and a message naming `host`.
 
 ## `runtime:build`
 

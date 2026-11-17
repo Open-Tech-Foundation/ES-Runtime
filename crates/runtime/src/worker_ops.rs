@@ -173,6 +173,7 @@ fn install_parent(
                     // then narrowed before a line of the worker runs.
                     load_capabilities: load_capabilities(parent),
                     limits: worker_limits(parent_limits, memory_mb)?,
+                    isolate: false,
                 };
                 let id = require(&host)?.spawn(spec).await.map_err(map_err)?;
                 Ok(Value::Number(owned.own(id) as f64))
@@ -184,33 +185,6 @@ fn install_parent(
         .requires(Capability::FileSystem)
         .requires(Capability::Worker),
     )?;
-
-    // Sync, like `port_post` and unlike what this used to be. A queue push has
-    // nothing to await, and making it a future was not merely redundant: every
-    // send held an async-op slot, so a burst of about 1150 `postMessage` calls
-    // in one turn exhausted `max_pending_ops` and made *every* async op in the
-    // agent throw — `terminate()` included. Posting 2000 jobs in a loop is the
-    // ordinary way to use a job queue, and HTML does not permit `postMessage`
-    // to fail for queue depth at all.
-    let host = workers.clone();
-    let owned = children.clone();
-    engine.register_op(OpDecl::sync("worker_post", move |args| {
-        let id = owned.check(arg_u64(&args, 0))?;
-        let message = arg_bytes(&args, 1);
-        require(&host)?.post(id, message).map_err(map_err)?;
-        Ok(Value::Undefined)
-    }))?;
-
-    // `worker_queued(id)`: how deep this worker's inbox is. The only
-    // backpressure signal there is — nothing refuses a message, so a producer
-    // that outruns its worker has to choose to pace itself, and this is what it
-    // paces against.
-    let host = workers.clone();
-    let owned = children.clone();
-    engine.register_op(OpDecl::sync("worker_queued", move |args| {
-        let id = owned.check(arg_u64(&args, 0))?;
-        Ok(Value::Number(require(&host)?.queued(id) as f64))
-    }))?;
 
     // `worker_ref(delta)`: Node's handle ref-counting. A referenced `Worker` is
     // a reason for this agent's loop to keep running; `unref()` says it is not.
@@ -238,10 +212,72 @@ fn install_parent(
         Ok(Value::Undefined)
     }))?;
 
+    install_channel(engine, &WORKER_OPS, workers, children)
+}
+
+/// The op names one kind of agent's parent half is reached through.
+struct ChannelOps {
+    post: &'static str,
+    queued: &'static str,
+    recv: &'static str,
+    terminate: &'static str,
+}
+
+const WORKER_OPS: ChannelOps = ChannelOps {
+    post: "worker_post",
+    queued: "worker_queued",
+    recv: "worker_recv",
+    terminate: "worker_terminate",
+};
+
+const ISOLATE_OPS: ChannelOps = ChannelOps {
+    post: "isolate_post",
+    queued: "isolate_queued",
+    recv: "isolate_recv",
+    terminate: "isolate_terminate",
+};
+
+/// Post, queue depth, receive and terminate for the agents `owned` tracks,
+/// through `host`: the same four for a `Worker` and an `Isolate` (D227), under
+/// each one's own names and with each one's own handle table, so neither can
+/// reach the other's agents by id.
+fn install_channel(
+    engine: &mut dyn Engine,
+    names: &ChannelOps,
+    workers: Option<Arc<dyn WorkerHost>>,
+    children: crate::handles::Handles,
+) -> Result<()> {
+    // Sync, like `port_post` and unlike what this used to be. A queue push has
+    // nothing to await, and making it a future was not merely redundant: every
+    // send held an async-op slot, so a burst of about 1150 `postMessage` calls
+    // in one turn exhausted `max_pending_ops` and made *every* async op in the
+    // agent throw — `terminate()` included. Posting 2000 jobs in a loop is the
+    // ordinary way to use a job queue, and HTML does not permit `postMessage`
+    // to fail for queue depth at all.
+    let host = workers.clone();
+    let owned = children.clone();
+    engine.register_op(OpDecl::sync(names.post, move |args| {
+        let id = owned.check(arg_u64(&args, 0))?;
+        let message = arg_bytes(&args, 1);
+        require(&host)?.post(id, message).map_err(map_err)?;
+        Ok(Value::Undefined)
+    }))?;
+
+    // `worker_queued(id)`: how deep this worker's inbox is. The only
+    // backpressure signal there is — nothing refuses a message, so a producer
+    // that outruns its worker has to choose to pace itself, and this is what it
+    // paces against.
+    let host = workers.clone();
+    let owned = children.clone();
+    engine.register_op(OpDecl::sync(names.queued, move |args| {
+        let id = owned.check(arg_u64(&args, 0))?;
+        Ok(Value::Number(require(&host)?.queued(id) as f64))
+    }))?;
+
     let host = workers.clone();
     let owned = children.clone();
     engine.register_op(
-        OpDecl::r#async("worker_recv", move |args| {
+        OpDecl::r#async(names.recv, move |args| {
             let host = host.clone();
             let owned = owned.clone();
             let id = arg_u64(&args, 0);
@@ -267,7 +303,7 @@ fn install_parent(
 
     let host = workers;
     let owned = children;
-    engine.register_op(OpDecl::r#async("worker_terminate", move |args| {
+    engine.register_op(OpDecl::r#async(names.terminate, move |args| {
         let host = host.clone();
         let owned = owned.clone();
         let id = arg_u64(&args, 0);
@@ -285,6 +321,135 @@ fn install_parent(
         })
     }))?;
     Ok(())
+}
+
+// ---- isolates (D227) ---------------------------------------------------------
+
+/// The parent half of `Isolate`, from `runtime:workers`: two ways to start
+/// one, and the same four channel ops a `Worker` has under names of their own.
+///
+/// An isolate holds no capability and none can be granted — computation only
+/// — so a spawn takes no permissions. Starting one is the `workers` grant;
+/// starting one from a file also reads that file, on this agent's authority,
+/// as `Worker` does, so that form needs `imports` too. A source string is
+/// already in this agent's hands.
+pub(crate) fn install_isolates(
+    engine: &mut dyn Engine,
+    isolates: Option<Arc<dyn WorkerHost>>,
+    capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
+    loader: crate::module_ops::LoaderSlot,
+    inventory: &crate::handles::Inventory,
+) -> Result<()> {
+    let parent_limits = engine.limits();
+    let children = inventory.track(crate::handles::Handles::new("isolate"));
+
+    let host = isolates.clone();
+    let owned = children.clone();
+    let caps = capabilities.clone();
+    engine.register_op(
+        OpDecl::r#async("isolate_spawn_file", move |args| {
+            let host = host.clone();
+            let owned = owned.clone();
+            let loader = loader.borrow().clone();
+            let url = arg_str(&args, 0);
+            let name = arg_str(&args, 1);
+            let memory_mb = arg_u64(&args, 2);
+            let parent = caps.get();
+            Box::pin(async move {
+                let (specifier, source) = read_entry(loader, &url).await?;
+                let spec = isolate_spec(specifier, source, name, parent_limits, memory_mb)?;
+                // Its static graph reads files as this agent could; nothing
+                // the isolate's code runs holds any of it.
+                let spec = WorkerSpec {
+                    load_capabilities: load_capabilities(parent),
+                    ..spec
+                };
+                let id = require_isolates(&host)?
+                    .spawn(spec)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Number(owned.own(id) as f64))
+            })
+        })
+        .requires(Capability::FileSystem)
+        .requires(Capability::Worker),
+    )?;
+
+    let host = isolates.clone();
+    let owned = children.clone();
+    engine.register_op(
+        OpDecl::r#async("isolate_spawn_source", move |args| {
+            let host = host.clone();
+            let owned = owned.clone();
+            let source = arg_str(&args, 0);
+            let name = arg_str(&args, 1);
+            let memory_mb = arg_u64(&args, 2);
+            Box::pin(async move {
+                let specifier = source_specifier(&name);
+                let spec = isolate_spec(specifier, source, name, parent_limits, memory_mb)?;
+                let id = require_isolates(&host)?
+                    .spawn(spec)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Number(owned.own(id) as f64))
+            })
+        })
+        .requires(Capability::Worker),
+    )?;
+
+    install_channel(engine, &ISOLATE_OPS, isolates, children)
+}
+
+/// What every isolate is started with: no capability, no environment, a
+/// thread it must not block, and the parent's memory ceiling or a lower one.
+fn isolate_spec(
+    specifier: String,
+    source: String,
+    name: String,
+    parent_limits: es_runtime_common::Limits,
+    memory_mb: u64,
+) -> std::result::Result<WorkerSpec, OpError> {
+    Ok(WorkerSpec {
+        specifier,
+        source,
+        name,
+        env: Some(Vec::new()),
+        capabilities: CapabilitySet::none(),
+        load_capabilities: CapabilitySet::none(),
+        // A pool thread is shared, so an isolate is not allowed to park it:
+        // `Atomics.wait` throws there, as on the agent driving the loop.
+        limits: worker_limits(parent_limits, memory_mb)?.with_can_block(false),
+        isolate: true,
+    })
+}
+
+/// The URL an isolate made from a string reports as `import.meta.url` and
+/// `location`: `isolate:` and its name. Opaque on purpose — a relative import
+/// from it resolves nowhere, because such code has no directory, and the
+/// `runtime:` modules need none.
+fn source_specifier(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-._~".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("isolate:{}", if name.is_empty() { "source" } else { &name })
+}
+
+fn require_isolates(
+    host: &Option<Arc<dyn WorkerHost>>,
+) -> std::result::Result<&Arc<dyn WorkerHost>, OpError> {
+    host.as_ref().ok_or_else(|| {
+        OpError::new(
+            ExceptionClass::TypeError,
+            "isolates are not available in this runtime",
+        )
+    })
 }
 
 /// What a worker is granted: the names it asked for, intersected with what the
@@ -389,6 +554,7 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
             Some(scope) => Value::Object(vec![
                 ("name".to_string(), Value::String(scope.name())),
                 ("url".to_string(), Value::String(scope.url())),
+                ("isolate".to_string(), Value::Bool(scope.is_isolate())),
             ]),
         })
     }))?;

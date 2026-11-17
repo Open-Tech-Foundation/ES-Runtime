@@ -80,6 +80,8 @@ where
 /// channels, plus the flag `self.close()` sets.
 struct ThreadScope {
     name: String,
+    /// Whether this agent is an `Isolate` (D227).
+    isolate: bool,
     /// The entry module's absolute URL, which is what `location` reports.
     url: String,
     to_parent: mpsc::UnboundedSender<WorkerIncoming>,
@@ -107,6 +109,10 @@ impl WorkerScope for ThreadScope {
 
     fn url(&self) -> String {
         self.url.clone()
+    }
+
+    fn is_isolate(&self) -> bool {
+        self.isolate
     }
 
     fn post(&self, message: Vec<u8>) -> Result<(), ProviderError> {
@@ -358,6 +364,7 @@ impl WorkerHost for ThreadWorkerHost {
         let factory = self.factory.clone();
         let scope = Arc::new(ThreadScope {
             name: spec.name.clone(),
+            isolate: spec.isolate,
             url: spec.specifier.clone(),
             to_parent: to_parent.clone(),
             from_parent: Arc::new(Mutex::new(worker_inbox)),
@@ -798,6 +805,22 @@ async fn run_agent(
             fail_agent(&scope, DriveFailure::UnhandledRejection(error));
         }
 
+        // An isolate's exports are what its parent calls, so its prelude is
+        // handed them now that they exist — and only now: a call arriving
+        // earlier waits in the envelope's queue rather than finding bindings
+        // still in their temporal dead zone (D227).
+        if spec.isolate && !closed.load(Ordering::SeqCst) {
+            match runtime.deliver_module_namespace(entry, "__isolate_serve") {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(UncaughtError::from_message(
+                        "isolate could not serve its exports: its prelude is missing".to_string(),
+                    ));
+                }
+                Err(err) => return Err(describe(&runtime, err.to_string())),
+            }
+        }
+
         // Settled cleanly; carry on for as long as the worker has work — but
         // stop the moment it closes itself. `close()` only turns back the
         // receive pump, so an agent holding any *other* outstanding op would
@@ -1079,6 +1102,48 @@ impl es_runtime_providers::Process for WorkerProcess {
     }
 }
 
+/// The [`Process`](es_runtime_providers::Process) an `Isolate` sees
+/// (DECISIONS D227): what computation needs and nothing about the deployment.
+///
+/// The platform and architecture are the host's, because `runtime:path`'s rules
+/// follow them and a path computed in an isolate should mean what it means to
+/// its parent. Everything else says the isolate has no place of its own: no
+/// environment, no arguments, `/` as its directory — an isolate reads no file,
+/// so the real one would only tell it where the program is installed — and an
+/// `exit()` that ends the isolate alone.
+pub struct IsolateProcess;
+
+impl es_runtime_providers::Process for IsolateProcess {
+    fn env(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    fn provided_env(&self) -> Option<Vec<(String, String)>> {
+        Some(Vec::new())
+    }
+    fn args(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn cwd(&self) -> Result<String, ProviderError> {
+        Ok(if cfg!(windows) {
+            "C:\\".to_string()
+        } else {
+            "/".to_string()
+        })
+    }
+    fn platform(&self) -> String {
+        std::env::consts::OS.to_string()
+    }
+    fn arch(&self) -> String {
+        std::env::consts::ARCH.to_string()
+    }
+    fn exit(&self, _code: i32) {
+        // An isolate's exit ends that isolate; the code is not the process's.
+    }
+    fn requested_exit_code(&self) -> Option<i32> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,6 +1178,7 @@ mod tests {
             capabilities: es_runtime_common::CapabilitySet::none(),
             load_capabilities: es_runtime_common::CapabilitySet::none(),
             limits: es_runtime_common::Limits::default(),
+            isolate: false,
         }
     }
 
