@@ -90,7 +90,15 @@ fn an_isolate_from_a_file_calls_its_host_and_imports_runtime_modules() {
         GRANT_FILES,
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(lines(&out), ["[plugin] transforming 5", "HELLO! a/b"]);
+    // `runtime:path` inside an isolate follows the host's platform.
+    let joined = if cfg!(windows) { r"a\b" } else { "a/b" };
+    assert_eq!(
+        lines(&out),
+        [
+            "[plugin] transforming 5".to_string(),
+            format!("HELLO! {joined}")
+        ]
+    );
 }
 
 #[test]
