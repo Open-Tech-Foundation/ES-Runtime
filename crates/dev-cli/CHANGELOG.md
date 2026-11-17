@@ -26,6 +26,8 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-17
+
 ### Added
 
 - **`import.meta.env` under `esdev test`** (DECISIONS D226): the `PUBLIC_*`

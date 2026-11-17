@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-17
+
 ### Added
 
 - `Isolate`, `IsolateOptions`, `IsolateCode`, `IsolateExports` and `host` in
