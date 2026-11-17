@@ -9,6 +9,9 @@
 //!   queue), so consecutive turns of one isolate land on different threads and
 //!   V8's `ThreadManager` archives and restores its per-thread state.
 //!
+//! * **entered** — owned isolates on one thread, entered and left around each
+//!   turn with no `Locker` at all, which a thread that owns its isolates can do.
+//!
 //! Each turn is one call of a trivial JS function — the per-turn floor, not a
 //! workload. Baseline: the same call with the lock held throughout.
 //!
@@ -53,6 +56,15 @@ fn rss_kib() -> u64 {
 }
 
 fn tenant() -> Tenant {
+    let isolate = owned();
+    // SAFETY: the only embedder state on the isolate is `Handles`, two
+    // `Global`s, which are `Send`; nothing else is attached, then or later.
+    let isolate = unsafe { isolate.try_into_shared() }.expect("shareable");
+    Tenant { isolate }
+}
+
+/// An owned isolate with its context and `turn()` in a slot, still entered.
+fn owned() -> v8::OwnedIsolate {
     let mut isolate = v8::Isolate::new(v8::CreateParams::default());
     let handles = {
         let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -70,10 +82,7 @@ fn tenant() -> Tenant {
         }
     };
     isolate.set_slot(handles);
-    // SAFETY: the only embedder state on the isolate is `Handles`, two
-    // `Global`s, which are `Send`; nothing else is attached, then or later.
-    let isolate = unsafe { isolate.try_into_shared() }.expect("shareable");
-    Tenant { isolate }
+    isolate
 }
 
 /// One turn: lock, enter the context, call `turn()`, unlock.
@@ -245,6 +254,39 @@ fn main() {
             "migrating  {isolates} isolates, {threads} threads      {:>9.2?}/turn wall   {rate:>10.0} turns/s   ({share:.0}% of turns changed thread)",
             per(elapsed, turns)
         );
+    }
+
+    // Pinned without a lock: owned isolates on one thread, each left after it
+    // is made and entered again for its turn. Nothing else may use them, so
+    // V8 needs no `Locker` — this is what a pool thread owning its isolates
+    // outright would pay.
+    {
+        let mut owned: Vec<v8::OwnedIsolate> = (0..isolates).map(|_| owned()).collect();
+        for isolate in owned.iter().rev() {
+            // SAFETY: each is the current isolate when exited, newest first.
+            unsafe { isolate.exit() };
+        }
+        let turns = ROUNDS * isolates;
+        let start = Instant::now();
+        for _ in 0..ROUNDS {
+            for isolate in &mut owned {
+                // SAFETY: entered and exited in pairs on the thread that owns
+                // them, so the entered stack is unchanged after each turn.
+                unsafe { isolate.enter() };
+                call(isolate);
+                unsafe { isolate.exit() };
+            }
+        }
+        println!(
+            "entered    {isolates} isolates, 1 thread        {:>9.2?}/turn (enter/exit, no Locker)",
+            per(start.elapsed(), turns)
+        );
+        // `OwnedIsolate::drop` exits the isolate, so it must be the current one.
+        while let Some(isolate) = owned.pop() {
+            // SAFETY: entered once, so its drop's exit balances.
+            unsafe { isolate.enter() };
+            drop(isolate);
+        }
     }
 
     // Shared isolates may be dropped from any thread; drop them here.
