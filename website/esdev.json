@@ -2,22 +2,36 @@
   "plugins": [
     {
       "module": "@opentf/esdev-plugin-afw",
-      "options": { "mode": "ssg", "appDir": "app" }
+      "options": {
+        "appDir": "app"
+      }
     },
     {
       "module": "@opentf/afw-docs/build",
       "export": "docsNavPlugin",
-      "options": { "appDir": "app" }
+      "options": {
+        "appDir": "app"
+      }
     },
     {
       "module": "@opentf/afw-docs/build",
       "export": "lastUpdatedPlugin",
-      "options": { "appDir": "app" }
+      "options": {
+        "appDir": "app"
+      }
+    },
+    {
+      "module": "@opentf/afw-docs/build",
+      "export": "codeHighlightPlugin"
     },
     {
       "module": "@opentf/afw-cli/ssg",
       "export": "siteOutputPlugin",
-      "options": { "root": ".", "target": "web", "prerenderTarget": "site-ssg" }
+      "options": {
+        "root": ".",
+        "target": "web",
+        "prerenderTarget": "site-ssg"
+      }
     }
   ],
   "build": {
@@ -25,7 +39,9 @@
       "web": {
         "entry": "index.html",
         "outdir": "dist",
-        "assets": ["public"]
+        "assets": [
+          "public"
+        ]
       },
       "site-ssg": {
         "entry": "ssg.js",

@@ -167,21 +167,21 @@ importers:
   .:
     dependencies:
       '@opentf/afw':
-        specifier: ^0.33.0
-        version: 0.33.0
+        specifier: ^0.39.0
+        version: 0.39.0
       '@opentf/afw-docs':
-        specifier: ^0.31.0
-        version: 0.31.0(@opentf/afw@0.33.0)
+        specifier: ^0.38.0
+        version: 0.38.0(@opentf/afw@0.39.0)
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
     devDependencies:
       '@opentf/afw-cli':
-        specifier: ^1.32.0
-        version: 1.32.0(@opentf/afw@0.33.0)
+        specifier: ^1.38.1
+        version: 1.38.1(@opentf/afw@0.39.0)
       '@opentf/esdev-plugin-afw':
-        specifier: ^0.5.0
-        version: 0.5.0
+        specifier: ^0.11.0
+        version: 0.11.0
       wrangler:
         specifier: ^4.147.0
         version: 4.153.0
@@ -566,27 +566,36 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@opentf/afw-cli@1.32.0':
-    resolution: {integrity: sha512-zJ4JonWoZeN/zkQhrVj8d5P9SaPIuPaRCSZXHlKcXd9V/ngb4CkD0kkARaXzaTy7fttLl+4J6tQDZxeiPt9i0g==}
+  '@opentf/afw-build@0.6.0':
+    resolution: {integrity: sha512-P8qXAk37VgX5pP3XSnetxjjXbAl51y393abQk/fAz5i+QPIJRU1AedIvSnORUUdtO6dcJcczzPVwBJ22J10u9Q==}
+
+  '@opentf/afw-cli@1.38.1':
+    resolution: {integrity: sha512-DgMy8fX+5Mcf/qaTRpr4wcVi7J29ixbYZUCK9lPTu5Z63b7KJdBbYPG6rqKknvkngYG7Ra0MPXRp1h1FN4v0Dw==}
     engines: {esdev: '>=0.16.0'}
     peerDependencies:
-      '@opentf/afw': 0.33.0
+      '@opentf/afw': 0.39.0
 
-  '@opentf/afw-compiler@0.21.0':
-    resolution: {integrity: sha512-feY8nGiXdNoG1/ewOr2Jm2pSVLP/GQ9hNlj0VvcbXJqq9EC7WmL+EP4pt3JdeLQuQNNALXgOrylUBDahCziIQw==}
-    engines: {esdev: '>=0.16.0'}
+  '@opentf/afw-compiler@0.26.0':
+    resolution: {integrity: sha512-ebMKlrRbAXFXlc3YR14/8YKEVYpuJL+Tab2SviEuUbWCfVVENv1NkswZkuXRz83XqJZhDCKwRmn742Hs9igEsg==}
+    engines: {esdev: '>=0.16.0', node: '>=22'}
 
-  '@opentf/afw-docs@0.31.0':
-    resolution: {integrity: sha512-001ZaiGQRNYdcD8L2sYWrBWBybiu7sUJ60l4CA8Xy3llFGDoYtofcnsM/l/u+KJq8bVhpHbtvuIW8RyTyhQHPg==}
+  '@opentf/afw-docs@0.38.0':
+    resolution: {integrity: sha512-Jbrq5Rv3lTmSAP4jgdGdqGgvDbBrq9E2gkm7aOe/LtnzOp4DykCuKnSB13xVlaLZSuuGLBSPVjT2Pa76b78m2g==}
     peerDependencies:
-      '@opentf/afw': 0.33.0
+      '@opentf/afw': 0.39.0
 
-  '@opentf/afw@0.33.0':
-    resolution: {integrity: sha512-K5i7jaOu6QQBtF6eWYd4bluptyAfvh2ibYow3B/MR2Bv2OoK41JsAU0JIOTxpu97GJhWd0H68SX0wqfbHCTfCA==}
+  '@opentf/afw@0.39.0':
+    resolution: {integrity: sha512-GF2EinWtcd+DMoN+QdJU9VtOJbsm0GrZawEdUYL64a5rmqoj5+NceJanVdwQhthCxrhAV+uxNl85u1chjKSn5A==}
 
-  '@opentf/esdev-plugin-afw@0.5.0':
-    resolution: {integrity: sha512-kd9gwsZfGdGFrw7k247VOgL9CvgLq2q1sZkICRYZhX12TxIACl3iY+eHegd9lEvW0FhOT2RVlVQnwY+QTCsDgQ==}
+  '@opentf/esdev-plugin-afw@0.11.0':
+    resolution: {integrity: sha512-dzYTkRAq2pKhs8mqEcu1ytar+t9IYGHTHo8d/IK2wqUGhJKgBWErL5KDBdt0mALhheuviY3Vj3CFKaxWL0e7ww==}
     engines: {esdev: '>=0.16.0'}
+
+  '@opentf/serialize@0.1.0':
+    resolution: {integrity: sha512-kRyYKuQHahHpVMfX1QtxohJuEd/iUkp9VYYUT3w/Oo64K+ONmvx3JB/nFJALHwfDsWKfmDIBMHBUULBWdltaog==}
+
+  '@opentf/syntax-highlighter@0.5.0':
+    resolution: {integrity: sha512-pvi9s9DZjqt3o+ufnp66TK4ZDGpf/Mdax7+29nNmp7g8sr5M3yB80smBYmZ0mGdijpxDNUGT/eY8kfapS02P5Q==}
 
   '@poppinss/colors@4.1.6':
     resolution: {integrity: sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg==}
@@ -933,23 +942,34 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@opentf/afw-cli@1.32.0(@opentf/afw@0.33.0)':
+  '@opentf/afw-build@0.6.0': {}
+
+  '@opentf/afw-cli@1.38.1(@opentf/afw@0.39.0)':
     dependencies:
-      '@opentf/afw': 0.33.0
-      '@opentf/esdev-plugin-afw': 0.5.0
+      '@opentf/afw': 0.39.0
+      '@opentf/afw-build': 0.6.0
+      '@opentf/esdev-plugin-afw': 0.11.0
 
-  '@opentf/afw-compiler@0.21.0': {}
+  '@opentf/afw-compiler@0.26.0': {}
 
-  '@opentf/afw-docs@0.31.0(@opentf/afw@0.33.0)':
+  '@opentf/afw-docs@0.38.0(@opentf/afw@0.39.0)':
     dependencies:
-      '@opentf/afw': 0.33.0
-      '@opentf/afw-compiler': 0.21.0
+      '@opentf/afw': 0.39.0
+      '@opentf/afw-compiler': 0.26.0
+      '@opentf/syntax-highlighter': 0.5.0
 
-  '@opentf/afw@0.33.0': {}
-
-  '@opentf/esdev-plugin-afw@0.5.0':
+  '@opentf/afw@0.39.0':
     dependencies:
-      '@opentf/afw-compiler': 0.21.0
+      '@opentf/serialize': 0.1.0
+
+  '@opentf/esdev-plugin-afw@0.11.0':
+    dependencies:
+      '@opentf/afw-build': 0.6.0
+      '@opentf/afw-compiler': 0.26.0
+
+  '@opentf/serialize@0.1.0': {}
+
+  '@opentf/syntax-highlighter@0.5.0': {}
 
   '@poppinss/colors@4.1.6':
     dependencies:
