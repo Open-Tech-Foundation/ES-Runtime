@@ -74,6 +74,63 @@ the context comes last, with nothing positional in between: anything one
 particular hook needs to say — `isEntry`, on a resolve — rides on the context
 rather than shifting the signature.
 
+## start: before each build
+
+`start` runs once per target, at the beginning of every build of it. Under
+`esdev build` that is once. Under `esdev start` it runs again on every rebuild
+a save causes, a hot swap included. The plugin is loaded once for the whole
+loop, so state a plugin keeps survives from one build to the next; reset
+anything that belongs to a single build here.
+
+```js
+let routes;
+
+export default {
+  name: "routes",
+  start: {
+    async handler(ctx) {
+      routes = await scanRoutes();          // fresh for this build
+      ctx.info(`${ctx.command} ${ctx.target}: ${routes.length} routes`);
+      return { dependsOn: ["app/routes.json"] };
+    },
+  },
+};
+```
+
+Its context is the one every hook gets, with no module in hand:
+
+| | |
+| --- | --- |
+| `ctx.command` | `"build"` or `"start"` |
+| `ctx.platform` | `"browser"` or `"server"` |
+| `ctx.target` | The target being built |
+| `ctx.hot` | `true` in a hot dev build |
+| `ctx.resolve()`, `ctx.emit()` | As in any hook ([context](/esdev/plugins/context)) |
+| `ctx.warn()`, `ctx.info()`, `ctx.debug()`, `ctx.error()` | Report, or fail the build |
+
+`dependsOn` names files the build does not import but the plugin read; a change
+to one rebuilds.
+
+## Writing an extra file
+
+`ctx.emit()` adds a file to the build being made, from `start`, `resolve`,
+`load`, `transform`, `end` or `bundle`. It is written with the target's bundles,
+under `esdev build` and `esdev start` alike:
+
+```js
+bundle: {
+  handler(output, ctx) {
+    ctx.emit({ type: "asset", fileName: "routes.json", source: JSON.stringify(routes) });
+  },
+}
+```
+
+`fileName` is relative to where the target writes its bundles: the directory of
+an `out` file, or an HTML target's `assets/`. A file anywhere else in the
+output — at a site's root, beside `index.html` — is written in
+[`finish`](#finish-after-the-whole-build) with `runtime:fs`, which runs in
+`esdev build` only.
+
 ## html: the document
 
 An HTML target's document goes through the plugins too. `id` is its path, and
