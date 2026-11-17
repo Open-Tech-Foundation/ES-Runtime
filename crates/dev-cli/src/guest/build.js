@@ -63,7 +63,7 @@
 // wait for one hook before accepting the next — so a slow plugin holds up its
 // own module rather than the build.
 
-import { env, Secret } from "runtime:process";
+import { env, unmask } from "runtime:process";
 
 const ops = globalThis.__ops;
 
@@ -460,8 +460,9 @@ async function flatten(list, out = []) {
 // `import.meta.env`, read through `runtime:process` — so as this program, under
 // its own env grant: `--allow-env=PUBLIC_API_URL` compiles in that one name,
 // and a run with no env grant is refused here rather than handed the
-// environment through the bundler (D223). A name the runtime holds as a secret
-// is refused outright: compiled in, it is published.
+// environment through the bundler (D223). `PUBLIC_` is the developer saying the
+// value is public, so a name the runtime would mask as a secret
+// (`PUBLIC_API_TOKEN`) is compiled in as written, as `esdev build` does.
 function publicEnv() {
   let entries;
   try {
@@ -480,12 +481,7 @@ function publicEnv() {
   const values = {};
   for (const [name, value] of entries) {
     if (!name.startsWith("PUBLIC_")) continue;
-    if (value instanceof Secret) {
-      throw new TypeError(
-        `build: ${name} is held as a secret, and compiling it into import.meta.env would publish it — rename it, or read it at run time through runtime:process`,
-      );
-    }
-    values[name] = value;
+    values[name] = unmask(value);
   }
   return values;
 }

@@ -21495,13 +21495,11 @@ try {
     );
     assert!(denied.contains("REFUSED NotAllowedError"), "{denied}");
     assert!(denied.contains("--allow-env"), "{denied}");
-    // A PUBLIC_ name the runtime holds as a secret is never compiled in.
+    // `PUBLIC_` says the value is public: a name the runtime would mask as a
+    // secret is compiled in like any other, not refused.
     let secret = run(&[], "production", &[("PUBLIC_API_TOKEN", "hunter2")]);
-    assert!(
-        secret.contains("REFUSED TypeError build: PUBLIC_API_TOKEN is held as a secret"),
-        "{secret}"
-    );
-    assert!(!secret.contains("hunter2"), "{secret}");
+    assert!(secret.contains("CODE replaced clean"), "{secret}");
+    assert!(!secret.contains("REFUSED"), "{secret}");
     // A mode is one of two words.
     let wrong = run(&[], "staging", &[]);
     assert!(

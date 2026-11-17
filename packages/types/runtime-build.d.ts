@@ -335,7 +335,7 @@ declare module "runtime:build" {
      * Compiles `import.meta.env` in, as `esdev build` does: `MODE`, `DEV`,
      * `PROD`, and `PUBLIC_*` from `.env` in `cwd`, then the environment — read
      * as this program, under its read and env grants. Refused without an env
-     * grant, or when a `PUBLIC_*` variable is held as a secret. Omitted,
+     * grant. Omitted,
      * nothing is compiled in.
      */
     mode?: "development" | "production";

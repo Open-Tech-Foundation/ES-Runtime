@@ -4684,12 +4684,12 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 **Decision:**
 - **`build({ mode: "development" | "production" })`** compiles `import.meta.env` in: `MODE`, `DEV`, `PROD`, and `PUBLIC_*` from `<cwd>/.env`, then the environment, later winning — the one function `esdev build` uses (`compile_env`), so the two cannot drift.
 - **Read as the program.** The file through the run's filesystem view, under its read grant; the variables through `runtime:process`'s `env`, under its env grant — `--allow-env=PUBLIC_API_URL` compiles in that name and no other. With no env grant the build is refused, naming the grant.
-- **A `PUBLIC_*` name the runtime holds as a secret is refused.** `runtime:process` already wraps `*_TOKEN`, `*_KEY` and the like in `Secret`; compiled into a bundle, the value is published.
+- **`PUBLIC_` is the developer's word that a value is public.** A name `runtime:process` would mask as a secret (`PUBLIC_API_TOKEN`) is compiled in as written, as `esdev build` does — esdev is development, and second-guessing the prefix there protects nothing esrun does not.
 - **Explicit.** Without `mode`, nothing is read and nothing compiled in; the program's `define` wins over `mode`'s for the same name.
 
 **Rejected:** a default mode (Vite's JS `build()` defaults to `production` and loads `.env`) — a build call that reads files and the environment because nobody said not to is the wrong default in a runtime whose reads are granted. Reading the environment on the Rust side under the `env` capability check — the gate is per capability, not per scope, so a scoped grant would still have handed over every `PUBLIC_*` name.
 
-**Consequences:** `esdev build` still reads the shell's `PUBLIC_*` names as the toolchain, with no secret check — it is a build command, not a program — so a `PUBLIC_API_TOKEN` it compiles in today is not refused there. Whether it should be is a separate decision.
+**Consequences:** `esdev build` and `build({ mode })` compile in the same `PUBLIC_*` names; neither refuses one by its shape (amended 2026-11-17: the secret refusal first written here was removed — the prefix decides, and production is esrun's).
 
 ### D224 — `dev.targets`: builds only the dev loop makes · *Accepted (2026-11-13)*
 

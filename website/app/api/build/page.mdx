@@ -64,9 +64,7 @@ Output options (`format`, `exports`, `dir`, `codeSplitting`, `sourcemap`,
 the per-call ones win.
 
 A build with a `mode` is refused when it may not read the environment
-(`NotAllowedError`), and when a `PUBLIC_*` variable is one the runtime holds
-as a [secret](/api/process) — `PUBLIC_API_TOKEN` compiled into a bundle is
-published (`TypeError`).
+(`NotAllowedError`).
 
 ### What a platform asserts
 
