@@ -48,6 +48,7 @@ const NAV = [
       },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },
+      { title: "Isolates", path: "/docs/guides/isolates" },
       { title: "Durable workers", path: "/docs/guides/durable-workers" },
       {
         title: "HTTP server",

@@ -1,0 +1,180 @@
+---
+title: Isolates
+description: Run code you don't control — plugins, customer rules, code a model wrote — in small sandboxed agents that can only compute.
+---
+
+import { Callout } from "@opentf/afw-docs";
+
+# Isolates
+
+An `Isolate` runs a module you don't control: a customer's pricing rule, a
+third-party plugin, code a model generated. It has its own V8 heap and shares a
+small pool of threads with every other isolate, so a process can hold
+thousands of them.
+
+An isolate **computes, and nothing else**. It holds no capability and can be
+granted none: no files, no network, no environment. It reaches the outside only
+through the `host` functions you hand it.
+
+```js
+import { Isolate } from "runtime:workers";
+
+const rule = new Isolate({
+  source: "export const discount = (order) => (order.total > 500 ? 0.1 : 0);",
+  name: "acme-discount",
+});
+const { discount } = await rule.exports;
+console.log(await discount({ total: 600 })); // 0.1
+rule.terminate();
+```
+
+```sh
+esrun --allow-workers main.js
+```
+
+## When to use one
+
+| You need | Use |
+| --- | --- |
+| Many small pieces of someone else's code, each kept apart | `Isolate` |
+| Heavy work spread across every core, or code that blocks | [`Worker`](/docs/guides/workers) |
+| State that outlives the process, one owner per id | [Durable workers](/docs/guides/durable-workers) |
+
+## Starting one
+
+From a string, such as code kept in a database:
+
+```js
+new Isolate({ source: code, name: "rule-42" });
+```
+
+From a file:
+
+```js
+new Isolate(new URL("./plugins/upper.js", import.meta.url));
+```
+
+Starting an isolate needs `--allow-workers`. Starting one from a file also
+reads that file, so it needs `--allow-imports` too, as a `Worker` does. The
+file's static imports load with it. A module made from a string has no
+directory, so it can import only `runtime:` modules.
+
+## Calling it
+
+`isolate.exports` resolves, once the module has evaluated, to its exported
+functions. Each call is async. Its arguments and its result are copied by
+structured clone, as `postMessage` copies a message.
+
+```js
+const { transform } = await plugin.exports;
+const html = await transform(markdown);
+```
+
+An error thrown inside keeps its class, message and `code`:
+
+```js
+try {
+  await validate(input);
+} catch (e) {
+  if (e instanceof RangeError && e.code === "ERR_LIMIT") retryLater();
+}
+```
+
+A result that can't be cloned, such as a function, rejects with a
+`DataCloneError`.
+
+## Handing it what it needs: `host`
+
+`host` is how an isolate reaches the outside. Each function you pass runs in
+your program, with your program's permissions, and the isolate calls it by name:
+
+```js
+// main.js
+const plugin = new Isolate(new URL("./plugin.js", import.meta.url), {
+  host: {
+    log: (...args) => console.log("[plugin]", ...args),
+    config: async (key) => settings[key],
+  },
+});
+
+// plugin.js
+import { host } from "runtime:workers";
+
+export async function transform(text) {
+  await host.log("transforming", text.length);
+  return (await host.config("shout")) ? text.toUpperCase() : text;
+}
+```
+
+<Callout type="warning" title="A host function is a grant">
+  A function in `host` can do whatever your program can. Hand over narrow ones:
+  `getUser(id)` that fetches one record from one API, not `fetch(url)`. A host
+  function that takes a path and reads it gives the isolate your `read`
+  permission by another route.
+</Callout>
+
+## What runs inside
+
+| Works | Refused |
+| --- | --- |
+| Web standards: `URL`, `TextEncoder`, `structuredClone`, `crypto`, timers, `console` | `runtime:fs`, `fetch`, `runtime:net`, `runtime:db`, `runtime:http`, `env` |
+| `runtime:` modules that need no permission: `path`, `serialization`, `hashing`, `pdf`, `images`, `archive` on bytes passed in | `import()` of a file, starting a `Worker` or an `Isolate`, `Atomics.wait` |
+
+A refused call fails like any denied capability, with `ERR_CAPABILITY_DENIED`,
+and the message says what to do instead:
+
+```text
+capability denied: FileRead (permission "read") — an isolate is computation
+only; pass it what it needs through a host function
+```
+
+Inside an isolate, `runtime:workers` exports only `host`.
+
+## Messages
+
+`postMessage` and `onmessage` work as they do on a `Worker`, for one-way
+events:
+
+```js
+const iso = new Isolate({ source: "onmessage = (e) => postMessage(e.data * 2);" });
+iso.onmessage = (e) => console.log(e.data); // 42
+iso.postMessage(21);
+```
+
+## Memory and ending
+
+`memory` caps the isolate's heap, in megabytes, at no more than your program's
+own:
+
+```js
+new Isolate(code, { memory: 32 });
+```
+
+`terminate()` stops an isolate at once, even one stuck in a loop. Calls still
+waiting reject with `ERR_ISOLATE_TERMINATED`, and so does any later call.
+
+A module that throws while it loads rejects `exports` and fires `error`:
+
+```js
+iso.onerror = (e) => {
+  e.preventDefault(); // handled here, so it is not logged
+  report(e.error);
+};
+```
+
+A live isolate keeps the process running, as a `Worker` does. Call
+`terminate()` when you are done with it, or `unref()` to let the process exit
+while it idles.
+
+## Limits
+
+- An isolate is not a hard security boundary. It keeps code apart from your
+  program's data and permissions, not from attacks on the CPU itself.
+- Isolates on one pool thread take turns. A call that loops forever holds up
+  the others on its thread until you `terminate()` it.
+- From inside an isolate, `cwd()` is refused, so `resolve()` of a relative path
+  is too. `join()` and the rest of `runtime:path` work.
+
+See the [`runtime:workers` reference](/api/workers#isolate) for every option,
+and [Internals: Workers](/docs/internals/workers#isolates) for how the pool
+works.

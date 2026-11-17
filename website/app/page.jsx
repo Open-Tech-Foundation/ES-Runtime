@@ -130,6 +130,15 @@ const groups = [
     ],
   },
   {
+    name: "Isolate",
+    desc: "Run code you don't control — plugins, customer rules, code a model wrote — in thousands of small isolates that can only compute.",
+    tiles: [
+      { icon: "isolate", label: "Isolates", to: "/docs/guides/isolates" },
+      { icon: "workers", label: "Workers", to: "/docs/guides/workers" },
+      { icon: "sandbox", label: "Sandbox", to: "/docs/guides/isolates#what-runs-inside" },
+    ],
+  },
+  {
     name: "Run on",
     desc: "A Rust core around V8, scripted in JavaScript and TypeScript.",
     tiles: [
@@ -296,7 +305,7 @@ export default function HomePage() {
               Develop top-right on purpose. Cards keep their own heights. */}
           <div className="mx-auto grid max-w-5xl gap-6 sm:grid-cols-2">
             {[
-              ["Connect", "Store", "Speak", "Ships with", "Secure"],
+              ["Connect", "Store", "Speak", "Ships with", "Secure", "Isolate"],
               ["Develop", "Run on", "Built-in Utils", "Message", "Observe"],
             ].map((column, ci) => (
               <div className="space-y-6">

@@ -8,7 +8,7 @@
 // mark from valkey.io (img/Valkey-logo.svg; a trademark of LF Projects, LLC). The JSX tile is that
 // JavaScript mark with an "x" added. MessagePack, Protobuf, CSV, CBOR, HTTP,
 // WebSocket, images, PDFs, archives, durable state, object storage (a bucket:
-// the client speaks to any S3-compatible store, and no free S3 mark exists), the toolchain, the sandbox, mail,
+// the client speaks to any S3-compatible store, and no free S3 mark exists), the toolchain, the sandbox, isolates, workers, mail,
 // hashing, CSRF, webhooks, two-factor codes, test running, the test DOM, watching, browser runs, plugins, HMR, OXC builds,
 // minifying and capabilities have no official artwork, so they keep
 // original monochrome glyphs — the same deal as RuntimeIcon's `oj` tile. PDF
@@ -203,6 +203,32 @@ export default function StackIcon({ name }) {
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="m4 17 6-6-6-6" />
             <path d="M12 19h8" />
+          </svg>
+        </span>
+      )}
+      {name === "isolate" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        </span>
+      )}
+      {name === "workers" && (
+        <span className={TILE}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="5" y="5" width="14" height="14" rx="2" />
+            <rect x="9" y="9" width="6" height="6" rx="1" />
+            <path d="M9 2v3" />
+            <path d="M15 2v3" />
+            <path d="M9 19v3" />
+            <path d="M15 19v3" />
+            <path d="M2 9h3" />
+            <path d="M2 15h3" />
+            <path d="M19 9h3" />
+            <path d="M19 15h3" />
           </svg>
         </span>
       )}
