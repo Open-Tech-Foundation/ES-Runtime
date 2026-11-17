@@ -66,6 +66,8 @@ rule.postMessage({ any: "value" });
 rule.terminate();
 // @ts-expect-error — an isolate takes no permissions.
 new Isolate(new URL("./p.js", import.meta.url), { permissions: ["net"] });
+const warm: Promise<number> = Isolate.prepare(8);
+void warm;
 const viaHost: Promise<unknown> | undefined = host?.config("shout");
 void doubled;
 void viaHost;

@@ -11,6 +11,8 @@
 #   isolate_locker   per-turn cost of many isolates on few threads: entered and
 #                    left on the thread that owns them (what the pool does),
 #                    and under v8::Locker, pinned and migrating
+#   isolate-start.js an Isolate's start, cold and from Isolate.prepare, through
+#                    a release esrun
 #
 # Linux only for the memory rows: they read /proc/self/status.
 set -euo pipefail
@@ -22,9 +24,13 @@ THREADS="${2:-8}"
 cd "$ROOT"
 cargo build --release --quiet --example isolate_density -p es-runtime-default-providers
 cargo build --release --quiet --example isolate_locker -p es-runtime-engine
+cargo build --release --quiet -p es-runtime-cli
 
 echo "## isolate_density $ISOLATES"
 target/release/examples/isolate_density "$ISOLATES"
 echo
 echo "## isolate_locker $ISOLATES $THREADS"
 target/release/examples/isolate_locker "$ISOLATES" "$THREADS"
+echo
+echo "## isolate-start.js"
+target/release/esrun --allow-workers bench/isolate-start.js

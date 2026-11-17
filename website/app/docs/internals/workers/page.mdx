@@ -391,6 +391,24 @@ buffer may be larger than the ceiling. Making the sweep synchronous would close
 the gap too, but V8's switch for it applies to every isolate in the process, and
 it slowed the main program's churn of 64 KiB and 1 MiB buffers.
 
+**Prepared ahead of time.** `Isolate.prepare(n)` restores `n` isolates from the
+snapshot and leaves them on the pool threads, spread by how many each holds. A
+`new Isolate()` then goes to a thread holding one and claims it, so only its
+module is loaded. A runtime's ops capture its channel to the parent when it is
+built, so a prepared isolate is built with a channel that is bound when it is
+claimed; its `name` and `location` are read when used. Only an isolate with the
+same limits can claim one — a memory ceiling is fixed when an isolate is made —
+so one given its own `memory` starts cold.
+
+| Start, 200 at once, release build, 12 cores | Per isolate |
+| --- | --- |
+| Cold | about 640 µs |
+| From `Isolate.prepare` | about 40 µs |
+
+From `esrun --allow-workers bench/isolate-start.js`, which
+`bash bench/probe-isolates.sh` also runs; per-isolate times are amortised over
+the pool's threads.
+
 **Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
 throws, and no synchronous op is reachable. Without `cpuTime`, a call that loops
 forever holds up the other isolates on its thread until `terminate()` stops it. A pool holds up

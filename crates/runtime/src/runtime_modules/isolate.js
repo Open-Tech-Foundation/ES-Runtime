@@ -82,6 +82,11 @@ function isolateHandlerSlot(target, type) {
   };
 }
 
+// The least an isolate starts in: restoring the runtime's prelude needs a
+// heap of about this size (7 MB fails, measured on debug and release builds),
+// so less is refused here, by name, rather than failing to start later.
+const ISOLATE_MIN_MEMORY_MB = 8;
+
 function isolateMemory(value) {
   if (value === undefined || value === null) return 0;
   const mb = Number(value);
@@ -89,6 +94,12 @@ function isolateMemory(value) {
     throw new TypeError(
       'Isolate option "memory" must be a positive whole number of megabytes, ' +
         `not ${JSON.stringify(value)}`,
+    );
+  }
+  if (mb < ISOLATE_MIN_MEMORY_MB) {
+    throw new RangeError(
+      `Isolate option "memory" must be at least ${ISOLATE_MIN_MEMORY_MB} MB: ` +
+        "an isolate needs that much to start",
     );
   }
   return mb;
@@ -377,6 +388,24 @@ class Isolate extends EventTarget {
       __ops.isolate_terminate(this.#id);
     }
     // Still starting: `#start` sees the flag once the spawn resolves.
+  }
+
+  /**
+   * Builds `count` isolates ahead of time, so the next `new Isolate()` calls
+   * start without building one — a pool of warm isolates. Resolves with how
+   * many are waiting. An isolate given its own `memory` can't use one, since a
+   * memory ceiling is fixed when an isolate is made; it starts as usual.
+   * @param {number} count
+   * @returns {Promise<number>}
+   */
+  static prepare(count) {
+    const n = Number(count);
+    if (!Number.isInteger(n) || n < 1) {
+      return Promise.reject(
+        new TypeError(`Isolate.prepare needs a positive whole number, not ${JSON.stringify(count)}`),
+      );
+    }
+    return __ops.isolate_prepare(n);
   }
 
   /** Stop this isolate from keeping the process alive. */

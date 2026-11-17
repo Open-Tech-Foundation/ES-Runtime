@@ -173,6 +173,88 @@ impl WorkerScope for ThreadScope {
     }
 }
 
+/// The scope of an agent built before anyone asked for it (`Isolate.prepare`,
+/// D227). A runtime's ops capture its scope when it is built, so a prepared
+/// one is built with this, and the real channel is bound when a spawn claims
+/// it. Before that nothing of the agent's runs that could use it: its receive
+/// pump waits for the binding, and its name and URL read empty.
+#[derive(Clone)]
+struct LateScope(Arc<LateInner>);
+
+struct LateInner {
+    bound: std::sync::OnceLock<Arc<ThreadScope>>,
+    binding: tokio::sync::Notify,
+}
+
+impl LateScope {
+    fn new() -> Self {
+        LateScope(Arc::new(LateInner {
+            bound: std::sync::OnceLock::new(),
+            binding: tokio::sync::Notify::new(),
+        }))
+    }
+
+    fn bind(&self, scope: Arc<ThreadScope>) {
+        let _ = self.0.bound.set(scope);
+        self.0.binding.notify_waiters();
+    }
+
+    fn bound(&self) -> Option<&Arc<ThreadScope>> {
+        self.0.bound.get()
+    }
+}
+
+impl WorkerScope for LateScope {
+    fn name(&self) -> String {
+        self.bound().map(|s| s.name()).unwrap_or_default()
+    }
+
+    fn url(&self) -> String {
+        self.bound().map(|s| s.url()).unwrap_or_default()
+    }
+
+    fn is_isolate(&self) -> bool {
+        true
+    }
+
+    fn post(&self, message: Vec<u8>) -> Result<(), ProviderError> {
+        self.bound().map_or(Ok(()), |s| s.post(message))
+    }
+
+    fn queued(&self) -> usize {
+        self.bound().map_or(0, |s| s.queued())
+    }
+
+    fn recv(&self) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>> {
+        if let Some(scope) = self.bound() {
+            return scope.recv();
+        }
+        let inner = self.0.clone();
+        Box::pin(async move {
+            loop {
+                // Registered before the check, so a binding in between wakes it.
+                let woken = inner.binding.notified();
+                if let Some(scope) = inner.bound.get() {
+                    return scope.recv().await;
+                }
+                woken.await;
+            }
+        })
+    }
+
+    fn close(&self) {
+        if let Some(scope) = self.bound() {
+            scope.close();
+        }
+    }
+
+    fn report_error(&self, error: UncaughtError) {
+        if let Some(scope) = self.bound() {
+            scope.report_error(error);
+        }
+    }
+}
+
 /// One live worker, from the parent's side.
 struct Live {
     /// `Option`, so termination can *drop* it: closing the channel is what
@@ -398,7 +480,7 @@ impl WorkerHost for ThreadWorkerHost {
                     let _ = done.send(());
                 })
             });
-            return match pool.run(job) {
+            return match pool.run(job, true) {
                 Ok(()) => Box::pin(async move { Ok(id) }),
                 Err(err) => {
                     retire(&self.registry, id);
@@ -514,6 +596,93 @@ impl WorkerHost for ThreadWorkerHost {
             Ok(())
         })
     }
+
+    /// Builds agents ahead of time on the pool, each left waiting on the
+    /// thread it was built on until a spawn there claims it (D227). Only a
+    /// pool prepares: a thread host's agent is built on a thread that does not
+    /// exist until the spawn.
+    fn prepare(
+        &self,
+        template: WorkerSpec,
+        count: usize,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let Some(pool) = self.pool.clone() else {
+            return Box::pin(async { Ok(0) });
+        };
+        let room = MAX_PREPARED.saturating_sub(pool.prepared());
+        let mut built = Vec::new();
+        for _ in 0..count.min(room) {
+            let (done, finished) = tokio::sync::oneshot::channel::<bool>();
+            let factory = self.factory.clone();
+            let template = template.clone();
+            let job: Job = Box::new(move || {
+                Box::pin(async move {
+                    let _ = done.send(prepare_here(&factory, &template));
+                })
+            });
+            match pool.prepare_on(job) {
+                Ok(()) => built.push(finished),
+                Err(err) => return Box::pin(async move { Err(err) }),
+            }
+        }
+        Box::pin(async move {
+            for finished in built {
+                let _ = finished.await;
+            }
+            Ok(pool.prepared())
+        })
+    }
+}
+
+/// The most agents a pool keeps prepared at once. Each idle one is an isolate
+/// heap (~1.7 MiB), so a loop of `prepare` stops here rather than at the
+/// memory's end.
+pub const MAX_PREPARED: usize = 10_000;
+
+/// One agent built ahead of time, waiting on its pool thread.
+struct Prepared {
+    runtime: Runtime,
+    loader: Arc<dyn ModuleLoader>,
+    scope: LateScope,
+    limits: es_runtime_common::Limits,
+}
+
+thread_local! {
+    /// The agents prepared on this pool thread, newest last.
+    static PREPARED: std::cell::RefCell<Vec<Prepared>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// This pool thread's count of them, shared with the pool for placement.
+    static PREPARED_COUNT: std::cell::OnceCell<Arc<AtomicUsize>> = const { std::cell::OnceCell::new() };
+}
+
+/// Builds one agent from `template` on this pool thread and leaves it waiting.
+fn prepare_here(factory: &Arc<dyn WorkerRuntimeFactory>, template: &WorkerSpec) -> bool {
+    let scope = LateScope::new();
+    let Ok((mut runtime, loader)) = factory.build(template, Arc::new(scope.clone())) else {
+        PREPARED_COUNT.with(|c| c.get().map(|c| c.fetch_sub(1, Ordering::SeqCst)));
+        return false;
+    };
+    runtime.leave();
+    PREPARED.with(|ready| {
+        ready.borrow_mut().push(Prepared {
+            runtime,
+            loader,
+            scope,
+            limits: template.limits,
+        });
+    });
+    true
+}
+
+/// A prepared agent built with exactly `limits`, if this pool thread has one.
+/// Limits are fixed when an isolate is made, so only an exact match will do.
+fn take_prepared(limits: &es_runtime_common::Limits) -> Option<Prepared> {
+    let taken = PREPARED.with(|ready| {
+        let mut ready = ready.borrow_mut();
+        let at = ready.iter().rposition(|p| p.limits == *limits)?;
+        Some(ready.swap_remove(at))
+    })?;
+    PREPARED_COUNT.with(|c| c.get().map(|c| c.fetch_sub(1, Ordering::SeqCst)));
+    Some(taken)
 }
 
 /// Retires one worker: out of the registry, and out of its parent's child list.
@@ -729,7 +898,21 @@ async fn run_agent(
         let _ = to_parent.send(WorkerIncoming::Error { error });
     };
 
-    let (mut runtime, loader) = match factory.build(&spec, scope.clone()) {
+    // A pool thread may hold an agent prepared for exactly these limits; then
+    // it is this one, with its channel bound now.
+    let claimed = if pooled && spec.isolate {
+        take_prepared(&spec.limits)
+    } else {
+        None
+    };
+    let built = match claimed {
+        Some(prepared) => {
+            prepared.scope.bind(scope.clone());
+            Ok((prepared.runtime, prepared.loader))
+        }
+        None => factory.build(&spec, scope.clone()),
+    };
+    let (mut runtime, loader) = match built {
         Ok(built) => built,
         Err(err) => {
             report(UncaughtError::from_message(format!(
@@ -1060,6 +1243,8 @@ struct PoolThread {
     jobs: mpsc::UnboundedSender<Job>,
     /// Agents placed here and not yet finished.
     load: Arc<AtomicUsize>,
+    /// Agents prepared here and not yet claimed.
+    prepared: Arc<AtomicUsize>,
 }
 
 impl IsolatePool {
@@ -1088,13 +1273,51 @@ impl IsolatePool {
             .map_err(|err| ProviderError::Other(err.clone()))
     }
 
-    /// Places `job` on the least-loaded thread.
-    fn run(&self, job: Job) -> Result<(), ProviderError> {
+    /// Agents prepared on the pool and not yet claimed.
+    fn prepared(&self) -> usize {
+        self.threads().map_or(0, |threads| {
+            threads
+                .iter()
+                .map(|t| t.prepared.load(Ordering::SeqCst))
+                .sum()
+        })
+    }
+
+    /// Places a preparing `job` on the thread with the fewest agents, running
+    /// and prepared together, and counts it there at once so the next one
+    /// goes elsewhere.
+    fn prepare_on(&self, job: Job) -> Result<(), ProviderError> {
         let threads = self.threads()?;
         let Some(thread) = threads
             .iter()
-            .min_by_key(|thread| thread.load.load(Ordering::SeqCst))
+            .min_by_key(|t| t.load.load(Ordering::SeqCst) + t.prepared.load(Ordering::SeqCst))
         else {
+            return Err(ProviderError::Other("isolate pool has no threads".into()));
+        };
+        thread.prepared.fetch_add(1, Ordering::SeqCst);
+        thread.jobs.send(job).map_err(|_| {
+            thread.prepared.fetch_sub(1, Ordering::SeqCst);
+            ProviderError::Other("isolate pool thread has stopped".into())
+        })
+    }
+
+    /// Places `job` on the least-loaded thread — among those holding a
+    /// prepared agent, when `prefer_prepared` and there are any.
+    fn run(&self, job: Job, prefer_prepared: bool) -> Result<(), ProviderError> {
+        let threads = self.threads()?;
+        let with_prepared = || {
+            threads
+                .iter()
+                .filter(|t| t.prepared.load(Ordering::SeqCst) > 0)
+                .min_by_key(|t| t.load.load(Ordering::SeqCst))
+        };
+        let least_loaded = || threads.iter().min_by_key(|t| t.load.load(Ordering::SeqCst));
+        let chosen = if prefer_prepared {
+            with_prepared().or_else(least_loaded)
+        } else {
+            least_loaded()
+        };
+        let Some(thread) = chosen else {
             return Err(ProviderError::Other("isolate pool has no threads".into()));
         };
         thread.load.fetch_add(1, Ordering::SeqCst);
@@ -1149,6 +1372,8 @@ fn start_pool(size: usize) -> Result<Vec<PoolThread>, String> {
 
 fn start_pool_thread(index: usize, slot: Arc<TurnSlot>) -> Result<PoolThread, String> {
     let (jobs, mut inbox) = mpsc::unbounded_channel::<Job>();
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let counted = prepared.clone();
     std::thread::Builder::new()
         // The same stack as every other JS thread (D189).
         .stack_size(WORKER_STACK)
@@ -1156,6 +1381,9 @@ fn start_pool_thread(index: usize, slot: Arc<TurnSlot>) -> Result<PoolThread, St
         .spawn(move || {
             POOL_TURN.with(|turn| {
                 let _ = turn.set(slot);
+            });
+            PREPARED_COUNT.with(|count| {
+                let _ = count.set(counted);
             });
             let Ok(tokio_runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1176,6 +1404,7 @@ fn start_pool_thread(index: usize, slot: Arc<TurnSlot>) -> Result<PoolThread, St
     Ok(PoolThread {
         jobs,
         load: Arc::new(AtomicUsize::new(0)),
+        prepared,
     })
 }
 
@@ -1363,6 +1592,81 @@ mod tests {
                 host.terminate(id).await.expect("terminate");
             }
         });
+    }
+
+    /// Agents prepared ahead of time wait on the pool and are claimed by the
+    /// spawns that match their limits; one that does not match starts as
+    /// usual, and leaves the prepared ones waiting (D227).
+    #[test]
+    fn prepared_agents_are_claimed_by_matching_spawns() {
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio");
+        let pool = Arc::new(IsolatePool::new(2));
+        let host = ThreadWorkerHost::on_pool(bare_factory(), pool.clone());
+        let isolate = |source: &str| WorkerSpec {
+            isolate: true,
+            ..spec(source)
+        };
+        tokio.block_on(async {
+            let waiting = host.prepare(isolate(""), 4).await.expect("prepare");
+            assert_eq!(waiting, 4);
+
+            let other_limits = WorkerSpec {
+                limits: es_runtime_common::Limits::default().with_heap_limit_bytes(64 << 20),
+                ..isolate("postMessage('cold');")
+            };
+            let cold = host.spawn(other_limits).await.expect("spawn");
+            assert!(matches!(
+                host.recv(cold).await.expect("recv"),
+                Some(WorkerIncoming::Message(_))
+            ));
+            assert_eq!(
+                pool.prepared(),
+                4,
+                "a spawn with other limits took a prepared agent"
+            );
+
+            let mut ids = Vec::new();
+            for _ in 0..3 {
+                ids.push(
+                    host.spawn(isolate("postMessage('warm');"))
+                        .await
+                        .expect("spawn"),
+                );
+            }
+            for &id in &ids {
+                assert!(matches!(
+                    host.recv(id).await.expect("recv"),
+                    Some(WorkerIncoming::Message(_))
+                ));
+            }
+            assert_eq!(
+                pool.prepared(),
+                1,
+                "matching spawns did not claim prepared agents"
+            );
+
+            for id in ids.into_iter().chain([cold]) {
+                host.terminate(id).await.expect("terminate");
+            }
+        });
+    }
+
+    /// A thread host has nowhere to keep an agent before its spawn, so it
+    /// prepares none.
+    #[test]
+    fn a_thread_host_prepares_nothing() {
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio");
+        let host = ThreadWorkerHost::new(bare_factory());
+        assert_eq!(
+            tokio.block_on(host.prepare(spec(""), 3)).expect("prepare"),
+            0
+        );
     }
 
     /// An agent stuck in a loop on a pool thread is stopped by `terminate`,

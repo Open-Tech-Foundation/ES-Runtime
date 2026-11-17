@@ -542,3 +542,125 @@ fn memory_counts_array_buffers() {
         ]
     );
 }
+
+// ---- Isolate.prepare (D227 phase 4) ------------------------------------------
+
+/// Prepared isolates are claimed by the `new Isolate()` calls that follow, and
+/// a claimed one is every bit the isolate it was asked to be: its module, its
+/// name, its location, its host.
+#[test]
+fn prepared_isolates_serve_the_isolates_made_next() {
+    let out = run(
+        "prepare",
+        r#"
+        import { host } from "runtime:workers";
+        export const who = async () => `${self.name}|${location.href.split("/").pop()}|${await host.tag()}`;
+        "#,
+        r#"
+        import { Isolate } from "runtime:workers";
+        console.log("waiting", await Isolate.prepare(6));
+        const all = Array.from({ length: 6 }, (_, k) => new Isolate({ source: `export const id = () => ${k};` }));
+        console.log(...(await Promise.all(all.map(async (i) => (await i.exports).id()))));
+        for (const i of all) i.terminate();
+        await Isolate.prepare(1);
+        const named = new Isolate(new URL("PLUGIN_URL", import.meta.url), { name: "plug", host: { tag: () => "t" } });
+        console.log(await (await named.exports).who());
+        named.terminate();
+        "#,
+        GRANT_FILES,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        ["waiting 6", "0 1 2 3 4 5", "plug|prepare-plugin.mjs|t"]
+    );
+}
+
+/// An isolate given its own `memory` starts as usual, past the prepared ones,
+/// and its ceiling holds.
+#[test]
+fn an_isolate_with_its_own_memory_is_not_a_prepared_one() {
+    let out = run(
+        "prepare-memory",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        await Isolate.prepare(2);
+        const own = new Isolate({ source: "const kept = []; export const fill = () => { for (;;) kept.push(new ArrayBuffer(1 << 20)); };" }, { memory: 8 });
+        own.onerror = (e) => e.preventDefault();
+        try { await (await own.exports).fill(); } catch (e) { console.log(e.code); }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["ERR_ISOLATE_MEMORY_LIMIT"]);
+}
+
+/// Prepared isolates hold no work: a program that leaves some unclaimed
+/// still exits.
+#[test]
+fn unclaimed_prepared_isolates_do_not_keep_the_process_alive() {
+    let out = run(
+        "prepare-exit",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        console.log(await Isolate.prepare(3));
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["3"]);
+}
+
+#[test]
+fn prepare_takes_a_positive_count_and_the_workers_grant() {
+    let out = run(
+        "prepare-args",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        for (const n of [0, -1, 2.5, "two"]) {
+          try { await Isolate.prepare(n); console.log("accepted", n); } catch (e) { console.log(e.name); }
+        }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        ["TypeError", "TypeError", "TypeError", "TypeError"]
+    );
+
+    let out = run(
+        "prepare-grant",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        try { await Isolate.prepare(1); } catch (e) { console.log(e.code); }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["ERR_CAPABILITY_DENIED"]);
+}
+
+/// Less `memory` than an isolate needs to start is refused when it is asked
+/// for, not reported later as a failure to start.
+#[test]
+fn memory_below_what_an_isolate_starts_in_is_refused() {
+    let out = run(
+        "memory-floor",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        try { new Isolate({ source: "" }, { memory: 4 }); } catch (e) { console.log(e.name, /at least 8 MB/.test(e.message)); }
+        const ok = new Isolate({ source: "export const x = () => 1;" }, { memory: 8 });
+        console.log(await (await ok.exports).x());
+        ok.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["RangeError true", "1"]);
+}

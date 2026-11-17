@@ -35,6 +35,13 @@ namespace) is unstable and may change between minor releases until the API freez
   limit does not reach: live buffers past it end the isolate with
   `ERR_ISOLATE_MEMORY_LIMIT`, while buffers that are garbage stop counting
   once collected. `es-runtime-common`: `Limits::buffer_limit_bytes`.
+- `Isolate.prepare(count)` (DECISIONS D227): builds isolates ahead of time on
+  the pool, so the next `new Isolate()` calls start in tens of microseconds
+  instead of building one (about 40 µs against 640 µs, release build). An
+  isolate given its own `memory` starts as usual. `memory` below 8 MB, less than
+  an isolate starts in, is now refused with a `RangeError` instead of failing
+  to start. `WorkerHost::prepare` in `es-runtime-providers`, implemented by the
+  pool host.
 - `es-runtime`: `Runtime::leave()` and `Runtime::enter()`, so one thread can
   hold many runtimes and run each in turn — the base of the pooled `Isolate`
   (DECISIONS D227). Leaving out of order panics, naming the mistake, where V8

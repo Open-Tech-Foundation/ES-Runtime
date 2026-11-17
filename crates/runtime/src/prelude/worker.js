@@ -523,14 +523,17 @@
   // borrowing a browser idiom. Deno exposes it for the same reason; the driver
   // agent still has none, since that scope has no script URL that is *the*
   // script.
+  // `href` is read on first use, not now: an isolate prepared ahead of time
+  // (`Isolate.prepare`) is built before it knows which module it will run.
   function makeLocation(href) {
-    const url = new URL(href);
+    let parsed = null;
+    const url = () => (parsed ??= new URL(href()));
     class WorkerLocation {
       constructor() {
         throw new TypeError("Illegal constructor");
       }
       toString() {
-        return url.href;
+        return url().href;
       }
     }
     for (const part of [
@@ -547,7 +550,7 @@
       // Accessors with no setter: `location.href = "…"` is a navigation, and
       // there is nothing here to navigate.
       Object.defineProperty(WorkerLocation.prototype, part, {
-        get: () => url[part],
+        get: () => url()[part],
         enumerable: true,
         configurable: true,
       });
@@ -729,7 +732,10 @@
 
   function installWorkerScope(info) {
     const { WorkerNavigator, navigator } = makeNavigator();
-    const { WorkerLocation, location } = makeLocation(info.url);
+    // Read live from the scope rather than from `info`, which an isolate
+    // prepared ahead of time took before it was claimed (D227).
+    const live = () => __ops.worker_scope_info();
+    const { WorkerLocation, location } = makeLocation(() => live().url);
 
     class WorkerGlobalScope extends EventTarget {
       constructor() {
@@ -751,7 +757,7 @@
         throw new TypeError("Illegal constructor");
       }
       get name() {
-        return info.name;
+        return live().name;
       }
       postMessage(message, options) {
         __ops.worker_self_post(serialize(isolate ? [0, message] : message, options));

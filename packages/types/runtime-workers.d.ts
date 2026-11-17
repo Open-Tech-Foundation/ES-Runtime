@@ -364,7 +364,7 @@ declare module "runtime:workers" {
     host?: Record<string, (...args: any[]) => unknown>;
     /**
      * Ceiling in megabytes for the heap and, separately, for `ArrayBuffer`
-     * storage; at most this program's own.
+     * storage; at least 8, at most this program's own.
      */
     memory?: number;
     /**
@@ -406,6 +406,12 @@ declare module "runtime:workers" {
     unref(): void;
     /** Undoes {@link Isolate.unref}. */
     ref(): void;
+    /**
+     * Builds `count` isolates ahead of time; a later `new Isolate()` without
+     * its own `memory` claims one and starts without building one. Resolves
+     * with how many are waiting. Needs `workers`.
+     */
+    static prepare(count: number): Promise<number>;
   }
 
   /**

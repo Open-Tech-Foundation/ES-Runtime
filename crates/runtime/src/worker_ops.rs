@@ -414,6 +414,33 @@ pub(crate) fn install_isolates(
         .requires(Capability::Worker),
     )?;
 
+    // `isolate_prepare(count)`: isolates built ahead of time, with the limits
+    // a `new Isolate()` that names no `memory` gets — so that one starts
+    // without building one (D227). Resolves with how many are now waiting.
+    let host = isolates.clone();
+    engine.register_op(
+        OpDecl::r#async("isolate_prepare", move |args| {
+            let host = host.clone();
+            let count = usize::try_from(arg_u64(&args, 0)).unwrap_or(usize::MAX);
+            Box::pin(async move {
+                let template = isolate_spec(
+                    "isolate:prepared".to_string(),
+                    String::new(),
+                    String::new(),
+                    parent_limits,
+                    0,
+                    0,
+                )?;
+                let waiting = require_isolates(&host)?
+                    .prepare(template, count)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Number(waiting as f64))
+            })
+        })
+        .requires(Capability::Worker),
+    )?;
+
     install_channel(engine, &ISOLATE_OPS, isolates, children)
 }
 

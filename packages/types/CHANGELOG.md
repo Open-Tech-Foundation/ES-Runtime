@@ -21,6 +21,7 @@ itself.
   `permissions` is typed `never`, since an isolate can be granted nothing.
 - `IsolateOptions.cpuTime`: the most CPU milliseconds one turn of an isolate
   may use.
+- `Isolate.prepare(count)`: isolates built ahead of time.
 - `import.meta.env` — `MODE`, `DEV`, `PROD` and `PUBLIC_*` names
   (`string | undefined`) — as `esdev build` compiles it into a bundle; the
   `ImportMetaEnv` interface merges, so a project can declare its own variables.

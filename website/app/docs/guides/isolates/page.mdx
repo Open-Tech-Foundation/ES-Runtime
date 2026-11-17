@@ -144,7 +144,8 @@ iso.postMessage(21);
 ## Memory and CPU
 
 `memory` caps the isolate's heap, in megabytes, at no more than your program's
-own, and caps its `ArrayBuffer` storage at the same size — buffers live outside
+own (and at least 8 MB, the least an isolate starts in), and caps its
+`ArrayBuffer` storage at the same size — buffers live outside
 the heap, so a heap limit alone would not hold them. Buffers that are garbage
 don't count once they are collected; until then, an isolate may briefly hold up
 to twice its `memory` in buffers. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use —
@@ -171,6 +172,22 @@ try {
   if (e.code === "ERR_ISOLATE_CPU_LIMIT") disableRule(tenant);
 }
 ```
+
+## Starting fast
+
+An isolate takes a little under a millisecond to start. When a request is
+waiting on one, build some ahead of time:
+
+```js
+await Isolate.prepare(32); // 32 isolates built and waiting
+
+// Later: each of these claims one, and starts in tens of microseconds.
+const rule = new Isolate({ source: code });
+```
+
+A prepared isolate is claimed only by an isolate without its own `memory`,
+since a memory ceiling is fixed when an isolate is made. Unclaimed ones don't
+keep the process running.
 
 ## Ending
 

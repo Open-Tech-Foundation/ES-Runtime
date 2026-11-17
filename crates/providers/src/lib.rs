@@ -2079,6 +2079,19 @@ pub trait WorkerHost: Send + Sync {
     /// `Atomics.wait`: an implementation is expected to interrupt the agent,
     /// not merely ask it to stop.
     fn terminate(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Builds `count` agents ahead of time from `template`, so that a later
+    /// [`spawn`](Self::spawn) with the same limits starts without building one
+    /// (`Isolate.prepare`, D227). Resolves with how many are now waiting. A
+    /// host that cannot prepare agents prepares none.
+    fn prepare(
+        &self,
+        template: WorkerSpec,
+        count: usize,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let _ = (template, count);
+        Box::pin(async { Ok(0) })
+    }
 }
 
 /// The queues behind `MessagePort`, so that a port can be **transferred** to
