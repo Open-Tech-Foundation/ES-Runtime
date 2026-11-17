@@ -38,8 +38,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -77,8 +77,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -111,8 +111,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         if: runner.os != 'Windows'
         shell: bash
@@ -126,8 +126,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.42.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.ps1 | iex
       - name: Expose release command
         if: runner.os == 'Windows'
         shell: pwsh
@@ -160,8 +160,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -194,8 +194,8 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         if: runner.os != 'Windows'
         shell: bash
@@ -209,8 +209,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.42.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.ps1 | iex
       - name: Expose release command
         if: runner.os == 'Windows'
         shell: pwsh
@@ -256,8 +256,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -294,8 +294,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -332,8 +332,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -370,8 +370,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -408,8 +408,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -446,8 +446,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -484,8 +484,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -522,8 +522,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -560,8 +560,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -598,8 +598,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -653,8 +653,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -685,8 +685,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |
@@ -718,8 +718,8 @@ jobs:
       - name: Install release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.41.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.41.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.42.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.42.0/install.sh | bash
       - name: Expose release command
         shell: bash
         run: |

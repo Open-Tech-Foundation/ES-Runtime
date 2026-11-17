@@ -9,6 +9,7 @@ skip_publish = [
     "es-runtime-common",
     "es-runtime-default-providers",
     "es-runtime-engine",
+    "es-runtime-http",
     "es-runtime-json",
     "es-runtime-providers",
 ]
@@ -123,6 +124,14 @@ es-runtime-bson = []
     "**/test/**",
     "**/tests/**",
 ]
+"@opentf/esdev-templates" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 
 [[package]]
 name = "@opentf/esrun-mysql"
@@ -132,6 +141,16 @@ matrix = false
 command = "npm run build"
 artifacts = ""
 manifest = "packages/mysql/package.json"
+
+[[package]]
+name = "@opentf/esdev-templates"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = ""
+artifacts = ""
+manifest = "packages/esdev-templates/package.json"
+provenance = true
 
 [[package]]
 name = "@opentf/esrun-mongodb"
