@@ -5,7 +5,7 @@
     "@bufbuild/buf": "^1.71.0",
     "@bufbuild/protobuf": "^2.12.1",
     "@bufbuild/protoc-gen-es": "^2.12.1",
-    "@hono/node-server": "^2.1.9",
+    "@hono/node-server": "^2.1.8",
     "@iarna/toml": "^2.2.5",
     "cbor-x": "^1.6.6",
     "csv-parse": "^7.0.3",
