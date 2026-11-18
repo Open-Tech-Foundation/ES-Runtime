@@ -28,9 +28,13 @@
 //!
 //! **Rejected: V8's `--no-concurrent-array-buffer-sweeping`,** which finalises
 //! frees during the collection itself and fixes the race outright. The flag is
-//! process-wide: measured on a release build, it made the main program's
-//! buffer churn 2.4x faster at 1 KiB and 1.3–1.7x slower at 64 KiB and 1 MiB —
-//! a change to every program's collector for one isolate feature.
+//! process-wide, and its effect on programs is mixed. Bare buffer churn
+//! (`examples/buffer_churn.rs`) is 1.4–2.2x faster with it up to 64 KiB and
+//! level at 1 MiB, but through real workloads (`bench/scripts`, interleaved,
+//! best of 5) `encoding` gained 20% while `fsread_large` lost 17% and
+//! `streams` 7%: frees of large buffers move onto the program's own thread
+//! (D228). A change to every program's collector, not one to make for one
+//! isolate feature.
 //!
 //! Counted at allocation, so a buffer is charged for its full length from the
 //! moment it exists, and released when V8 frees it.

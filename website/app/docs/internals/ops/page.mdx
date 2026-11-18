@@ -54,6 +54,15 @@ every op `Value`-based (`bench/op-cost.js`, best of 3): `new Request(url)`
   further 7–17 ns, and only for ops whose arguments and result are numbers or
   booleans. It is not used yet.
 
+## A byte result costs a buffer
+
+Returning bytes costs far more than the op call: an op that returns 11 bytes
+takes ~400 ns, almost all of it V8 creating the `ArrayBuffer`. V8 is built here,
+as in Deno, with every typed array outside the JavaScript heap, so even
+`new Uint8Array(11)` written in JavaScript costs the same. Node keeps small typed
+arrays on its heap (~31 ns); its `new ArrayBuffer(11)` costs what ours does
+(~360 ns). `TextEncoder.encode` of 11 bytes is ~430 ns in esrun and Node alike.
+
 ## Arguments are checked, not coerced
 
 A typed op refuses an argument of the wrong type with a `TypeError` naming the op
