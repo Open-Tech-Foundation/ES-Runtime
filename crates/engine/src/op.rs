@@ -539,7 +539,10 @@ fn op_dispatch_inner(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let op_id = args.data().int32_value(scope).unwrap_or(-1);
+    // The id is the `Int32` `install_op` stored. Read as one, not through
+    // `int32_value`, which is a full JS `ToInt32` — it enters the context and
+    // checks for exceptions — at ~7 ns of every call (D228).
+    let op_id = v8::Local::<v8::Int32>::try_from(args.data()).map_or(-1, |id| id.value());
 
     let Some(state_rc) = op_state(scope) else {
         throw(
@@ -554,9 +557,11 @@ fn op_dispatch_inner(
     // another op. A typed op reads its own later, with the table released
     // (`typed.rs`), so a denied call never reads its arguments at all.
     let idx = op_id as usize;
-    let legacy = match state_rc.borrow().ops.get(idx) {
+    let mut state = state_rc.borrow_mut();
+    let legacy = match state.ops.get(idx) {
         Some(entry) => !matches!(entry.handler, OpHandler::Typed(_)),
         None => {
+            drop(state);
             throw(
                 scope,
                 &OpError::new(ExceptionClass::Error, format!("unknown op id {op_id}")),
@@ -566,6 +571,8 @@ fn op_dispatch_inner(
     };
     let mut argv = Vec::new();
     if legacy {
+        // Released while marshaling, which may run JS that calls an op.
+        drop(state);
         let argc = args.length();
         argv.reserve(argc.max(0) as usize);
         for i in 0..argc {
@@ -580,9 +587,8 @@ fn op_dispatch_inner(
                 }
             }
         }
+        state = state_rc.borrow_mut();
     }
-
-    let mut state = state_rc.borrow_mut();
 
     // Anything watching capability checks hears about them here, before the
     // refusal below rather than after it: a denial is the most interesting thing

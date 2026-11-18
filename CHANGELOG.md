@@ -25,8 +25,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 - `performance.now()`, `TextEncoder`/`TextDecoder`, `URL`, `crypto`'s random
   bytes and the HTTP server's per-request ops run on typed ops.
-- Every op call skips the diagnostics recorder unless op spans are subscribed
-  (~3 ns a call).
+- Every op call skips the diagnostics recorder unless op spans are subscribed,
+  reads its op id without a JS conversion, and borrows the op table once: ~10 ns
+  less per call.
 
 ## [0.48.0] - 2026-11-17
 

@@ -35,10 +35,10 @@ each row is a JavaScript loop calling one function, release build, Linux x86-64
 
 | call | `Value` op | typed op | bare V8 callback | V8 fast call |
 | --- | --- | --- | --- | --- |
-| no arguments | 43 ns | 38 ns | 11 ns | 3.3 ns |
-| two `u32` | 97 ns | 46 ns | 21 ns | 3.6 ns |
-| 12-character string | 111 ns | 68 ns | 40 ns | — |
-| 1 KiB `Uint8Array` | 113 ns | 70 ns | 16 ns | — |
+| no arguments | 36 ns | 31 ns | 11 ns | 3.3 ns |
+| two `u32` | 88 ns | 38 ns | 21 ns | 3.6 ns |
+| 12-character string | 103 ns | 57 ns | 40 ns | — |
+| 1 KiB `Uint8Array` | 105 ns | 64 ns | 16 ns | — |
 
 The op is usually a small part of an API's cost. Against the same build with
 every op `Value`-based (`bench/op-cost.js`, best of 3): `new Request(url)`
@@ -49,7 +49,7 @@ every op `Value`-based (`bench/op-cost.js`, best of 3): `new Request(url)`
   through several V8 calls before reading it, then holds it in a heap-allocated
   list. A typed op asks V8 the one question its declared type needs.
 - **The rest is fixed per call:** finding the op's state, the capability check,
-  and the diagnostics gate — about 27 ns above V8's own floor.
+  and the diagnostics gate — about 20 ns above V8's own floor.
 - **A V8 fast call** — optimized code calling Rust directly — would save a
   further 7–17 ns, and only for ops whose arguments and result are numbers or
   booleans. It is not used yet.
