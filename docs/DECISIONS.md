@@ -4831,3 +4831,47 @@ Others: `create-vite` ships its templates as plain directories (`template-react/
 - **Neither the allocator nor GC frequency.** A trivial Rust allocator in place of V8's default changed nothing (355 against 376 ns); a million 11-byte buffers ran 92 scavenges, ~15 ms of 357. The cost is V8's per-buffer bookkeeping (backing store, extension, sweeping).
 - **Rejected: `--no-concurrent-array-buffer-sweeping`,** re-measured for this (D227 had rejected it with figures no committed script reproduced): bare churn is 1.4–2.2x faster up to 64 KiB (`crates/engine/examples/buffer_churn.rs`), and total CPU halves; through the benchmark scripts (interleaved, best of 5) `encoding` gains 20% and `crypto` 6% while `fsread_large` loses 17%, `streams` 7%, `compression`/`msgpack_large`/`encoding_large` 4–5%. Process-wide, and a loss for exactly the large-body programs a server runs.
 - **Not pursued: on-heap typed arrays.** The one real fix is V8 built with a non-zero `typed_array_max_size_in_heap`, as Node builds it — which means building V8 ourselves instead of using rusty_v8's prebuilt library, and auditing every place the engine reads a buffer's address. A build-pipeline decision of its own, not a phase of this one.
+
+### D229 — The jail resolves a plain path by walking it, and canonicalizes only what the walk cannot prove · *Accepted (2026-11-18)* · *amends D180's resolution; keeps 4dfe582a's descriptor pinning*
+
+**Context:** `4dfe582a` (11 Nov, "pin copy, stat, readDir, glob and temp entries by descriptor") closed a real race — a path checked by name and then used by name could be redirected by a rename and a symlink in between — by having every jailed operation walk its parent directories from the root by descriptor, each with `O_NOFOLLOW`, and act on the final name relative to the last one. It kept the canonicalization in front of the walk, so each call now pays for both: `realpath` (one `readlink` per component of the absolute path) and then the walk. Found by the full benchmark run of 2026-11-18 and bisected to that commit:
+
+| row | 0.46.0 | 0.47.0 / HEAD | Node 26.13 |
+| --- | --- | --- | --- |
+| `fsexists_small` | 44 ms | 67 ms | 55 ms |
+| `fsexists_many` | 197 ms | 344 ms | 242 ms |
+| `fsstat_small` | 57 ms | 78 ms | 69 ms |
+| `fsstat_many` | 251 ms | 377 ms | 284 ms |
+
+Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9 syscalls: six `readlink`s, an `openat` and `close` of the root, and the `newfstatat`. Node, Bun, Deno and LLRT did not move on these rows.
+
+**Decision:** before canonicalizing, try the path **as written**.
+- It qualifies only when it is plain: not empty, no trailing separator, every component after the root a normal name (a `.` normalizes away; a `..` disqualifies), lying under one of the roots for its access kind and at least one component below it, against a base that canonicalized when the jail was built.
+- The root-mutation guard and the scope list (D38, D54) are applied to that lexical path, as they would be to the canonical one.
+- Then the walk runs exactly as now, parent by parent from the root with `O_NOFOLLOW`. For an operation that follows its final name, one `lstat` of that name, relative to the pinned parent, must show it is not a symlink (a missing name is fine — it is created, or reported missing, by the operation itself).
+- If all of that holds, no component of the path is a symlink, so it **is** its canonical form, and every check made on it is the check `confine` would have made. The result is the same `Anchored` the slow path builds.
+- **Anything else falls back** to today's canonicalize-then-walk, untouched: a symlink anywhere in the path, a missing or unreadable directory, a refusal, any error. So every refusal, every error message and every edge case (`..`, a link inside the jail, a link to a granted root outside it, a trailing slash, the root itself, a case- or normalization-insensitive filesystem where the spelling differs from the disk) keeps its present behaviour; only an unremarkable success takes the new route.
+
+**Why this is as strong as before:** the guarantee `4dfe582a` added is that the bytes land where the check looked, because the directories are pinned link by link and the final action refuses a symlink. Both are unchanged — the fast path runs the same walk and hands back the same pinned parent, and every action on an `Anchored` is already `O_NOFOLLOW` at the final name. What the fast path skips is `realpath`, and `realpath` was only ever there to turn a path *with* links into one without; the walk now proves there were none. A link swapped in after the `lstat` is refused by the action's own `O_NOFOLLOW`, as one swapped in after `confine` is today.
+
+**How others do it:** Node, Deno and Bun have no jail to resolve against — Deno's `--allow-read` checks the path it was given and then opens it by name — so they pay one syscall here. Linux's `openat2(RESOLVE_BENEATH)` would do the whole walk in one call; **rejected for now**: Linux-only, and a symlink to a root granted outside the jail is legal here and `RESOLVE_BENEATH` refuses it, so the fallback would still be needed and the code would gain a second platform path for one or two more syscalls.
+
+**Rejected:**
+- **Caching resolutions.** The filesystem is mutable; a cached "this is safe" is the race `4dfe582a` closed (`Jail::jailed` already says so).
+- **Dropping the walk and keeping `realpath`.** That is the pre-`4dfe582a` code and its race.
+
+**Measured (2026-11-18, `bench/scripts`, interleaved, best of 3, ms):**
+
+| row | 0.46.0 | before | after |
+| --- | --- | --- | --- |
+| `fsexists_small` | 43.6 | 68.7 | 43.4 |
+| `fsexists_many` | 202 | 344 | 223 |
+| `fsstat_small` | 57.1 | 76.8 | 50.8 |
+| `fsstat_many` | 256 | 386 | 250 |
+| `fsread_small` | 50.1 | 47.3 | 35.6 |
+| `fswrite_small` | 84.6 | 83.9 | 73.6 |
+| `fsappend_small` | 39.0 | 38.7 | 28.8 |
+
+`fsread_large` and `glob` did not move. One `exists("f.txt")` is now four syscalls: the root's `openat` and `close`, the plain-path `lstat`, and the operation's own `newfstatat`. **Left for later:** holding the root open for the life of the jail would drop the first two, but it changes what a run does when its project directory is replaced underneath it, which deserves a decision of its own.
+
+**Consequences:** a plain path costs the walk plus one `lstat`; one with a symlink costs one walk more than today before it falls back. Windows is unchanged — it has no `*at` family and keeps the path-based arm. Verified by unit tests for each case that must fall back, end-to-end tests that the refusals read as before, and the race tests `4dfe582a` added; measured by the benchmark rows above.
