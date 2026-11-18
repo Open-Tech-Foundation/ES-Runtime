@@ -579,6 +579,11 @@ pub fn translate(
     Ok(BundlerOptions {
         input: Some(input),
         cwd: options.cwd.clone(),
+        // One hash format for everything a build names: a chunk's `[hash]`
+        // spelled as the hex esdev's own asset names use (`html::hashed_name`),
+        // so `assets/` reads one way, and a reader — or `esdev preview`
+        // deciding what may be cached for ever — needs one pattern.
+        hash_characters: Some(rolldown_common::HashCharacters::Hex),
         external: match &options.external {
             None => None,
             Some(External::List(list)) => Some(IsExternal::from(list.clone())),

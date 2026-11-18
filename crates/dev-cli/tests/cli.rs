@@ -15533,6 +15533,87 @@ export default {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **Every name a release build hashes is spelled one way** — `<stem>-<8 hex>`
+/// — for a chunk the bundler names and a stylesheet or file esdev names alike,
+/// and `esdev preview` serves each as production would: cached for good, while
+/// the document is revalidated.
+#[test]
+fn a_release_build_hashes_one_way_and_preview_caches_it() {
+    let dir = watch_dir("b_one_hash");
+    let port = test_port("b_one_hash");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.js", "document.title = 'main';\n");
+    write_in(
+        &dir,
+        "src/styles.css",
+        ".a { background: url(./icon.svg) }\n",
+    );
+    write_in(
+        &dir,
+        "src/icon.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head><link rel=\"stylesheet\" href=\"./src/styles.css\"><script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let names: Vec<String> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("assets")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    // A chunk the bundler named, a stylesheet and a file esdev named.
+    assert!(names.len() >= 3, "{names:?}");
+    for name in &names {
+        let stem = name.split('.').next().unwrap_or("");
+        let hash = stem.rsplit_once('-').map(|(_, hash)| hash).unwrap_or("");
+        assert!(
+            hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{name} is not <stem>-<8 hex>: {names:?}"
+        );
+    }
+
+    let mut preview = esdev_in(&dir)
+        .args(["preview", &format!("--port={port}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn esdev preview");
+    let asset = format!(
+        "/assets/{}",
+        names.iter().find(|n| n.ends_with(".js")).expect("a chunk")
+    );
+    let cached = wait_for_http(port, &asset, |response| {
+        response.starts_with("HTTP/1.1 200")
+    });
+    let page = http_get(port, "/").unwrap_or_default();
+    let _ = preview.kill();
+    let _ = preview.wait();
+    assert!(
+        cached
+            .to_ascii_lowercase()
+            .contains("cache-control: public, max-age=31536000, immutable"),
+        "{cached}"
+    );
+    assert!(
+        page.to_ascii_lowercase()
+            .contains("cache-control: no-cache"),
+        "{page}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **A proxied request waits for a server that is restarting** (D235). The web
 /// entry is the team's gateway in front of its API; a save restarts the API,
 /// and a request in that moment used to be refused and answered 502. It waits

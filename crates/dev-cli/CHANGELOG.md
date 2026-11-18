@@ -71,6 +71,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A release build hashes every name one way, and `esdev preview` caches
+  them.** Chunks were named with the bundler's base64 hash
+  (`entry.client-BdxvPHKD.js`) and stylesheets and copied files with esdev's
+  hex one (`styles-2bd75000.css`); every hashed name is now `<stem>-<8 hex>`.
+  `esdev preview` served those with `Cache-Control: no-cache`, so it was not
+  "the way it will be served"; a content-hashed asset is now `public,
+  max-age=31536000, immutable` there, and the document stays `no-cache`.
 - **A linked package loads** (DECISIONS D234). A `link:`, `file:` or
   `workspace:` dependency outside the project — developing a package against
   the app that uses it — built, but `esdev test` and `esdev <file>` refused it:

@@ -752,6 +752,21 @@ async fn respond_not_found_page(
     let _ = stream.flush().await;
 }
 
+/// Whether `path` is a content-hashed build asset: in `assets/`, named
+/// `<stem>-<8 hex>.<ext>` — the one shape every hashed name a build writes has
+/// (`html::hashed_name`, and the bundler's chunks).
+fn is_content_hashed(path: &Path) -> bool {
+    let in_assets = path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|dir| dir == crate::html::ASSET_DIR);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    in_assets
+        && stem.rsplit_once('-').is_some_and(|(name, hash)| {
+            !name.is_empty() && hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+}
+
 /// Serves a resolved file: validators, conditionals and ranges around the
 /// read. Split from routing above so the two stay readable apart — one finds
 /// and opens the file, the other answers for it.
@@ -780,11 +795,20 @@ async fn serve_resolved(
     // asked for it.
     let content_type = content_type(logical).to_string();
     // `no-cache`: always revalidate, so a rebuild is never stale — but
-    // revalidations still answer `304` instead of resending.
+    // revalidations still answer `304` instead of resending. A content-hashed
+    // asset is the exception, cached for good: its name changes when its
+    // bytes do, which is what a release build is shaped for and what
+    // production serves it with. The dev loop hashes nothing, so this is
+    // `esdev preview` serving a release build the way it will be served.
+    let cache = if is_content_hashed(logical) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     let mut headers = vec![
         ("ETag".to_string(), tag.clone()),
         ("Accept-Ranges".to_string(), "bytes".to_string()),
-        ("Cache-Control".to_string(), "no-cache".to_string()),
+        ("Cache-Control".to_string(), cache.to_string()),
     ];
     if let Some(t) = mtime {
         headers.push((
@@ -1138,6 +1162,30 @@ pub(crate) fn strip_ansi(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A content-hashed build asset is cached for good by `esdev preview`, as
+    /// production would; anything else, the dev loop's unhashed output among
+    /// it, is revalidated.
+    #[test]
+    fn a_content_hashed_asset_is_recognised_and_nothing_else_is() {
+        for hashed in [
+            "/srv/dist/assets/entry.client-90174a31.js",
+            "assets/styles-dc947854.css",
+            "/x/assets/icon-0a1b2c3d.svg",
+        ] {
+            assert!(is_content_hashed(Path::new(hashed)), "{hashed}");
+        }
+        for plain in [
+            "/srv/.dev/dist/assets/entry.client.js",
+            "/srv/dist/index.html",
+            "/srv/dist/logo-deadbeef.png",
+            "/srv/dist/assets/my-component.js",
+            "/srv/dist/assets/-deadbeef.js",
+            "/srv/dist/assets/x-DEADBEEZ.js",
+        ] {
+            assert!(!is_content_hashed(Path::new(plain)), "{plain}");
+        }
+    }
 
     /// esdev's listeners are loopback unless `--host` opens them, and then
     /// every interface — asked for, never defaulted (D235).
