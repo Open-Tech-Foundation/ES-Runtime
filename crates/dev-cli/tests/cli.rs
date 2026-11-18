@@ -1580,6 +1580,70 @@ fn test_imports_commonjs_packages_unbundled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A package's module is written only once the packages it requires are
+/// converted. Another test process takes the module's being there to mean the
+/// package is ready and follows it to the modules of what it requires; written
+/// first, it was found before they were — a cold run that failed with "No such
+/// file" one time in ten — and a conversion that then failed left it there,
+/// so every run after failed the same way.
+#[test]
+fn a_package_is_not_ready_before_what_it_requires() {
+    let dir = commonjs_packages("b_cjs_order");
+    // `counter` requires `shared-state`, which cannot be converted.
+    write_in(
+        &dir.join("node_modules/shared-state"),
+        "index.js",
+        "module.exports = { count: ;\n",
+    );
+    write_in(
+        &dir,
+        "count.test.js",
+        "import { test, expect } from 'runtime:test';\n\
+         import { bump } from 'counter';\n\
+         test('bumps', () => expect(bump()).toBe(1));\n",
+    );
+    let failed = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(!failed.status.success());
+    let modules = |dir: &Path| -> Vec<String> {
+        let Ok(installs) = std::fs::read_dir(dir.join("node_modules/.esdev/deps")) else {
+            return Vec::new();
+        };
+        installs
+            .flatten()
+            .flat_map(|install| std::fs::read_dir(install.path()).into_iter().flatten())
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.ends_with(".mjs")
+                    && !name.ends_with(".body.mjs")
+                    && !name.ends_with(".deps.mjs")
+            })
+            .collect()
+    };
+    let left = modules(&dir);
+    assert!(
+        left.iter().all(|name| !name.starts_with("counter-")),
+        "counter's module was written though shared-state was not: {left:?}"
+    );
+
+    // Repaired, the next run converts what it needs rather than finding a
+    // module that points at nothing.
+    write_in(
+        &dir.join("node_modules/shared-state"),
+        "index.js",
+        "module.exports = { count: 0 };\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An install replaces the conversions: they live in a directory named for
 /// the lockfile, and the first conversion of a new install removes the old
 /// install's, so the cache holds one install's worth and no more.

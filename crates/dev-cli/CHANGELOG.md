@@ -28,6 +28,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A cold `esdev test` no longer fails at random on a CommonJS dependency.**
+  With two or more test files, one could load a converted package before the
+  packages it requires had been converted, and fail with `…/.esdev/deps/…mjs:
+  No such file` — about one cold run in ten. A package's module is now written
+  only after everything it requires is, so its being there means it is ready.
+  A conversion that fails part-way no longer leaves a module behind that broke
+  every later run.
 - **`esdev build --minify` no longer leaves `@__PURE__` comments in its
   output.** Since 0.27.0's move to rolldown 1.3, annotation comments survived
   minification — 30,042 of them, about 540 KB of the 2,325 KB bundle, in the

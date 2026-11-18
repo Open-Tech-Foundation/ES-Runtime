@@ -206,11 +206,36 @@ impl PackageConverter for Converter {
     }
 }
 
-/// Converts `plan`, then every CommonJS package it `require`s, so everything
-/// its `.deps.mjs` imports is there before anything reads it.
-fn convert_all<'a>(
+/// Converts `plan` and every CommonJS package it `require`s, directly or not,
+/// and only then writes their modules — the packages it requires first, the one
+/// asked for last.
+///
+/// A module's being there is what another process takes to mean it is ready
+/// ([`PackageConverter::prepare`] returns at once), and a test file in another
+/// process that loads it follows its `.deps.mjs` straight to the modules of the
+/// packages it requires. Those are imported by URL, so nothing converts them on
+/// the way: they have to be on disk already. Writing a module the moment its
+/// own bundle was made — before the packages it requires — was a window in
+/// which a second test file found it, followed it, and failed on a file that
+/// did not exist yet; and a conversion that then failed left it there for good.
+///
+/// Two packages that require each other are written one after the other, the
+/// closest window this order can give a cycle.
+async fn convert_all(plan: Plan, visiting: &mut HashSet<PathBuf>) -> Result<(), String> {
+    let mut modules = Vec::new();
+    convert_tree(plan, visiting, &mut modules).await?;
+    for (path, text) in modules {
+        place(&path, &text)?;
+    }
+    Ok(())
+}
+
+/// [`convert_all`]'s walk: converts `plan`'s closure, and collects each
+/// package's module after the modules of the packages it requires.
+fn convert_tree<'a>(
     plan: Plan,
     visiting: &'a mut HashSet<PathBuf>,
+    modules: &'a mut Vec<(PathBuf, String)>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + 'a>> {
     Box::pin(async move {
         // In this process, one conversion at a time: two test files asking for
@@ -219,23 +244,27 @@ fn convert_all<'a>(
         if plan.module.is_file() || !visiting.insert(plan.module.clone()) {
             return Ok(());
         }
-        let others = {
+        let converted = {
             let _held = ONE_AT_A_TIME.lock().await;
             if plan.module.is_file() {
-                Vec::new()
+                None
             } else {
-                convert(&plan).await.map_err(|e| {
+                Some(convert(&plan).await.map_err(|e| {
                     format!(
                         "cannot convert the CommonJS package {:?} ({}) to an ES module:\n{e}",
                         plan.specifier,
                         plan.entry.display()
                     )
-                })?
+                })?)
             }
         };
+        let Some((others, module)) = converted else {
+            return Ok(());
+        };
         for other in others {
-            convert_all(other, visiting).await?;
+            convert_tree(other, visiting, modules).await?;
         }
+        modules.push((plan.module.clone(), module));
         Ok(())
     })
 }
@@ -253,9 +282,11 @@ enum Other {
     Missing,
 }
 
-/// Bundles one package and writes its three files. Returns the CommonJS
-/// packages it requires, which have to be converted too.
-async fn convert(plan: &Plan) -> Result<Vec<Plan>, String> {
+/// Bundles one package and writes two of its three files. Returns the CommonJS
+/// packages it requires, which have to be converted too, and the text of the
+/// third — the module an import gets — which [`convert_all`] writes once they
+/// are.
+async fn convert(plan: &Plan) -> Result<(Vec<Plan>, String), String> {
     let names = exported_names(&plan.entry);
     let required = Arc::new(Mutex::new(Vec::<(String, Other)>::new()));
     let staging =
@@ -303,20 +334,20 @@ async fn convert(plan: &Plan) -> Result<Vec<Plan>, String> {
     let deps = registration(&required);
     let module = facade(plan, &names, !required.is_empty());
 
-    // The module an import gets goes last: its being there is what says the
-    // other two are.
+    // The module an import gets is not written here: its being there is what
+    // says the other two are, and the packages they require (convert_all).
     if !required.is_empty() {
         place(&plan.sibling("deps"), &deps)?;
     }
     place(&plan.sibling("body"), &body)?;
-    place(&plan.module, &module)?;
-    Ok(required
+    let others = required
         .into_iter()
         .filter_map(|(_, other)| match other {
             Other::Converted(plan) => Some(plan),
             _ => None,
         })
-        .collect())
+        .collect();
+    Ok((others, module))
 }
 
 /// The module an import gets.
