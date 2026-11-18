@@ -36,7 +36,7 @@ fn project(name: &str) -> PathBuf {
     std::fs::write(
         dir.join("esdev.json"),
         r#"{ "build": { "targets": {
-              "web": { "entry": "index.html", "outdir": "dist/web" },
+              "web": { "entry": "index.html", "outDir": "dist/web" },
               "api": { "entry": "src/api.mjs", "out": "dist/api.js" },
               "jobs": { "entry": "src/worker.mjs", "out": "dist/jobs.js" } } },
             "dev": {

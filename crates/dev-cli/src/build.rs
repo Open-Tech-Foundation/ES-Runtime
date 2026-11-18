@@ -162,7 +162,7 @@ pub struct BuildConfig {
     /// Where the output goes: a **file** for an application build (default
     /// `dist/<entry stem>.js`), a **directory** for `--lib` (default `dist`).
     pub out: Option<String>,
-    /// A **directory** for an application build — a target's `outdir`, where
+    /// A **directory** for an application build — a target's `outDir`, where
     /// `out` names one file.
     ///
     /// The distinction is not cosmetic: a dynamic `import()` emits a chunk
@@ -221,7 +221,7 @@ pub struct BuildConfig {
     /// `--dts-bundle[=<entry>]`. `None` leaves a `.d.ts` beside each module.
     pub dts_bundle: Option<String>,
     /// What a `--lib` build's stylesheets do with the files their `url()`s
-    /// name, from `--css-urls` or the target's `css-urls` (D158).
+    /// name, from `--css-urls` or the target's `cssUrls` (D158).
     pub css_urls: crate::config::CssUrls,
     /// The project's plugins that apply to this build ([`crate::plugins`]).
     ///
@@ -689,7 +689,7 @@ fn rewrite_urls(
 /// A module a `composes … from` reached is written too. A stylesheet a plugin
 /// compiled (`button.module.scss`) is written as `.css`, which is what it now
 /// is. Its `@import`s are inlined, as scoping needs them; its `url()`s become
-/// what the library's `css-urls` says (D158).
+/// what the library's `cssUrls` says (D158).
 /// Plain stylesheets keep their passthrough copy. A sheet from outside the
 /// source directory is not part of the package and is left alone.
 fn write_library_modules(
@@ -991,14 +991,14 @@ fn guard_replacement(out_dir: &Path, source_root: &Path) -> Result<(), String> {
 ///   into files with stable names, so nothing accumulates — and a rebuild that
 ///   replaced the directory would delete the other targets' output with it.
 ///
-/// Only `outdir` directories are owned. `out` names one file in a directory the
+/// Only `outDir` directories are owned. `out` names one file in a directory the
 /// build does not own ([`crate::config::Output`]); such a file is replaced here
-/// only when it happens to sit inside another target's `outdir`, and a
+/// only when it happens to sit inside another target's `outDir`, and a
 /// whole-project build writes it again on the way past.
 ///
 /// A directory that holds the project root is refused rather than replaced. It
 /// is the same keystroke `--lib` guards against, arriving by a different route:
-/// `"outdir": "."` is a config away from `"outdir": "dist"`.
+/// `"outDir": "."` is a config away from `"outDir": "dist"`.
 fn owned_dirs(
     project: &ProjectBuild,
     selected: &[&crate::config::Target],
@@ -1021,10 +1021,10 @@ fn owned_dirs(
             && root.starts_with(&resolved)
         {
             return Err(format!(
-                "target \"{}\": `outdir` is {}, which holds the project itself.\n\n\
+                "target \"{}\": `outDir` is {}, which holds the project itself.\n\n\
                  A build replaces the directory it owns, and that would delete \
                  everything else here too. Name a directory the build owns: \
-                 \"outdir\": \"dist\".",
+                 \"outDir\": \"dist\".",
                 target.name,
                 out.display()
             ));
@@ -1084,7 +1084,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
                 root.display()
             ));
         }
-        // A target's `outdir` (staged), or `--out`: a library's output is a
+        // A target's `outDir` (staged), or `--out`: a library's output is a
         // directory whichever of the two named it.
         let out = config
             .out_dir
@@ -1407,7 +1407,7 @@ pub async fn build(config: BuildConfig) -> Result<Built, String> {
     // Beside the bundle that imports them, under `assets/`, which is where the
     // rooted URL the module now exports points. `out_dir` is the directory in
     // every shape this command takes: the one `--out` named, the one a target's
-    // `outdir` named, or the parent of the single file `--out` wrote.
+    // `outDir` named, or the parent of the single file `--out` wrote.
     assets.write(&cwd.join(&out_dir).join(crate::assets::ASSET_DIR))?;
 
     if !config.lib {
@@ -2358,7 +2358,7 @@ pub struct Dev {
     /// A release build has no such directory — its outputs *are* the
     /// deployment — which is the whole of the difference this field makes: a
     /// save rebuilds under here, and never overwrites what `esdev build` wrote.
-    pub outdir: PathBuf,
+    pub out_dir: PathBuf,
 }
 
 /// Where a target's bundle lands.
@@ -2515,7 +2515,7 @@ async fn build_targets(
     // Where a target writes. A release build writes its outputs — the
     // deployment. A dev-loop build writes them mirrored under its own
     // directory, so a save never overwrites the deployment.
-    let devdir: Option<&Path> = project.dev.as_ref().map(|dev| dev.outdir.as_path());
+    let devdir: Option<&Path> = project.dev.as_ref().map(|dev| dev.out_dir.as_path());
     let place = |path: &Path| match devdir {
         Some(dev) => dev.join(path),
         None => path.to_path_buf(),
@@ -2612,7 +2612,7 @@ async fn build_targets(
         }
 
         // The directory the bundler writes into, which is what the listing's
-        // names are relative to: an `out` file's own directory, or `outdir`.
+        // names are relative to: an `out` file's own directory, or `outDir`.
         let placed_dir = match &target.output {
             crate::config::Output::File(out) => place(Path::new(out))
                 .parent()
@@ -2868,7 +2868,7 @@ async fn build_single(mut config: BuildConfig) -> Result<String, String> {
             "{} is a document, and `esdev build <entry>` bundles a module.\n\n\
              An HTML entry is built from an {file} target, where the output \
              directory it needs is described:\n\n\
-             \x20   {{ \"targets\": {{ \"web\": {{ \"entry\": \"index.html\", \"outdir\": \"dist\" }} }} }}\n\n\
+             \x20   {{ \"targets\": {{ \"web\": {{ \"entry\": \"index.html\", \"outDir\": \"dist\" }} }} }}\n\n\
              `esdev build` with no entry builds what the project describes.",
             config.source,
             file = crate::config::FILE_NAME,

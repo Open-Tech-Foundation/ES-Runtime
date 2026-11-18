@@ -164,7 +164,7 @@ impl Fixture {
             &dir,
             "esdev.json",
             &format!(
-                r#"{{ {plugins} "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                r#"{{ {plugins} "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
                      "dev": {{ "server": {{ "port": {port} }} }} }}"#
             ),
         );
@@ -211,7 +211,7 @@ impl Fixture {
             "esdev.json",
             &format!(
                 r#"{{ "build": {{ "targets": {{
-                        "web": {{ "entry": "index.html", "outdir": "dist" }},
+                        "web": {{ "entry": "index.html", "outDir": "dist" }},
                         "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
                      "dev": {{ "run": "server", "app": {{ "port": {port} }},
                                "watch": {{ "targets": ["web", "server"] }} }} }}"#

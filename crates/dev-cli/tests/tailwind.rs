@@ -141,7 +141,7 @@ fn html_project(dir: &Path, css: &str) {
     write(
         dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     write(
         dir,
@@ -249,7 +249,7 @@ fn an_imported_stylesheet_and_its_plugin_are_compiled() {
     write(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "web/index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "web/index.html", "outDir": "dist"}}}}"#,
     );
     write(
         &dir,

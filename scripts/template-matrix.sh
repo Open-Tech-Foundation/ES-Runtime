@@ -12,7 +12,8 @@
 # added there is covered without editing this file.
 #
 # Usage:  scripts/template-matrix.sh [template...]
-#   ESDEV_BIN=<dir>   test the esdev and esrun in <dir> (default: the ones on PATH)
+#   ESDEV_BIN=<dir>   test the esdev (and esrun, if there) in <dir>, a build of
+#                     this commit; ignored when <dir> holds no esdev, as on CI
 #   KEEP=1            leave the created projects behind, and say where
 #
 # Needs network access (npm), pnpm and node. Run from anywhere.
@@ -20,11 +21,41 @@ set -uo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 templates="$repo/packages/esdev-templates"
-if [ -n "${ESDEV_BIN:-}" ]; then
+# A directory holding an esdev is a build of this commit, which reads the
+# templates as they are written whatever version it still calls itself.
+this_commit=""
+if [ -n "${ESDEV_BIN:-}" ] && [ -x "$ESDEV_BIN/esdev" ]; then
   export PATH="$ESDEV_BIN:$PATH"
+  this_commit=1
 fi
 command -v esdev >/dev/null || { echo "esdev is not on PATH" >&2; exit 2; }
 command -v esrun >/dev/null || { echo "esrun is not on PATH" >&2; exit 2; }
+
+# The templates name the esdev releases that read them (engines.esdev, D220).
+# Between a commit that needs a newer esdev and the release that ships it, the
+# released esdev on a CI runner is outside that range: what it would report is
+# that it is older, not that a template is broken. Said, and skipped; run it
+# with ESDEV_BIN pointing at a build of this commit to check the templates.
+if [ -z "$this_commit" ] && ! node - "$templates/package.json" "$(esdev --version)" <<'EOF'
+const [manifest, said] = process.argv.slice(2);
+const range = require(manifest).engines?.esdev ?? "";
+const version = (said.match(/(\d+)\.(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+const floor = range.match(/^>=\s*(\d+)\.(\d+)\.(\d+)$/);
+if (!floor || version.length !== 3) process.exit(0); // a range this does not read: run
+const wanted = floor.slice(1).map(Number);
+for (let i = 0; i < 3; i++) {
+  if (version[i] !== wanted[i]) process.exit(version[i] > wanted[i] ? 0 : 1);
+}
+EOF
+then
+  range="$(node -p "require('$templates/package.json').engines.esdev")"
+  message="the templates need esdev $range and this is $(esdev --version); skipped. Run with ESDEV_BIN=<a build of this commit> to check them."
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning title=templates not checked::$message"
+  fi
+  echo "$message"
+  exit 0
+fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/template-matrix.XXXXXX")"
 if [ -z "${KEEP:-}" ]; then

@@ -142,7 +142,7 @@ test("generated dev fixture uses the current project configuration", () => {
     assert.equal(result.status, 0, result.stderr);
     const config = JSON.parse(readFileSync(join(dir, "apps/app-11/esdev.json"), "utf8"));
     assert.deepEqual(config, {
-      build: { targets: { web: { entry: "index.html", outdir: "dist" } } },
+      build: { targets: { web: { entry: "index.html", outDir: "dist" } } },
       dev: { watch: { targets: ["web"] } },
     });
   });

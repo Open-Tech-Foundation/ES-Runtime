@@ -491,7 +491,7 @@ pub struct Finished {
     pub name: String,
     /// `"browser"` or `"server"`.
     pub platform: &'static str,
-    /// The staged directory the target wrote into: its `outdir`, or the
+    /// The staged directory the target wrote into: its `outDir`, or the
     /// directory of its `out` file.
     pub out_dir: std::path::PathBuf,
     /// What the build produced there, `file_name` relative to `out_dir`.

@@ -14,7 +14,7 @@ Declare it once in `esdev.json`:
   "plugins": ["@opentf/esdev-plugin-react"],
   "jsx": { "importSource": "react", "reactCompiler": true },
   "build": {
-    "targets": { "web": { "entry": "index.html", "outdir": "dist" } }
+    "targets": { "web": { "entry": "index.html", "outDir": "dist" } }
   }
 }
 ```

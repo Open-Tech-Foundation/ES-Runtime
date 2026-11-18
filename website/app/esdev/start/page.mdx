@@ -81,7 +81,7 @@ a release build now.
 ```
 
 names another directory for the loop's builds. It must stay inside the
-project and clear of every target's `out` and `outdir`; anything overlapping
+project and clear of every target's `out` and `outDir`; anything overlapping
 is refused when the file is read.
 
 A project with no server of its own — a static site or single-page app — has
@@ -246,7 +246,7 @@ to render its pages on a server while you develop, as the prerender step will:
 ```json
 {
   "build": { "targets": {
-    "web":      { "entry": "index.html", "outdir": "dist" },
+    "web":      { "entry": "index.html", "outDir": "dist" },
     "site-ssg": { "entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run" }
   } },
   "dev": {

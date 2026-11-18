@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn the_one_html_targets_output_is_what_gets_served() {
         let found = directory(&project(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
         ))
         .expect("a directory");
         assert_eq!(found, PathBuf::from("/p/dist"));
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn start_serve_wins() {
         let found = directory(&project(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"serve": "public"}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"serve": "public"}}"#,
         ))
         .expect("a directory");
         assert_eq!(found, PathBuf::from("/p/public"));
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn two_html_targets_are_refused_rather_than_guessed_between() {
         let err = directory(&project(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}, "docs": {"entry": "docs.html", "outdir": "dist/docs"}}}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}, "docs": {"entry": "docs.html", "outDir": "dist/docs"}}}}"#,
         ))
         .expect_err("refused");
         assert!(err.contains("--dir"), "{err}");

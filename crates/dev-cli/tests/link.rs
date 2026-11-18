@@ -40,7 +40,7 @@ fn project(name: &str) -> PathBuf {
         dir.join("esdev.json"),
         format!(
             r#"{{ "build": {{ "targets": {{
-                  "web": {{ "entry": "index.html", "outdir": "dist/web" }},
+                  "web": {{ "entry": "index.html", "outDir": "dist/web" }},
                   "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
                 "dev": {{ "run": "server", "app": {{ "port": {app} }} }} }}"#
         ),

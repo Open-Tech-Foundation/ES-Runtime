@@ -612,7 +612,7 @@ A PROJECT (esdev.json)
         {
           \"build\": { \"targets\": {
             \"server\": { \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" },
-            \"web\":    { \"entry\": \"index.html\", \"outdir\": \"dist\" }
+            \"web\":    { \"entry\": \"index.html\", \"outDir\": \"dist\" }
           } }
         }
 
@@ -634,7 +634,7 @@ AN APPLICATION vs A LIBRARY
     never inferred, so an unannotated export fails the build.
 
     Each of --lib, --format, --no-types and --dts-bundle is also a target key
-    — \"lib\", \"format\", \"types\", \"dts-bundle\" — so a library is describable in
+    — \"lib\", \"format\", \"types\", \"dtsBundle\" — so a library is describable in
     esdev.json, where its \"assets\" (the README and LICENSE a package ships) can
     be named. A flag and a key are two spellings of one build.
 
@@ -1132,7 +1132,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                 return Err(format!(
                     "--out={path} names one file, and a project build writes what each \
                      of its targets says.\n\n\
-                     Where a target's output goes is `out` or `outdir` in {}.",
+                     Where a target's output goes is `out` or `outDir` in {}.",
                     config::FILE_NAME
                 ));
             }
@@ -1141,7 +1141,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                     "{flag} shapes a library build, and a project build's targets say \
                      whether they are libraries in {}.\n\n\
                      Put it on the target: \"lib\": true, \"format\": [\"esm\", \"cjs\"], \
-                     \"types\": false, \"dts-bundle\": \"src/index.ts\", \"css-urls\": \"inline\".",
+                     \"types\": false, \"dtsBundle\": \"src/index.ts\", \"cssUrls\": \"inline\".",
                     config::FILE_NAME
                 ));
             }

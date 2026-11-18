@@ -454,7 +454,7 @@ fn detect_entry(target: &Path) -> Option<String> {
 fn manifest_for(entry: &str) -> String {
     if crate::config::is_html_entry(entry) {
         return format!(
-            "{{\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outdir\": \"dist\"\n      }}\n    }}\n  }}\n}}\n"
+            "{{\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outDir\": \"dist\"\n      }}\n    }}\n  }}\n}}\n"
         );
     }
     let stem = Path::new(entry)
@@ -608,7 +608,7 @@ mod tests {
     fn the_manifest_matches_the_entry_kind() {
         let web = manifest_for("index.html");
         assert!(web.contains("\"entry\": \"index.html\""), "{web}");
-        assert!(web.contains("\"outdir\": \"dist\""), "{web}");
+        assert!(web.contains("\"outDir\": \"dist\""), "{web}");
         assert!(!web.contains("run"), "{web}");
 
         let server = manifest_for("src/server.ts");

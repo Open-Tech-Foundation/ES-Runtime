@@ -10,7 +10,7 @@
     "targets": {
       "web": {
         "entry": "index.html",
-        "outdir": "dist"
+        "outDir": "dist"
       },
       "prerender": {
         "entry": "src/prerender.tsx",

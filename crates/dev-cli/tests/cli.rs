@@ -1025,7 +1025,7 @@ fn a_library_target_builds_the_same_thing_the_flags_do() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"lib": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "cjs"], "assets": ["README.md"]}}}}"#,
+        r#"{"build": {"targets": {"lib": {"entry": "src", "lib": true, "outDir": "dist", "format": ["esm", "cjs"], "assets": ["README.md"]}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -1270,7 +1270,7 @@ fn build_copies_a_new_url_file_beside_a_page_chunk() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outDir\": \"dist\" } } } }\n",
     );
 
     let out = esdev_in(&dir)
@@ -2148,7 +2148,7 @@ fn the_dev_loop_maps_without_being_asked() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outDir\": \"dist\" } } } }\n",
     );
 
     let release = esdev_in(&dir)
@@ -2169,7 +2169,7 @@ fn the_dev_loop_maps_without_being_asked() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\", \
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outDir\": \"dist\", \
          \"sourcemap\": \"inline\" } } } }\n",
     );
     let mapped = esdev_in(&dir)
@@ -2278,7 +2278,7 @@ fn an_imported_asset_is_emitted_hashed_and_referenced_by_url() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outDir\": \"dist\" } } } }\n",
     );
 
     let out = esdev_in(&dir)
@@ -2696,14 +2696,14 @@ fn a_library_target_is_built_without_the_projects_alias() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"pkg": {"entry": "src", "outdir": "libout", "lib": true, "types": false}}}, "resolve": {"alias": {"@": "./src/a"}}}"#,
+        r#"{"build": {"targets": {"pkg": {"entry": "src", "outDir": "libout", "lib": true, "types": false}}}, "resolve": {"alias": {"@": "./src/a"}}}"#,
     );
     let out = esdev_in(&dir)
         .arg("build")
         .output()
         .expect("spawn esdev build");
     assert!(out.status.success(), "{}", stderr(&out));
-    // Where the target said: a library target's `outdir` used to be dropped
+    // Where the target said: a library target's `outDir` used to be dropped
     // on the way to the bundler, which wrote `./dist` instead.
     assert!(!dir.join("dist").exists());
     let built = std::fs::read_to_string(dir.join("libout/app.js")).expect("the library's app.js");
@@ -3857,7 +3857,7 @@ fn a_failed_build_leaves_the_previous_output_where_it_was() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outdir": "dist"}, "prerender": {"entry": "src/prerender.ts", "out": "dist/prerender.js", "then": "run"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outDir": "dist"}, "prerender": {"entry": "src/prerender.ts", "out": "dist/prerender.js", "then": "run"}}}}"#,
     );
     std::fs::create_dir_all(dir.join("dist")).expect("create dist");
     write_in(&dir, "dist/index.html", "the deployment that works\n");
@@ -3914,7 +3914,7 @@ fn a_failed_dev_build_says_its_output_may_be_partial() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build":{"targets":{"app":{"entry":"index.html","outdir":"dist"},"z-broken":{"entry":"src/broken.ts","out":"dist/broken.js"}}}}"#,
+        r#"{"build":{"targets":{"app":{"entry":"index.html","outDir":"dist"},"z-broken":{"entry":"src/broken.ts","out":"dist/broken.js"}}}}"#,
     );
 
     let (_supervisor, log) = start_in_logging(&dir, &[]);
@@ -3977,7 +3977,7 @@ fn a_whole_project_build_clears_the_directories_it_owns() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outDir": "dist"}}}}"#,
     );
     std::fs::create_dir_all(dir.join("dist")).expect("create dist");
     write_in(&dir, "dist/app-0000dead.js", "a build from last week\n");
@@ -3993,7 +3993,7 @@ fn a_whole_project_build_clears_the_directories_it_owns() {
         stdout(&out)
     );
     // And everything this build wrote is present, including the `out` file that
-    // sits inside the directory the `outdir` target cleared.
+    // sits inside the directory the `outDir` target cleared.
     assert!(dir.join("dist/server.js").exists(), "{}", stdout(&out));
     assert!(dir.join("dist/app.js").exists(), "{}", stdout(&out));
 }
@@ -4009,7 +4009,7 @@ fn building_one_target_leaves_the_other_s_output_alone() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"server": {"entry": "src/server.ts", "out": "dist/server.js"}, "web": {"entry": "src/app.ts", "outDir": "dist"}}}}"#,
     );
 
     assert!(
@@ -4041,7 +4041,7 @@ fn an_outdir_that_holds_the_project_is_refused_rather_than_emptied() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outdir": "."}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "src/app.ts", "outDir": "."}}}}"#,
     );
 
     let out = esdev_in(&dir)
@@ -4191,7 +4191,7 @@ fn dts_bundle_refuses_an_import_type_it_cannot_link() {
     assert!(message.contains("src/index.ts"), "{message}");
     assert!(!message.contains("/./"), "{message}");
     // Surface-neutral: the same refusal reaches a reader who wrote
-    // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+    // `--dts-bundle` and one who wrote `"dtsBundle": true`.
     assert!(message.contains("declaration bundle"), "{message}");
 
     // A package is not this library's to link, and is left alone.
@@ -4410,7 +4410,7 @@ fn dts_bundle_refuses_a_construct_it_cannot_link_rather_than_guessing() {
     let message = stderr(&out);
     assert!(message.contains("import * as everything"), "{message}");
     // Surface-neutral: the same refusal reaches a reader who wrote
-    // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+    // `--dts-bundle` and one who wrote `"dtsBundle": true`.
     assert!(message.contains("declaration bundle"), "{message}");
 
     // …and the per-module build, which the message points at, still works.
@@ -10569,7 +10569,7 @@ fn project_dir(name: &str) -> PathBuf {
           "build": { "targets": {
             "server":    { "entry": "src/server.mjs", "out": "dist/server.js",
                            "assets": ["index.html", "public"] },
-            "browser":   { "entry": "src/client.mjs", "outdir": "dist/client",
+            "browser":   { "entry": "src/client.mjs", "outDir": "dist/client",
                            "platform": "browser" },
             "prerender": { "entry": "src/prerender.mjs", "out": "dist/prerender.js",
                            "then": "run" }
@@ -10635,7 +10635,7 @@ fn a_build_step_is_not_left_in_the_output() {
         "esdev.json",
         r#"{"plugins": ["./seen.mjs"],
             "build": {"targets": {
-              "web": {"entry": "src/app.ts", "outdir": "dist"},
+              "web": {"entry": "src/app.ts", "outDir": "dist"},
               "prerender": {"entry": "src/prerender.ts", "out": "dist/prerender.js", "then": "run", "sourcemap": true},
               "report": {"entry": "src/report.ts", "out": ".steps/report.js", "then": "run"}
             }}}"#,
@@ -10728,7 +10728,7 @@ fn a_browser_target_takes_the_browser_build_of_a_dependency() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "app.mjs", "outdir": "out/web", "platform": "browser"}, "srv": {"entry": "app.mjs", "outdir": "out/srv"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "app.mjs", "outDir": "out/web", "platform": "browser"}, "srv": {"entry": "app.mjs", "outDir": "out/srv"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -10818,16 +10818,16 @@ fn a_config_error_names_the_key_and_the_one_it_was_nearly() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"app": {"entry": "app.mjs", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"app": {"entry": "app.mjs", "outDri": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("unknown key `outDir`"),
+        stderr(&out).contains("unknown key `outDri`"),
         "{}",
         stderr(&out)
     );
-    assert!(stderr(&out).contains("`outdir`"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("`outDir`"), "{}", stderr(&out));
 }
 
 /// Project permissions do not belong in the development config. `dev` uses the
@@ -10914,7 +10914,7 @@ fn html_project(name: &str) -> PathBuf {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     dir
 }
@@ -11011,7 +11011,7 @@ fn a_stylesheet_that_is_linked_and_imported_is_written_once() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11088,7 +11088,7 @@ fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     let build = || {
@@ -11347,7 +11347,7 @@ fn a_library_ships_its_css_modules_scoped_as_its_javascript_names_them() {
 
 /// A library stylesheet's `url()`s (D158): copied under a hashed name into
 /// `assets/` by default, inlined as `data:` URLs with `--css-urls=inline` or
-/// the target's `css-urls`. The rest of the stylesheet is as written.
+/// the target's `cssUrls`. The rest of the stylesheet is as written.
 #[test]
 fn a_library_copies_or_inlines_what_its_stylesheets_url_names() {
     let dir = build_dir("lib_css_urls");
@@ -11387,7 +11387,7 @@ fn a_library_copies_or_inlines_what_its_stylesheets_url_names() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "types": false, "css-urls": "inline"}}}}"#,
+        r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outDir": "dist", "types": false, "cssUrls": "inline"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     let text = format!("{}{}", stdout(&out), stderr(&out));
@@ -11451,7 +11451,7 @@ fn a_css_module_is_scoped_and_reaches_both_the_bundle_and_a_stylesheet() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11557,7 +11557,7 @@ fn composes_is_transitive_and_a_plain_stylesheet_is_imported_whole() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11622,7 +11622,7 @@ fn a_reference_that_is_not_there_stops_the_build() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -11650,7 +11650,7 @@ fn two_module_scripts_that_would_collide_are_refused() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -11695,7 +11695,7 @@ fn preview_serves_the_build_with_a_route_fallback() {
     write_in(
         &dir,
         "esdev.json",
-        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } } }\n",
+        "{ \"build\": { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outDir\": \"dist\" } } } }\n",
     );
 
     // Nothing built yet: a preview serves what a build wrote, and says so
@@ -12303,7 +12303,7 @@ fn start_finds_a_free_port_when_none_was_named() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     // The default must be taken for the length of the test. This test holds
@@ -12355,7 +12355,7 @@ fn start_refuses_a_named_port_that_is_taken() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
 
     let _held = std::net::TcpListener::bind(("127.0.0.1", port)).expect("hold the port");
@@ -12405,7 +12405,7 @@ fn the_dev_loop_serves_an_imported_asset_and_maps_its_bundle() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
                  "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
@@ -12452,7 +12452,7 @@ fn start_serves_a_frontend_project_and_reloads_it() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
                  "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
@@ -12538,7 +12538,7 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
         "esdev.json",
         r#"{ "build": { "targets": {
                    "server": { "entry": "src/server.mjs", "out": "dist/server.js" },
-                   "web": { "entry": "index.html", "outdir": "dist" } } },
+                   "web": { "entry": "index.html", "outDir": "dist" } } },
                  "dev": { "run": "server" } }"#,
     );
 
@@ -12677,7 +12677,7 @@ fn a_parse_error_in_the_loop_is_reported_once() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build":{"targets":{"web":{"entry":"index.html","outdir":"dist"}}}}"#,
+        r#"{"build":{"targets":{"web":{"entry":"index.html","outDir":"dist"}}}}"#,
     );
     let (_supervisor, log) = start_in_logging(&dir, &[]);
     let _port = announced_port(&log);
@@ -13687,7 +13687,7 @@ fn build_loads_the_plugins_the_project_config_names() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "FROM THE CONFIG"}}], "build": {"targets": {"server": {"entry": "src/server.mjs", "out": "dist/server.js"}, "browser": {"entry": "src/client.mjs", "outdir": "dist/client", "platform": "browser"}}}}"#,
+        r#"{"plugins": [{"module": "./plugin.mjs", "options": {"text": "FROM THE CONFIG"}}], "build": {"targets": {"server": {"entry": "src/server.mjs", "out": "dist/server.js"}, "browser": {"entry": "src/client.mjs", "outDir": "dist/client", "platform": "browser"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -13810,7 +13810,7 @@ fn a_plugin_reads_where_each_build_runs() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": ["./site.mjs"], "build": {"targets": {"api": {"entry": "src/app.mjs", "out": "dist/api.js"}, "web": {"entry": "src/app.mjs", "outdir": "dist/web", "platform": "browser"}}}}"#,
+        r#"{"plugins": ["./site.mjs"], "build": {"targets": {"api": {"entry": "src/app.mjs", "out": "dist/api.js"}, "web": {"entry": "src/app.mjs", "outDir": "dist/web", "platform": "browser"}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -13878,7 +13878,7 @@ fn a_plugin_compiled_stylesheet_is_bundled_scoped_and_linked() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": ["./sass.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"plugins": ["./sass.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
@@ -13962,7 +13962,7 @@ export default {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"plugins": ["./plugin.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"plugins": ["./plugin.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
         ),
     );
     let _supervisor = start_in(&dir);
@@ -14012,7 +14012,7 @@ fn the_dev_loop_rebuilds_for_a_file_a_plugin_compiles() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"plugins": ["./sass.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"plugins": ["./sass.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
         ),
     );
     let css = |dir: &Path| -> String {
@@ -14082,7 +14082,7 @@ fn reload_project(name: &str) -> PathBuf {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"build": {{"targets": {{"web": {{"entry": "index.html", "outdir": "dist", "assets": ["public"]}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist", "assets": ["public"]}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
         ),
     );
     dir
@@ -14165,7 +14165,7 @@ export default {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": ["./postcss.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"plugins": ["./postcss.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
@@ -14325,7 +14325,7 @@ export default {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"plugins": ["./boot.mjs", "./preload.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+        r#"{"plugins": ["./boot.mjs", "./preload.mjs"], "build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
@@ -15000,7 +15000,7 @@ test('initializes once', () => {
         &format!(
             r#"{{
       "plugins": ["@opentf/esdev-plugin-react"],
-      "build": {{"targets": {{"web": {{"entry":"index.html","outdir":"dist"}}}}}},
+      "build": {{"targets": {{"web": {{"entry":"index.html","outDir":"dist"}}}}}},
       "dev": {{"server": {{"port":{port}}}}}
     }}"#
         ),
@@ -15199,7 +15199,7 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
         "esdev.json",
         &format!(
             r#"{{ "jsx": {{ "factory": "h" }}, "plugins": ["./plugins/refresh.mjs"],
-                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }}{start} }}"#
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }}{start} }}"#
         ),
     );
 }
@@ -15319,7 +15319,7 @@ export default {
         "esdev.json",
         &format!(
             r#"{{ "plugins": ["./plugin.mjs"],
-                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
                  "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
@@ -15394,7 +15394,7 @@ export default {
         "esdev.json",
         &format!(
             r#"{{ "plugins": ["./plugin.mjs"],
-                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
                  "dev": {{ "server": {{ "port": {port} }} }} }}"#
         ),
     );
@@ -20844,7 +20844,7 @@ fn finish_project(name: &str, plugin: &str) -> PathBuf {
         &dir,
         "esdev.json",
         r#"{"plugins": ["./finish.mjs"], "build": {"targets": {
-            "web": {"entry": "index.html", "outdir": "dist"},
+            "web": {"entry": "index.html", "outDir": "dist"},
             "server": {"entry": "src/server.js", "out": "server/server.js"}}}}"#,
     );
     dir
@@ -21080,7 +21080,7 @@ fn policy_project(name: &str, policy: &str) -> PathBuf {
         dir.join("esdev.json"),
         r#"{"build":{"importPolicy":"./import-policy.json","targets":{
             "server":{"entry":"src/server.js","out":"dist/server.js"},
-            "web":{"entry":"index.html","outdir":"dist/web"}}}}"#,
+            "web":{"entry":"index.html","outDir":"dist/web"}}}}"#,
     )
     .unwrap();
     std::fs::write(dir.join("import-policy.json"), policy).unwrap();
@@ -21326,7 +21326,7 @@ fn subresource_integrity_pins_every_script_and_stylesheet_a_release_html_build_w
         std::fs::write(
             dir.join("esdev.json"),
             format!(
-                r#"{{"build":{{{sri}"targets":{{"web":{{"entry":"index.html","outdir":"dist"}}}}}}}}"#
+                r#"{{"build":{{{sri}"targets":{{"web":{{"entry":"index.html","outDir":"dist"}}}}}}}}"#
             ),
         )
         .unwrap();

@@ -3,7 +3,7 @@
     "targets": {
       "web": {
         "entry": "index.html",
-        "outdir": "dist/public"
+        "outDir": "dist/public"
       },
       "server": {
         "entry": "src/server/main.js",

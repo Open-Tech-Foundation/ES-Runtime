@@ -181,10 +181,11 @@ env = { PATH = "../../../target/release:${PATH}" }
 # Every template in packages/esdev-templates, in every combination of its
 # options: created with its real dependencies, then typechecked, tested, built
 # and served (scripts/template-matrix.sh). Needs the network. A locally built
-# esdev and esrun win over installed ones, as for test:serialization.
+# esdev wins over an installed one; without one (CI), the released esdev runs
+# them when the templates' engines.esdev range admits it.
 [tasks."test:templates"]
 run = "scripts/template-matrix.sh"
-env = { PATH = "target/release:${PATH}" }
+env = { ESDEV_BIN = "target/release" }
 
 # MongoDB's BSON corpus and binary-vector tests against runtime:serialization's
 # BSON. Fetches the pinned checkout first (gitignored: the specifications are

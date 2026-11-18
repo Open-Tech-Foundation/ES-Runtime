@@ -4,7 +4,7 @@
   "description": "The project templates `esdev create` writes — data, fetched and verified by esdev, released on their own.",
   "_engines": "engines.esdev is the range of esdev versions that read this package's template format (DECISIONS D220). esdev takes the newest stable release whose range includes itself.",
   "engines": {
-    "esdev": ">=0.28.0"
+    "esdev": ">=0.29.0"
   },
   "esdev": {
     "templates": "templates"

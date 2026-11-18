@@ -26,7 +26,7 @@ such as `NODE_ENV`, `worker`, and asset URLs are the consumer's to make.
 
 Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
 project is refused rather than replaced. A single-entry application build
-replaces nothing; whole-project application builds replace their `outdir`s.
+replaces nothing; whole-project application builds replace their `outDir`s.
 
 Library stylesheets are CSS passthrough files: their source-relative paths and
 their relative `@import`s are kept intact. A library cannot hash a stylesheet
@@ -100,17 +100,17 @@ file, so importing one stylesheet brings every rule its class names use.
 A file a library stylesheet names with `url()` ships with it. By default it is
 copied into `dist/assets/` under a content-hashed name, and the `url()` points
 at the copy. To inline every such file into the stylesheet as a `data:` URL
-instead, set `css-urls`:
+instead, set `cssUrls`:
 
 ```sh
 esdev build --lib src --css-urls=inline
 ```
 
 ```json
-{ "build": { "targets": { "kit": { "entry": "src", "lib": true, "outdir": "dist", "css-urls": "inline" } } } }
+{ "build": { "targets": { "kit": { "entry": "src", "lib": true, "outDir": "dist", "cssUrls": "inline" } } } }
 ```
 
-| `css-urls` | `url(./bg.png)` becomes | Ships |
+| `cssUrls` | `url(./bg.png)` becomes | Ships |
 | --- | --- | --- |
 | `copy` (default) | `url("../assets/bg-1a2b3c4d.png")` | `dist/assets/bg-1a2b3c4d.png` |
 | `inline` | `url("data:image/png;base64,…")` | nothing extra |
@@ -193,9 +193,9 @@ constructs such as module augmentations stop the build and name themselves.
 | `--lib` | `"lib": true` | Build a library |
 | `--format=<list>` | `"format": ["esm", "cjs"]` | `esm` (default), `cjs`, or both |
 | `--no-types` | `"types": false` | Skip `.d.ts` files |
-| `--dts-bundle[=<entry>]` | `"dts-bundle": true` or an entry | One `.d.ts` instead of one per module |
-| `--css-urls=<copy\|inline>` | `"css-urls": "inline"` | What a stylesheet's `url()` files become; `copy` (default) |
-| `--out=<dir>` | `"outdir": "dist"` | Where to write it |
+| `--dts-bundle[=<entry>]` | `"dtsBundle": true` or an entry | One `.d.ts` instead of one per module |
+| `--css-urls=<copy\|inline>` | `"cssUrls": "inline"` | What a stylesheet's `url()` files become; `copy` (default) |
+| `--out=<dir>` | `"outDir": "dist"` | Where to write it |
 
 ```json
 {
@@ -205,7 +205,7 @@ constructs such as module augmentations stop the build and name themselves.
         "entry": "src",
         "lib": true,
         "format": ["esm", "cjs"],
-        "outdir": "dist",
+        "outDir": "dist",
         "types": true,
         "assets": ["README.md", "LICENSE"]
       }

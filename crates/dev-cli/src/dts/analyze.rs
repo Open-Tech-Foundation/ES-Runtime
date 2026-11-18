@@ -727,7 +727,7 @@ mod tests {
             let err = analyze("test.d.ts", source).expect_err(source);
             assert!(err.contains(needle), "{err}");
             // Surface-neutral: the same refusal reaches a reader who wrote
-            // `--dts-bundle` and one who wrote `"dts-bundle": true`.
+            // `--dts-bundle` and one who wrote `"dtsBundle": true`.
             assert!(err.contains("declaration bundle"), "{err}");
         }
     }

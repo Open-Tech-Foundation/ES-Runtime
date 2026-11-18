@@ -4899,3 +4899,16 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** excluding `node_modules`, `dist` and friends by name, as Vite's chokidar defaults do — a project says what it does not edit in `.gitignore`, which every tool it uses reads, and a name list is a second policy to disagree with it (the existing `directory_names_are_not_hardcoded_exclusions` stance). Nested `.gitignore` files — the root's is what the loop has always read; widening it is a separate change.
 
 **Consequences:** the site's watch is 193 directories. Editing a linked workspace package under a gitignored `node_modules` still does not rebuild, as before; that is linked packages' own change (P1).
+
+### D232 — `esdev.json` is spelled one way: camelCase keys, and one vocabulary inside · *Accepted (2026-11-19)* · *before the public alpha*
+
+**Context:** the file mixed three spellings — `importPolicy` and `subresourceIntegrity` under `build`, `outDir` under `dev`, and `outdir`, `dts-bundle` and `css-urls` on a target — so `dev.outDir` and a target's `outdir` were the same idea spelled two ways in one file. The parser read the grouped `dev` section by translating it into an older flat one (`app.port` → `listen`, `server.port` → `port`, `outDir` → `devdir`, `watch.targets` → `watch`) and validating that; an error raised behind the translation names a key the file does not have, which is how "nothing to run" came to suggest a `start` key that had been gone for releases. After the alpha a rename is a breaking change for every project; before it, it is a sweep.
+
+**Decision:**
+- **Every key is camelCase**, as the files beside it are (`package.json`, `tsconfig.json`) and as the config of every tool it is compared with is. A target's `outdir` is `outDir`, `dts-bundle` is `dtsBundle`, `css-urls` is `cssUrls`. Command-line flags stay kebab-case (`--dts-bundle`): that is the command line's convention, and a flag and a key are still two spellings of one setting.
+- **An old spelling is refused, by name**: "`outdir` is `outDir`". No alias — two accepted spellings is the drift this removes, and the project is pre-alpha (modern-only).
+- **One vocabulary inside**: the model's fields are named for the keys they come from (`app_port` for `dev.app.port`, `server_port` for `dev.server.port`, `out_dir` for `dev.outDir`, `watch_targets` for `dev.watch.targets`), and `dev` is read directly, so a message names what the file says.
+
+**Rejected:** kebab-case throughout — no JSON config this file sits beside uses it. Accepting both spellings for a release — there is no released project to migrate that a one-line error does not serve better.
+
+**Consequences:** every template, example and doc writes `outDir`. Frameworks writing `esdev.json` (AFW's `@opentf/create-afw`) change the same three keys.

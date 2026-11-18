@@ -596,7 +596,7 @@ fn a_failed_first_build_is_not_called_ready() {
 fn a_page_with_nothing_built_shows_the_build_failure() {
     let dir = project(
         "failure-page",
-        r#"{ "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } } }"#,
+        r#"{ "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } } }"#,
     );
     std::fs::write(
         dir.join("index.html"),
@@ -666,7 +666,7 @@ fn a_page_asked_for_during_the_first_build_waits_for_it() {
     let dir = project(
         "early-request",
         r#"{ "plugins": ["./slow.mjs"],
-             "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } } }"#,
+             "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } } }"#,
     );
     std::fs::write(
         dir.join("index.html"),

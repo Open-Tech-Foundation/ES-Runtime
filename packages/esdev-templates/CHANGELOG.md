@@ -11,6 +11,12 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+### Changed
+
+- Every template's `esdev.json` writes `outDir`, the camelCase spelling esdev
+  0.29 reads (DECISIONS D232). Needs esdev 0.29.0 or later: `engines.esdev` is
+  `>=0.29.0`, so an older esdev goes on taking 0.1.0.
+
 ## [0.1.0] - 2026-11-17
 
 ### Changed

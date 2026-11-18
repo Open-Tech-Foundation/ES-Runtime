@@ -320,7 +320,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // it — so it takes a free port and says nothing about which.
         None
     } else {
-        project.start.port
+        project.start.server_port
     })?;
     listener
         .set_nonblocking(true)
@@ -406,7 +406,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // Only where the flag exists to act on. On a project that runs its own
     // server this listener has no flag and no reader, so a note about which port
     // it landed on is noise about plumbing.
-    if !opens_its_own && project.start.port.is_none() && port != DEFAULT_PORT {
+    if !opens_its_own && project.start.server_port.is_none() && port != DEFAULT_PORT {
         eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
     }
 
@@ -414,7 +414,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // The port `--port` pins: the app's, when the app is the address opened —
     // which is one server's, or no one's to choose.
     let pinned = if opens_its_own {
-        if project.start.servers.len() > 1 && project.start.port.is_some() {
+        if project.start.servers.len() > 1 && project.start.server_port.is_some() {
             return Err(format!(
                 "--port names the port you open, and this project runs {} servers.\n\n\
                  Give each its port under `dev.servers`, or make esdev the one address with \
@@ -422,7 +422,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 project.start.servers.len()
             ));
         }
-        project.start.port
+        project.start.server_port
     } else {
         None
     };
@@ -565,7 +565,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         .await?;
     }
     // What the page loads: the dev build's whole output.
-    let devdir = project.source.root.join(project.start.devdir());
+    let devdir = project.source.root.join(project.start.out_dir());
 
     loop {
         let several = running.len() > 1;
@@ -862,8 +862,8 @@ impl From<Option<Vec<PathBuf>>> for Woken {
 /// `dev.watch.targets` opts it back in; the `dev.run` target is always built,
 /// since the loop runs its output.
 fn dev_targets(project: &Settings) -> Vec<String> {
-    if !project.start.watch.is_empty() {
-        return project.start.watch.clone();
+    if !project.start.watch_targets.is_empty() {
+        return project.start.watch_targets.clone();
     }
     if !project.targets.iter().any(|target| target.run_after_build) {
         return Vec::new();
@@ -900,7 +900,7 @@ async fn rebuild(
         dev: Some(Dev {
             reload_port: port,
             hot,
-            outdir: PathBuf::from(project.start.devdir()),
+            out_dir: PathBuf::from(project.start.out_dir()),
         }),
     }));
     // Unprefixed: callers print it with the terminal's `esdev:` tag, and the
@@ -1304,7 +1304,7 @@ fn running_output(project: &Settings, name: &str) -> Result<PathBuf, String> {
     Ok(project
         .source
         .root
-        .join(project.start.devdir())
+        .join(project.start.out_dir())
         .join(crate::build::output_path(target)))
 }
 
@@ -1326,7 +1326,7 @@ fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
         return Ok(match (&project.start.serve, html.map(|t| &t.output)) {
             (Some(serve), _) => Some(project.source.root.join(serve)),
             (None, Some(Output::Dir(dir))) => {
-                Some(project.source.root.join(project.start.devdir()).join(dir))
+                Some(project.source.root.join(project.start.out_dir()).join(dir))
             }
             _ => None,
         });
@@ -1353,7 +1353,7 @@ fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
     // The development build, like everything else the loop reads: a `serve`
     // directory names somewhere as it stands and is left alone.
     Ok(Some(
-        project.source.root.join(project.start.devdir()).join(dir),
+        project.source.root.join(project.start.out_dir()).join(dir),
     ))
 }
 
@@ -1367,7 +1367,7 @@ fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
 /// The watcher has to ignore these or it never settles: a rebuild writes files,
 /// the watcher sees them, and it rebuilds.
 fn output_dirs(project: &Settings) -> Vec<PathBuf> {
-    vec![project.source.root.join(project.start.devdir())]
+    vec![project.source.root.join(project.start.out_dir())]
 }
 
 /// Whether a changed path is one to rebuild for.
@@ -1766,7 +1766,7 @@ mod tests {
     fn the_dev_directory_is_what_the_watcher_ignores() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "build/server.js"}, "web": {"entry": "index.html", "outdir": "public_html"}}}}"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "build/server.js"}, "web": {"entry": "index.html", "outDir": "public_html"}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1783,7 +1783,7 @@ mod tests {
     fn a_named_dev_directory_is_used_everywhere() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"run": "server", "outDir": "tmp-dev"}}"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"run": "server", "outDir": "tmp-dev"}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1820,7 +1820,7 @@ mod tests {
 
         let frontend = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}}"#,
+                r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1846,7 +1846,7 @@ mod tests {
     /// `start` key the file had stopped having.
     #[test]
     fn nothing_to_run_suggests_keys_the_file_has() {
-        let targets = r#""build": {"targets": {"web": {"entry": "main.js", "outdir": "dist", "platform": "browser"}}}"#;
+        let targets = r#""build": {"targets": {"web": {"entry": "main.js", "outDir": "dist", "platform": "browser"}}}"#;
         let err = serve_dir(&settings(&format!("{{{targets}}}"))).expect_err("nothing to serve");
         let snippets: Vec<&str> = err
             .lines()
@@ -1870,7 +1870,7 @@ mod tests {
     #[test]
     fn the_loop_leaves_out_run_after_build_steps() {
         let site = settings(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}}"#,
         );
         assert_eq!(dev_targets(&site), vec!["web".to_string()]);
     }
@@ -1880,7 +1880,7 @@ mod tests {
     #[test]
     fn without_a_step_the_loop_builds_every_target() {
         let app = settings(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outdir": "dist/public"}}}, "dev": {"run": "server"}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist/public"}}}, "dev": {"run": "server"}}"#,
         );
         assert!(dev_targets(&app).is_empty());
     }
@@ -1889,7 +1889,7 @@ mod tests {
     #[test]
     fn watch_targets_can_opt_a_step_back_in() {
         let site = settings(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}, "dev": {"watch": {"targets": ["web", "ssg"]}}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}, "ssg": {"entry": "ssg.js", "out": ".ssg/ssg.js", "then": "run"}}}, "dev": {"watch": {"targets": ["web", "ssg"]}}}"#,
         );
         assert_eq!(
             dev_targets(&site),
@@ -1911,7 +1911,7 @@ mod tests {
     fn configured_watch_paths_are_additional_roots() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{ "build": { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } },
+                r#"{ "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } },
                 "dev": { "watch": { "paths": ["./config,local", "/etc/example"] } } }"#,
                 PathBuf::from("/p"),
                 "esdev.json",

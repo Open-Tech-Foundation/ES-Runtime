@@ -124,19 +124,19 @@ pub struct Start {
     /// The targets to rebuild on a change. Empty means all of them, which is
     /// the useful default: a rebuild costs milliseconds, and a list that has
     /// fallen out of date is a save that appears to do nothing.
-    pub watch: Vec<String>,
+    pub watch_targets: Vec<String>,
     /// The directory to serve when there is no `run` target. Defaults to the
     /// output of the one HTML target, since that is what a frontend-only stack
     /// has.
     pub serve: Option<String>,
     /// The app's default port. When `esdev start` moves a busy port, it sets
     /// `PORT` in the server child to the free one it selected.
-    pub listen: Option<u16>,
+    pub app_port: Option<u16>,
     /// **The port you open.** For a project with a `run` target that is the
     /// application's own port; for a frontend project, where esdev serves the
     /// output itself, it is esdev's listener. Either way it is the address a
-    /// developer types, which is why it has the plain name.
-    pub port: Option<u16>,
+    /// developer types.
+    pub server_port: Option<u16>,
     /// Where the dev loop writes its builds, as a directory in the project.
     /// `None` is [`DEFAULT_DEV_DIR`].
     ///
@@ -144,8 +144,8 @@ pub struct Start {
     /// `.dev/dist/server.js`), so what a save rebuilds never touches what
     /// `esdev build` deploys. A directory of the loop's own, not a second
     /// spelling of an output: it may not overlap any target's `out` or
-    /// `outdir`, and it stays inside the project.
-    pub devdir: Option<String>,
+    /// `outDir`, and it stays inside the project.
+    pub out_dir: Option<String>,
     /// `dev.server.proxy`: path prefixes forwarded to another server, as
     /// `(prefix, target)`, longest prefix first (D150). A target is a URL, or
     /// the name of one of [`servers`](Self::servers) (D208).
@@ -180,8 +180,8 @@ pub struct ServerSpec {
 impl Start {
     /// Where the dev loop writes: `devdir`, or [`DEFAULT_DEV_DIR`] when the
     /// file is silent.
-    pub fn devdir(&self) -> &str {
-        self.devdir.as_deref().unwrap_or(DEFAULT_DEV_DIR)
+    pub fn out_dir(&self) -> &str {
+        self.out_dir.as_deref().unwrap_or(DEFAULT_DEV_DIR)
     }
 }
 
@@ -297,7 +297,7 @@ pub struct Target {
     /// `"types": false` — skip the declarations, as `--no-types` does.
     /// Meaningless off a library, and refused there.
     pub types: bool,
-    /// `"dts-bundle"` — link every declaration into one file, as
+    /// `"dtsBundle"` — link every declaration into one file, as
     /// `--dts-bundle` does. `true` takes this target's `index.ts`; a string
     /// names the entry.
     ///
@@ -305,7 +305,7 @@ pub struct Target {
     /// it is a config error naming what was looked for rather than a build that
     /// fails later.
     pub dts_bundle: Option<String>,
-    /// `"css-urls"` — what a library's stylesheets do with the files their
+    /// `"cssUrls"` — what a library's stylesheets do with the files their
     /// `url()`s name: `"copy"` (the default) or `"inline"` (D158). Refused
     /// off a library, as `--css-urls` is.
     pub css_urls: CssUrls,
@@ -362,7 +362,7 @@ pub enum Output {
     /// `out` — one file. The directory it lands in may hold other things and is
     /// never cleaned, because the build does not own it.
     File(String),
-    /// `outdir` — a directory this target writes into.
+    /// `outDir` — a directory this target writes into.
     ///
     /// What a browser target needs: a dynamic `import()` emits a hashed chunk
     /// beside its entry, and a build whose output is one named file has nowhere
@@ -395,7 +395,7 @@ impl Platform {
 const TARGET_KEYS: &[&str] = &[
     "entry",
     "out",
-    "outdir",
+    "outDir",
     "platform",
     "assets",
     "minify",
@@ -406,9 +406,36 @@ const TARGET_KEYS: &[&str] = &[
     "lib",
     "format",
     "types",
-    "dts-bundle",
-    "css-urls",
+    "dtsBundle",
+    "cssUrls",
 ];
+
+/// Target keys spelled another way before D232, and the spelling they have now.
+const RENAMED_TARGET_KEYS: &[(&str, &str)] = &[
+    ("outdir", "outDir"),
+    ("dts-bundle", "dtsBundle"),
+    ("css-urls", "cssUrls"),
+];
+
+/// Refuses a key in its pre-D232 spelling, naming the one it has now. Not an
+/// alias: two accepted spellings of a key is how a file comes to use both.
+fn renamed(
+    map: &Map<String, Value>,
+    file: &str,
+    at: &str,
+    renames: &[(&str, &str)],
+) -> Result<(), String> {
+    for (old, new) in renames {
+        if map.contains_key(*old) {
+            return Err(format!(
+                "{file}: {at} has `{old}`, which is spelled `{new}`.\n\n\
+                 Every key in {FILE_NAME} is camelCase, as package.json's and \
+                 tsconfig.json's are; rename it to \"{new}\"."
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// What a library's stylesheets do with the files their `url()`s name (D158).
 ///
@@ -446,14 +473,6 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "test",
     "jsx",
 ];
-
-/// The internal keys used after normalizing grouped dev settings.
-///
-/// Read in full here, and *consumed* by `esdev start`. Validating a key the
-/// command that uses it has not been written yet is deliberate: a typo in
-/// a dev setting should be reported by the build that read the file, not held until
-/// the day somebody runs the other command.
-const NORMALIZED_DEV_KEYS: &[&str] = &["run", "watch", "serve", "listen", "port", "devdir"];
 
 const BUILD_KEYS: &[&str] = &["targets", "importPolicy", "subresourceIntegrity"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
@@ -1160,6 +1179,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
     }
     let map = object(value, file, &at)?;
     moved_to_the_project(map, file, &at)?;
+    renamed(map, file, &at, RENAMED_TARGET_KEYS)?;
     known_keys(map, file, &at, TARGET_KEYS)?;
 
     let entry = match map.get("entry") {
@@ -1172,13 +1192,13 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
         }
     };
 
-    let output = match (map.get("out"), map.get("outdir")) {
+    let output = match (map.get("out"), map.get("outDir")) {
         (Some(_), Some(_)) => {
             return Err(format!(
-                "{file}: {at} sets both `out` and `outdir`, which name different \
+                "{file}: {at} sets both `out` and `outDir`, which name different \
                  shapes of output.\n\n\
-                 `out` is one file; `outdir` is a directory the target writes into. \
-                 A browser target wants `outdir` — a dynamic import emits a chunk \
+                 `out` is one file; `outDir` is a directory the target writes into. \
+                 A browser target wants `outDir` — a dynamic import emits a chunk \
                  beside its entry, and one named file has nowhere to put it."
             ));
         }
@@ -1188,17 +1208,17 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
                 return Err(format!(
                     "{file}: {at} has \"out\": \"{out}\", which names a directory.\n\n\
                      `out` is one file (\"dist/server.js\"). For a directory, write \
-                     \"outdir\": \"{out}\"."
+                     \"outDir\": \"{out}\"."
                 ));
             }
             Output::File(out.to_string())
         }
         (None, Some(dir)) => {
-            let dir = string(dir, file, &format!("{at}'s `outdir`"))?;
+            let dir = string(dir, file, &format!("{at}'s `outDir`"))?;
             if Path::new(dir).extension().is_some() {
                 return Err(format!(
-                    "{file}: {at} has \"outdir\": \"{dir}\", which names a file.\n\n\
-                     `outdir` is a directory the target writes into. For one file, \
+                    "{file}: {at} has \"outDir\": \"{dir}\", which names a file.\n\n\
+                     `outDir` is a directory the target writes into. For one file, \
                      write \"out\": \"{dir}\"."
                 ));
             }
@@ -1256,7 +1276,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
         Some(value) => flag(Some(value), file, &format!("{at}'s `types`"))?,
     };
 
-    // The refusals come **before** `dts-bundle` is resolved. Resolving it means
+    // The refusals come **before** `dtsBundle` is resolved. Resolving it means
     // looking for an index under the entry, and on a target whose entry is a
     // module rather than a directory that reports a missing
     // `src/app.ts/index.ts` — an answer to a question the reader never asked.
@@ -1282,32 +1302,32 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
                  deployed and run, not imported and type-checked."
             ));
         }
-        if map.contains_key("dts-bundle") {
+        if map.contains_key("dtsBundle") {
             return Err(format!(
-                "{file}: {at} has `dts-bundle` without \"lib\": true.\n\n\
+                "{file}: {at} has `dtsBundle` without \"lib\": true.\n\n\
                  An application build emits no declarations to link."
             ));
         }
-        if map.contains_key("css-urls") {
+        if map.contains_key("cssUrls") {
             return Err(format!(
-                "{file}: {at} has `css-urls` without \"lib\": true.\n\n\
+                "{file}: {at} has `cssUrls` without \"lib\": true.\n\n\
                  An application build already hashes and links the files its \
                  stylesheets name."
             ));
         }
     }
-    let dts_bundle = dts_bundle(map.get("dts-bundle"), file, &at, dir, &entry)?;
-    let css_urls = match map.get("css-urls") {
+    let dts_bundle = dts_bundle(map.get("dtsBundle"), file, &at, dir, &entry)?;
+    let css_urls = match map.get("cssUrls") {
         None => CssUrls::default(),
         Some(value) => value
             .as_str()
             .and_then(CssUrls::parse)
-            .ok_or_else(|| format!("{file}: {at}'s `css-urls` must be \"copy\" or \"inline\""))?,
+            .ok_or_else(|| format!("{file}: {at}'s `cssUrls` must be \"copy\" or \"inline\""))?,
     };
     if lib {
         if !types && dts_bundle.is_some() {
             return Err(format!(
-                "{file}: {at} sets `dts-bundle` and \"types\": false, which ask for \
+                "{file}: {at} sets `dtsBundle` and \"types\": false, which ask for \
                  opposite things.\n\n\
                  One links every declaration into a file; the other emits none."
             ));
@@ -1326,7 +1346,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
                 "{file}: {at} is a library with \"out\": \"{out}\", which names one \
                  file.\n\n\
                  A library keeps its module structure, so its output is a \
-                 directory: \"outdir\": \"dist\"."
+                 directory: \"outDir\": \"dist\"."
             ));
         }
         if run_after_build {
@@ -1365,7 +1385,7 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
             return Err(format!(
                 "{file}: {at} builds an HTML file, and `out` names one output.\n\n\
                  A document is a bundle, its chunks, its stylesheets and itself — \
-                 write \"outdir\": \"dist\"."
+                 write \"outDir\": \"dist\"."
             ));
         }
         if map.contains_key("platform") {
@@ -1397,79 +1417,65 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-/// Reads the normalized dev settings, checking the target names they refer to.
-fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, String> {
-    let map = object(value, file, "`dev`")?;
-    known_keys(map, file, "`dev`", NORMALIZED_DEV_KEYS)?;
+/// Reads `dev`: what `esdev start` runs, rebuilds, serves and where it writes.
+/// Read from the keys the file has, so every message names one of them (D232).
+fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Result<Start, String> {
     let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
-
-    let run = match map.get("run") {
+    let run = match value.get("run") {
         None => None,
         Some(run) => {
-            let run = string(run, file, "`dev`'s `run`")?;
+            let run = string(run, file, "`dev.run`")?;
             if !names.contains(&run) {
                 return Err(unknown_target(file, "`dev.run`", run, &names));
             }
             Some(run.to_string())
         }
     };
-    let watch = string_array(map.get("watch"), file, "`dev.watch.targets`")?;
-    for name in &watch {
+    let watch = value
+        .get("watch")
+        .map(|watch| object(watch, file, "`dev.watch`"))
+        .transpose()?;
+    let watch_targets = string_array(
+        watch.and_then(|watch| watch.get("targets")),
+        file,
+        "`dev.watch.targets`",
+    )?;
+    for name in &watch_targets {
         if !names.contains(&name.as_str()) {
             return Err(unknown_target(file, "`dev.watch.targets`", name, &names));
         }
     }
-    let serve = match map.get("serve") {
+    let serve = match value.get("serve") {
         None => None,
-        Some(serve) => Some(string(serve, file, "`dev`'s `serve`")?.to_string()),
+        Some(serve) => Some(string(serve, file, "`dev.serve`")?.to_string()),
     };
-    let listen = read_port(map, "listen", "`dev.app.port`", file)?;
-    let port = read_port(map, "port", "`dev.server.port`", file)?;
-    let devdir = read_devdir(map, file, targets)?;
-    Ok(Start {
+    let app = value
+        .get("app")
+        .map(|app| object(app, file, "`dev.app`"))
+        .transpose()?;
+    let app_port = match app {
+        Some(app) => read_port(app, "port", "`dev.app.port`", file)?,
+        None => None,
+    };
+    let server = value
+        .get("server")
+        .map(|server| object(server, file, "`dev.server`"))
+        .transpose()?;
+    let server_port = match server {
+        Some(server) => read_port(server, "port", "`dev.server.port`", file)?,
+        None => None,
+    };
+    let out_dir = read_dev_out_dir(value, file, targets)?;
+    let mut start = Start {
         run,
-        watch,
+        watch_targets,
         serve,
-        listen,
-        port,
-        devdir,
+        app_port,
+        server_port,
+        out_dir,
         proxy: Vec::new(),
         servers: Vec::new(),
-    })
-}
-
-/// Reads the grouped development settings into the runtime's stable start
-/// model. The app and esdev server ports have separate homes even though the
-/// current full-stack runner still exposes the app directly.
-fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Result<Start, String> {
-    let mut normalized = Map::new();
-    for key in ["run", "serve"] {
-        if let Some(value) = value.get(key) {
-            normalized.insert(key.to_string(), value.clone());
-        }
-    }
-    if let Some(watch) = value.get("watch") {
-        let watch = object(watch, file, "`dev.watch`")?;
-        if let Some(targets) = watch.get("targets") {
-            normalized.insert("watch".to_string(), targets.clone());
-        }
-    }
-    if let Some(app) = value.get("app") {
-        let app = object(app, file, "`dev.app`")?;
-        if let Some(port) = app.get("port") {
-            normalized.insert("listen".to_string(), port.clone());
-        }
-    }
-    if let Some(server) = value.get("server") {
-        let server = object(server, file, "`dev.server`")?;
-        if let Some(port) = server.get("port") {
-            normalized.insert("port".to_string(), port.clone());
-        }
-    }
-    if let Some(out_dir) = value.get("outDir") {
-        normalized.insert("devdir".to_string(), out_dir.clone());
-    }
-    let mut start = read_start(&Value::Object(normalized), targets, file)?;
+    };
     if let Some(server) = value.get("server") {
         let server = object(server, file, "`dev.server`")?;
         start.proxy = read_proxy(server.get("proxy"), file)?;
@@ -1490,7 +1496,7 @@ fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Resul
         (None, Some(run)) => vec![ServerSpec {
             name: run.clone(),
             target: run.clone(),
-            port: start.listen,
+            port: start.app_port,
             auto_port: false,
             ..ServerSpec::default()
         }],
@@ -1666,12 +1672,12 @@ fn read_watch_paths(value: Option<&Value>, file: &str) -> Result<Vec<String>, St
 /// directory that *is* a deploy output, contains one, or sits inside one
 /// recreates the overwrite the separation exists to prevent — silently, one
 /// save at a time.
-fn read_devdir(
+fn read_dev_out_dir(
     map: &Map<String, Value>,
     file: &str,
     targets: &[Target],
 ) -> Result<Option<String>, String> {
-    let Some(value) = map.get("devdir") else {
+    let Some(value) = map.get("outDir") else {
         return Ok(None);
     };
     let devdir = string(value, file, "`dev.outDir`")?;
@@ -2021,7 +2027,7 @@ fn library_formats(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<St
     Ok(formats)
 }
 
-/// Parses `dts-bundle`, resolving `true` to the entry it would take.
+/// Parses `dtsBundle`, resolving `true` to the entry it would take.
 ///
 /// Resolved **here** rather than in the build, for the reason the flag resolves
 /// it in the argument parser: a `true` with no `index.ts` under the source
@@ -2046,15 +2052,15 @@ fn dts_bundle(
             match found {
                 Some(found) => Ok(Some(found.to_string_lossy().into_owned())),
                 None => Err(format!(
-                    "{file}: {at} has \"dts-bundle\": true, and there is no index.ts \
+                    "{file}: {at} has \"dtsBundle\": true, and there is no index.ts \
                      in {entry}.\n\n\
                      One declaration file is built from one entry. Name it: \
-                     \"dts-bundle\": \"{entry}/main.ts\"."
+                     \"dtsBundle\": \"{entry}/main.ts\"."
                 )),
             }
         }
         Some(other) => Err(format!(
-            "{file}: {at}'s `dts-bundle` is {}, and it says whether every \
+            "{file}: {at}'s `dtsBundle` is {}, and it says whether every \
              declaration is linked into one file.\n\n  \
              true             — from this target's index.ts\n  \
              \"src/main.ts\"    — from the entry you name\n  \
@@ -2149,13 +2155,13 @@ fn nearest<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
         .iter()
         .map(|candidate| (distance(word, candidate), *candidate))
         // Two edits on a short key is the line between a typo and a different
-        // word: `outDir` reaches `outdir`, `output` does not reach `out`.
+        // word: `outDir` reaches `outDir`, `output` does not reach `out`.
         .filter(|(distance, _)| *distance <= 2)
         .min_by_key(|(distance, _)| *distance)
         .map(|(_, candidate)| candidate)
 }
 
-/// Levenshtein distance, case-insensitively — `outDir` is a typo of `outdir`
+/// Levenshtein distance, case-insensitively — `outDir` is a typo of `outDir`
 /// and the message should say so rather than list the keys and leave it there.
 fn distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.to_lowercase().chars().collect();
@@ -2223,7 +2229,7 @@ mod tests {
     #[test]
     fn a_library_target_carries_what_the_flags_carry() {
         let project = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "cjs"], "minify": true, "assets": ["README.md", "LICENSE"]}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "format": ["esm", "cjs"], "minify": true, "assets": ["README.md", "LICENSE"]}}}}"#,
         )
         .expect("parsed");
         let target = &project.targets[0];
@@ -2242,7 +2248,7 @@ mod tests {
     #[test]
     fn a_single_format_needs_no_list() {
         let project = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": "cjs"}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "format": "cjs"}}}}"#,
         )
         .expect("parsed");
         assert_eq!(project.targets[0].formats, ["cjs"]);
@@ -2257,7 +2263,7 @@ mod tests {
         for (key, value) in [
             ("format", "\"cjs\""),
             ("types", "false"),
-            ("dts-bundle", "true"),
+            ("dtsBundle", "true"),
         ] {
             let err = read(&format!(
                 r#"{{ "build": {{ "targets": {{ "app": {{ "entry": "src/app.ts",
@@ -2276,14 +2282,14 @@ mod tests {
             r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "out": "dist/std.js"}}}}"#,
         )
         .expect_err("refused");
-        assert!(err.contains("outdir"), "{err}");
+        assert!(err.contains("outDir"), "{err}");
     }
 
     /// A document is not a library's entry: a published tree has no one root.
     #[test]
     fn a_library_rooted_at_a_document_is_refused() {
         let err = read(
-            r#"{"build": {"targets": {"std": {"entry": "index.html", "lib": true, "outdir": "dist"}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "index.html", "lib": true, "outDir": "dist"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("source directory"), "{err}");
@@ -2294,7 +2300,7 @@ mod tests {
     #[test]
     fn a_library_that_runs_afterwards_is_refused() {
         let err = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "then": "run"}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "then": "run"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("imported"), "{err}");
@@ -2305,48 +2311,48 @@ mod tests {
     #[test]
     fn an_unknown_format_is_named() {
         let err = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "umd"]}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "format": ["esm", "umd"]}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("umd"), "{err}");
         assert!(err.contains("\"cjs\""), "{err}");
 
         let twice = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "format": ["esm", "esm"]}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "format": ["esm", "esm"]}}}}"#,
         )
         .expect_err("refused");
         assert!(twice.contains("twice"), "{twice}");
     }
 
-    /// `"dts-bundle": true` needs an index to bundle from, and says so while
+    /// `"dtsBundle": true` needs an index to bundle from, and says so while
     /// naming what it looked for — resolved when the file is read rather than
     /// from inside a build, which is where the flag resolves it too.
     #[test]
     fn css_urls_is_a_library_key_with_two_values() {
         let parse = |text: &str| parse(text, PathBuf::from("/p"), "esdev.json");
         let project = parse(
-            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "css-urls": "inline"}}}}"#,
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outDir": "dist", "cssUrls": "inline"}}}}"#,
         )
         .expect("parse")
         .expect("a project");
         assert_eq!(project.targets[0].css_urls, CssUrls::Inline);
         let project = parse(
-            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist"}}}}"#,
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outDir": "dist"}}}}"#,
         )
         .expect("parse")
         .expect("a project");
         assert_eq!(project.targets[0].css_urls, CssUrls::Copy);
         let err = parse(
-            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outdir": "dist", "css-urls": "both"}}}}"#,
+            r#"{"build": {"targets": {"kit": {"entry": "src", "lib": true, "outDir": "dist", "cssUrls": "both"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains(r#"must be "copy" or "inline""#), "{err}");
         let err = parse(
-            r#"{"build": {"targets": {"app": {"entry": "src/a.js", "out": "dist/a.js", "css-urls": "copy"}}}}"#,
+            r#"{"build": {"targets": {"app": {"entry": "src/a.js", "out": "dist/a.js", "cssUrls": "copy"}}}}"#,
         )
         .expect_err("refused");
         assert!(
-            err.contains(r#"has `css-urls` without "lib": true"#),
+            err.contains(r#"has `cssUrls` without "lib": true"#),
             "{err}"
         );
     }
@@ -2354,7 +2360,7 @@ mod tests {
     #[test]
     fn dts_bundle_true_with_no_index_says_where_to_look() {
         let err = read(
-            r#"{"build": {"targets": {"std": {"entry": "nowhere", "lib": true, "outdir": "dist", "dts-bundle": true}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "nowhere", "lib": true, "outDir": "dist", "dtsBundle": true}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("index.ts"), "{err}");
@@ -2365,7 +2371,7 @@ mod tests {
     #[test]
     fn dts_bundle_takes_the_entry_it_is_given() {
         let project = read(
-            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outdir": "dist", "dts-bundle": "src/public.ts"}}}}"#,
+            r#"{"build": {"targets": {"std": {"entry": "src", "lib": true, "outDir": "dist", "dtsBundle": "src/public.ts"}}}}"#,
         )
         .expect("parsed");
         assert_eq!(
@@ -2467,7 +2473,7 @@ mod tests {
     #[test]
     fn targets_come_back_in_name_order() {
         let project = read(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts"}, "browser": {"entry": "c.tsx", "outdir": "dist/client", "platform": "browser"}}}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}, "browser": {"entry": "c.tsx", "outDir": "dist/client", "platform": "browser"}}}}"#,
         )
         .expect("parsed");
         let names: Vec<&str> = project.targets.iter().map(|t| t.name.as_str()).collect();
@@ -2479,10 +2485,10 @@ mod tests {
     /// error — and the message names the key it was nearly.
     #[test]
     fn a_mistyped_key_is_named_and_corrected() {
-        let err = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outDir": "dist"}}}}"#)
+        let err = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outDri": "dist"}}}}"#)
             .expect_err("refused");
-        assert!(err.contains("unknown key `outDir`"), "{err}");
-        assert!(err.contains("Did you mean `outdir`?"), "{err}");
+        assert!(err.contains("unknown key `outDri`"), "{err}");
+        assert!(err.contains("Did you mean `outDir`?"), "{err}");
 
         let top = read(r#"{ "builds": {} }"#).expect_err("refused");
         assert!(top.contains("Did you mean `build`?"), "{top}");
@@ -2493,14 +2499,14 @@ mod tests {
     #[test]
     fn out_and_outdir_are_not_both() {
         let err = read(
-            r#"{"build": {"targets": {"a": {"entry": "a.ts", "out": "d/a.js", "outdir": "d"}}}}"#,
+            r#"{"build": {"targets": {"a": {"entry": "a.ts", "out": "d/a.js", "outDir": "d"}}}}"#,
         )
         .expect_err("refused");
-        assert!(err.contains("both `out` and `outdir`"), "{err}");
+        assert!(err.contains("both `out` and `outDir`"), "{err}");
     }
 
     /// `out` naming a directory would produce a directory literally called
-    /// `dist`, and `outdir` naming a file the reverse.
+    /// `dist`, and `outDir` naming a file the reverse.
     #[test]
     fn the_output_shape_must_match_the_key() {
         let file = read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "out": "dist"}}}}"#)
@@ -2508,7 +2514,7 @@ mod tests {
         assert!(file.contains("names a directory"), "{file}");
 
         let dir =
-            read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outdir": "dist/a.js"}}}}"#)
+            read(r#"{"build": {"targets": {"a": {"entry": "a.ts", "outDir": "dist/a.js"}}}}"#)
                 .expect_err("refused");
         assert!(dir.contains("names a file"), "{dir}");
     }
@@ -2533,7 +2539,7 @@ mod tests {
     #[test]
     fn a_browser_target_cannot_be_run_after_the_build() {
         let err = read(
-            r#"{"build": {"targets": {"a": {"entry": "a.tsx", "outdir": "d", "platform": "browser", "then": "run"}}}}"#,
+            r#"{"build": {"targets": {"a": {"entry": "a.tsx", "outDir": "d", "platform": "browser", "then": "run"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("browser target"), "{err}");
@@ -2577,7 +2583,7 @@ mod tests {
     #[test]
     fn a_dev_target_is_a_target_the_dev_loop_owns() {
         let project = read(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"targets": {"render": {"entry": "render.ts", "out": "devserver/render.js"}}, "run": "render"}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"targets": {"render": {"entry": "render.ts", "out": "devserver/render.js"}}, "run": "render"}}"#,
         )
         .expect("read");
         let render = project
@@ -2606,7 +2612,7 @@ mod tests {
         );
 
         let then = read(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"targets": {"step": {"entry": "s.ts", "out": "x/s.js", "then": "run"}}}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"targets": {"step": {"entry": "s.ts", "out": "x/s.js", "then": "run"}}}}"#,
         )
         .expect_err("then on a target esdev build never builds");
         assert!(then.contains("`dev.targets.step` has `then`"), "{then}");
@@ -2634,8 +2640,60 @@ mod tests {
         )
         .expect("parsed")
         .start;
-        assert_eq!(start.listen, Some(8080));
-        assert_eq!(start.port, None);
+        assert_eq!(start.app_port, Some(8080));
+        assert_eq!(start.server_port, None);
+    }
+
+    /// A key in its pre-D232 spelling is refused by name, with the one it has
+    /// now — not accepted beside it, and not left to a "did you mean".
+    #[test]
+    fn a_renamed_target_key_names_its_new_spelling() {
+        for (old, new, rest) in [
+            ("outdir", "outDir", r#""entry": "index.html""#),
+            (
+                "dts-bundle",
+                "dtsBundle",
+                r#""entry": "src", "lib": true, "outDir": "dist""#,
+            ),
+            (
+                "css-urls",
+                "cssUrls",
+                r#""entry": "src", "lib": true, "outDir": "dist""#,
+            ),
+        ] {
+            let value = if old == "outdir" { r#""dist""# } else { "true" };
+            let err = read(&format!(
+                r#"{{"build": {{"targets": {{"t": {{{rest}, "{old}": {value}}}}}}}}}"#
+            ))
+            .expect_err("the old spelling");
+            assert!(
+                err.contains(&format!("has `{old}`, which is spelled `{new}`")),
+                "{err}"
+            );
+        }
+    }
+
+    /// Every message about `dev` names a key the file has: the section is read
+    /// as written, not translated into another vocabulary first (D232).
+    #[test]
+    fn dev_errors_name_the_keys_of_the_file() {
+        for (dev, named) in [
+            (r#"{"run": "server", "app": {"port": 0}}"#, "`dev.app.port`"),
+            (r#"{"server": {"port": 70000}}"#, "`dev.server.port`"),
+            (r#"{"run": 3}"#, "`dev.run`"),
+            (r#"{"serve": 3}"#, "`dev.serve`"),
+            (r#"{"watch": {"targets": ["nope"]}}"#, "`dev.watch.targets`"),
+            (r#"{"outDir": ""}"#, "`dev.outDir`"),
+        ] {
+            let err = read(&format!(
+                r#"{{"build": {{"targets": {{"server": {{"entry": "s.ts"}}}}}}, "dev": {dev}}}"#
+            ))
+            .expect_err(dev);
+            assert!(err.contains(named), "{dev}: {err}");
+            for internal in ["`listen`", "`devdir`", "`port`", "`watch`"] {
+                assert!(!err.contains(internal), "{dev}: {err}");
+            }
+        }
     }
 
     /// The dev loop writes into `.dev` unless the file says otherwise, and the
@@ -2647,14 +2705,14 @@ mod tests {
             r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}}"#,
         )
         .expect("parsed");
-        assert_eq!(silent.start.devdir(), DEFAULT_DEV_DIR);
-        assert_eq!(silent.start.devdir, None);
+        assert_eq!(silent.start.out_dir(), DEFAULT_DEV_DIR);
+        assert_eq!(silent.start.out_dir, None);
 
         let named = read(
             r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}}}, "dev": {"outDir": "tmp-dev"}}"#,
         )
         .expect("parsed");
-        assert_eq!(named.start.devdir(), "tmp-dev");
+        assert_eq!(named.start.out_dir(), "tmp-dev");
 
         // Each overlap in turn: the output itself, the directory holding it,
         // and a directory beneath an output directory. All three would put
@@ -2672,7 +2730,7 @@ mod tests {
         assert!(err.contains("overlaps"), "{err}");
 
         let err = read(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outdir": "dist"}}}, "dev": {"outDir": "dist/dev"}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"outDir": "dist/dev"}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("overlaps"), "{err}");
@@ -2727,11 +2785,11 @@ mod tests {
         .expect("parsed");
         assert_eq!(project.targets[0].name, "server");
         assert_eq!(project.start.run.as_deref(), Some("server"));
-        assert_eq!(project.start.listen, Some(8080));
-        assert_eq!(project.start.watch, ["server"]);
+        assert_eq!(project.start.app_port, Some(8080));
+        assert_eq!(project.start.watch_targets, ["server"]);
         assert_eq!(project.watch_paths, ["./config"]);
         assert_eq!(project.alias[0].0, "@");
-        assert_eq!(project.start.devdir(), ".work");
+        assert_eq!(project.start.out_dir(), ".work");
 
         let err = read(r#"{ "permissions": { "allow": { "net": true } } }"#)
             .expect_err("permission block refused");
@@ -2744,7 +2802,7 @@ mod tests {
             }"#,
         )
         .expect("static dev server config");
-        assert_eq!(static_site.start.port, Some(5174));
+        assert_eq!(static_site.start.server_port, Some(5174));
 
         // Longest prefix first, so `/api/admin` is not taken by `/api`.
         let proxy = read(

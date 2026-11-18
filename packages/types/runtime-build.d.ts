@@ -238,7 +238,7 @@ declare module "runtime:build" {
   export interface FinishedTarget {
     readonly platform: "browser" | "server";
     /**
-     * The absolute staged directory the target was written to: its `outdir`,
+     * The absolute staged directory the target was written to: its `outDir`,
      * or the directory of its `out` file.
      */
     readonly outDir: string;

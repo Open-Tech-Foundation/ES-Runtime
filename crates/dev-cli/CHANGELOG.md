@@ -28,6 +28,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **Breaking: every `esdev.json` key is camelCase** (DECISIONS D232). A
+  target's `outdir` is `outDir` — the spelling `dev.outDir` already had —
+  `dts-bundle` is `dtsBundle` and `css-urls` is `cssUrls`. The old spellings
+  are refused with the new one named: `target "web" has \`outdir\`, which is
+  spelled \`outDir\``. Flags keep their kebab-case (`--dts-bundle`,
+  `--css-urls`). Every message about `dev` names a key the file has: the
+  section was read by translating it into an older vocabulary first.
 - **A `"then": "run"` step is no longer left in the build output.** A release
   build removes the step's own bundle (and its source map) once it has run and
   every plugin's `finish` has seen it; what the step wrote stays. The React

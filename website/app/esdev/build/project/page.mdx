@@ -50,7 +50,7 @@ site may also need a prerender target that runs after the bundles are built.
     "targets": {
       "server":    { "entry": "src/server.ts", "out": "dist/server.js",
                      "assets": ["index.html", "public"] },
-      "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
+      "browser":   { "entry": "src/entry.client.tsx", "outDir": "dist/client",
                      "platform": "browser" },
       "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
                      "then": "run" }
@@ -71,15 +71,15 @@ esdev build src/app.ts           # one-off entry; project source settings still 
 | --- | --- |
 | `entry` | The module the bundle is rooted at — or an `.html` file ([browser builds](/esdev/build/browser)) |
 | `out` | One file |
-| `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
+| `outDir` | A directory — what a browser target needs, since chunks land beside the entry |
 | `platform` | `server` (default) or `browser` |
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
 | `then` | `"run"` — execute the output once every target is built. A release build removes the step's own bundle afterwards and keeps what it wrote, so a prerender script is never deployed beside the pages it rendered |
 | `lib` | `true` — publish a library instead of deploying a bundle ([libraries](/esdev/build/library)) |
 | `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
 | `types` | `false` — skip declarations |
-| `dts-bundle` | `true`, or the entry to link from |
-| `css-urls` | A library stylesheet's `url()` files: `"copy"` (default) or `"inline"` |
+| `dtsBundle` | `true`, or the entry to link from |
+| `cssUrls` | A library stylesheet's `url()` files: `"copy"` (default) or `"inline"` |
 | `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
 
 `resolve.alias` is a project-level setting shared by targets and source
@@ -215,7 +215,7 @@ Plugins are declared once, at the top level, and every command loads them:
   "build": {
     "targets": {
       "server": { "entry": "src/server.tsx", "out": "dist/server.js" },
-      "web": { "entry": "index.html", "outdir": "dist" }
+      "web": { "entry": "index.html", "outDir": "dist" }
     }
   }
 }
@@ -266,7 +266,7 @@ run.
 | Stack | Targets |
 | --- | --- |
 | Backend | One `out` file |
-| Frontend (SSG/SPA) | A browser `outdir`, plus a prerender target with `then: "run"` |
+| Frontend (SSG/SPA) | A browser `outDir`, plus a prerender target with `then: "run"` |
 | Fullstack | Both |
 
 A plugin's [`finish`](/esdev/plugins/lifecycle#finish-after-the-whole-build)
@@ -284,9 +284,9 @@ output path is mirrored under one staging directory beside the project
 has succeeded does anything move into place, so a failed build leaves the last
 working deployment whole.
 
-A whole-project `esdev build` replaces each `outdir`, so stale content-hashed
+A whole-project `esdev build` replaces each `outDir`, so stale content-hashed
 files cannot accumulate. The following are overlaid instead: a selected
-`--target`, `esdev start`, and an `out` file's containing directory. An `outdir`
+`--target`, `esdev start`, and an `out` file's containing directory. An `outDir`
 that holds the project itself is refused.
 
 ## Configuration location
