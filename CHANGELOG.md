@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-18
+
 ### Fixed
 
 - **Filesystem calls are fast again** (DECISIONS D229). Since 0.47.0 every

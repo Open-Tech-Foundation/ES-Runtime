@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-18
+
 ### Fixed
 
 - `FsFile.type` is declared: the media type a file's extension names, which the

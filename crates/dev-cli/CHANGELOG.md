@@ -26,6 +26,8 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-18
+
 ### Changed
 
 - **The development default reaches the whole filesystem** (DECISIONS D233).

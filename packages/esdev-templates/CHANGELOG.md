@@ -11,6 +11,8 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 ### Changed
 
 - Every template's `esdev.json` writes `outDir`, the camelCase spelling esdev

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-18
+
 ### Changed
 
 - The README's `esdev.json` example writes a target's output directory as
