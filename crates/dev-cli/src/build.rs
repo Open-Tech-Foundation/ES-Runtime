@@ -2511,6 +2511,9 @@ async fn build_targets(
     let mut finished = Vec::with_capacity(selected.len());
     // And what each server target wrote, for the dev loop (D219).
     let mut servers = Vec::new();
+    // And what each `"then": "run"` step wrote, relative to the project: a
+    // step is part of making the build, not part of what it made.
+    let mut steps: Vec<PathBuf> = Vec::new();
     for target in selected {
         // Where this build is, for the plugins to read (D148). Hot only for a
         // browser build in a hot loop: that is the one a page is running and
@@ -2656,6 +2659,14 @@ async fn build_targets(
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
+        if target.run_after_build {
+            for output in &built.produced {
+                let (crate::contract::Output::Chunk { file_name, .. }
+                | crate::contract::Output::Asset { file_name }) = output;
+                steps.push(placed_dir.join(file_name));
+                steps.push(placed_dir.join(format!("{file_name}.map")));
+            }
+        }
         if platform.name() == "server" {
             // A chunk's map is written beside it whether or not the bundler
             // lists it, and it changes whenever the chunk does.
@@ -2746,7 +2757,47 @@ async fn build_targets(
             .await
             .map_err(|e| staging.reveal(&e))?;
     }
+    // A step's own bundle is a tool the build ran, not a file it made: a
+    // prerender script written into `dist` would be deployed beside the pages
+    // it rendered — the whole server-side render, source maps and all, on a
+    // public static host. What the step wrote stays; the step goes, once
+    // `finish` has seen the build whole. A release build only: the dev loop's
+    // output is not deployed, and `dev.run` may be running it.
+    if project.dev.is_none() {
+        remove_steps(&steps, staging, &settings.source.root)?;
+    }
     Ok(servers)
+}
+
+/// Removes the bundles of the build's `"then": "run"` steps from `staging`,
+/// and the copy a build before this one left in place, and any directory of
+/// staging that held nothing else.
+fn remove_steps(
+    steps: &[PathBuf],
+    staging: &crate::staging::Staging,
+    root: &Path,
+) -> Result<(), String> {
+    for step in steps {
+        for base in [staging.path(""), root.to_path_buf()] {
+            let path = base.join(step);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("cannot remove {}: {e}", path.display())),
+            }
+            // Empty now, a directory only the step wrote into goes with it —
+            // up to, never including, the base. `remove_dir` refuses one that
+            // still holds anything.
+            let mut dir = path.parent().map(Path::to_path_buf);
+            while let Some(at) = dir {
+                if at == base || !at.starts_with(&base) || std::fs::remove_dir(&at).is_err() {
+                    break;
+                }
+                dir = at.parent().map(Path::to_path_buf);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Calls every plugin's `finish`: `pre`, then unordered, then `post`, each

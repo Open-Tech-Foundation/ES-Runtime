@@ -10592,13 +10592,88 @@ fn build_with_no_entry_builds_every_target_in_the_project() {
         "{}",
         stdout(&out)
     );
-    assert!(dir.join("dist/prerender.js").exists(), "{}", stdout(&out));
 
     // `then: run` executed the bundle it just built, and the file that step
     // wrote landed beside it — the runtime resolves a relative path against the
     // entry module's directory, which is what makes `dist/` the deployment.
     assert!(dir.join("dist/about.html").exists(), "{}", stdout(&out));
     assert!(stdout(&out).contains("ran → "), "{}", stdout(&out));
+    // The step itself is not deployed: it is the tool that made the page.
+    assert!(!dir.join("dist/prerender.js").exists(), "{}", stdout(&out));
+}
+
+/// A `"then": "run"` step is part of making a build, not part of what it
+/// made: its bundle and source map are gone once it has run — from an `out`
+/// inside the deployed directory, and from a directory of its own, which is
+/// not left behind empty. What it wrote stays, and a plugin's `finish` still
+/// sees the step among the targets.
+#[test]
+fn a_build_step_is_not_left_in_the_output() {
+    let dir = build_dir("b_step_gone");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.ts", "console.log('app');\n");
+    write_in(
+        &dir,
+        "src/prerender.ts",
+        "import { write } from 'runtime:fs';\nawait write('page.html', '<h1>page</h1>');\n",
+    );
+    write_in(
+        &dir,
+        "src/report.ts",
+        "import { write } from 'runtime:fs';\nawait write('../dist/report.txt', 'reported');\n",
+    );
+    write_in(
+        &dir,
+        "seen.mjs",
+        "import { write } from 'runtime:fs';\n\
+         export default { name: 'seen', finish: { async handler(targets) {\n\
+           await write(targets.web.outDir + '/seen.txt', Object.keys(targets).sort().join(','));\n\
+         } } };\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"plugins": ["./seen.mjs"],
+            "build": {"targets": {
+              "web": {"entry": "src/app.ts", "outdir": "dist"},
+              "prerender": {"entry": "src/prerender.ts", "out": "dist/prerender.js", "then": "run", "sourcemap": true},
+              "report": {"entry": "src/report.ts", "out": ".steps/report.js", "then": "run"}
+            }}}"#,
+    );
+    // What a build before this one left, as every build before this fix did.
+    std::fs::create_dir_all(dir.join(".steps")).expect("create .steps");
+    write_in(&dir, ".steps/report.js", "stale\n");
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/page.html")).expect("the page"),
+        "<h1>page</h1>"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/report.txt")).expect("the report"),
+        "reported"
+    );
+    for step in [
+        "dist/prerender.js",
+        "dist/prerender.js.map",
+        ".steps/report.js",
+    ] {
+        assert!(!dir.join(step).exists(), "{step} was left in place");
+    }
+    assert!(
+        !dir.join(".steps").exists(),
+        "an empty step directory was left"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/seen.txt")).expect("finish ran"),
+        "prerender,report,web"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file is copied by name and a directory by its *contents*, so

@@ -74,7 +74,7 @@ esdev build src/app.ts           # one-off entry; project source settings still 
 | `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
 | `platform` | `server` (default) or `browser` |
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
-| `then` | `"run"` — execute the output once built |
+| `then` | `"run"` — execute the output once every target is built. A release build removes the step's own bundle afterwards and keeps what it wrote, so a prerender script is never deployed beside the pages it rendered |
 | `lib` | `true` — publish a library instead of deploying a bundle ([libraries](/esdev/build/library)) |
 | `format` | A library's module systems: `"esm"`, `"cjs"`, or both as a list |
 | `types` | `false` — skip declarations |

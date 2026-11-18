@@ -4875,3 +4875,13 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 `fsread_large` and `glob` did not move. One `exists("f.txt")` is now four syscalls: the root's `openat` and `close`, the plain-path `lstat`, and the operation's own `newfstatat`. **Left for later:** holding the root open for the life of the jail would drop the first two, but it changes what a run does when its project directory is replaced underneath it, which deserves a decision of its own.
 
 **Consequences:** a plain path costs the walk plus one `lstat`; one with a symlink costs one walk more than today before it falls back. Windows is unchanged — it has no `*at` family and keeps the path-based arm. Verified by unit tests for each case that must fall back, end-to-end tests that the refusals read as before, and the race tests `4dfe582a` added; measured by the benchmark rows above.
+
+### D230 — A `"then": "run"` step is not part of the build's output · *Accepted (2026-11-19)* · *amends D153*
+
+**Context:** the React static template's prerender target is `"out": "dist/prerender.js", "then": "run"` — beside the pages so that `import.meta.url` finds `dist/index.html`. The build ran it and left it there, and `dist` is what a static host serves: the whole server-side render (211 KB, with a source map when asked) was published beside the pages it rendered. Writing the step somewhere else only moves the leftover (the site's own `.ssg/ssg.js`); a template, an AFW plugin or a user can each put one back into `dist`.
+
+**Decision:** a step is a tool the build ran, not a file it made. A release build removes each `"then": "run"` target's own outputs — every chunk and asset its bundle produced, and their `.map`s — **after** every plugin's `finish` has run, so `finish` sees the build whole and the step among its targets (D153), and **before** staging commits. What the step wrote stays. A directory only the step wrote into is removed with it, in staging and on disk, never past the project root; so is the copy an earlier build left at the same path. The dev loop keeps it: its output is not deployed, and `dev.run` may be running it.
+
+**Rejected:** refusing a step whose `out` is inside another target's `outdir` — it pushes every template and framework to invent a scratch location and a way back to the pages, and the leftover survives there anyway. Removing the step before `finish` — a plugin reading what the step produced would break.
+
+**Consequences:** `dist` holds what is deployed and nothing that made it. A step that wants a file kept writes it.

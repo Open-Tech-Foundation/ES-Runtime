@@ -177,7 +177,8 @@ is added after every plugin. The rest of the document is left byte for byte.
 `finish` runs once per `esdev build`, after every target is built and every
 `"then": "run"` step has run, and before anything moves into place. It is where
 output that needs the whole build goes: prerendered pages, a sitemap, a search
-index.
+index. A step's own bundle is still in place for `finish` to read; it is
+removed after `finish` returns, and is never deployed.
 
 ```js
 import { write } from "runtime:fs";

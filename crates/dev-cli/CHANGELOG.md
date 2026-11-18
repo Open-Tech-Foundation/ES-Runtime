@@ -26,6 +26,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Changed
+
+- **A `"then": "run"` step is no longer left in the build output.** A release
+  build removes the step's own bundle (and its source map) once it has run and
+  every plugin's `finish` has seen it; what the step wrote stays. The React
+  static template's `dist/prerender.js` — the whole server-side render — was
+  deployed beside the pages it rendered, on a public static host. A directory
+  only the step wrote into goes too, and so does the copy an earlier build left.
+
 ### Fixed
 
 - **A cold `esdev test` no longer fails at random on a CommonJS dependency.**
