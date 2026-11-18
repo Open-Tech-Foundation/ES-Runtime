@@ -9,5 +9,12 @@
         "outDir": "dist"
       }
     }
+  },
+  "dev": {
+    "servers": {
+      "web": {
+        "port": 5173
+      }
+    }
   }
 }

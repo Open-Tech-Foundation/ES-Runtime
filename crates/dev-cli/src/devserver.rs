@@ -663,7 +663,7 @@ async fn respond_build_failed(stream: &mut TcpStream, head_only: bool, failed: F
          </head>\n<body>\n<main>\n<h1>Build failed &#8212; fix and save</h1>\n\
          <pre id=\"__esdev_err_pre\">{message}</pre>\n</main>\n\
          <script>(function(){{var wait=250;function open(){{\
-         var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
+         var s=new WebSocket((location.protocol===\"https:\"?\"wss://\":\"ws://\")+location.hostname+\":{port}{path}\");\
          s.onopen=function(){{wait=250;}};\
          s.onmessage=function(e){{var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
          if(m.type===\"error\"){{document.getElementById(\"__esdev_err_pre\").textContent=m.message||\"\";return;}}\
@@ -1069,6 +1069,17 @@ pub fn address(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
+/// [`address`], or every interface when the developer opened it with
+/// `esdev start --host` — for a phone on the same network, or a container
+/// whose port is forwarded (D235). Asked for, never defaulted.
+pub fn listen_address(open: bool, port: u16) -> SocketAddr {
+    if open {
+        SocketAddr::from(([0, 0, 0, 0], port))
+    } else {
+        address(port)
+    }
+}
+
 /// A string, as a JSON string body.
 ///
 /// The two characters that end a JSON string early, plus the control range that
@@ -1127,6 +1138,22 @@ pub(crate) fn strip_ansi(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// esdev's listeners are loopback unless `--host` opens them, and then
+    /// every interface — asked for, never defaulted (D235).
+    #[test]
+    fn listeners_are_loopback_unless_opened() {
+        assert_eq!(
+            listen_address(false, 5173),
+            SocketAddr::from(([127, 0, 0, 1], 5173))
+        );
+        assert_eq!(
+            listen_address(true, 5173),
+            SocketAddr::from(([0, 0, 0, 0], 5173))
+        );
+        assert_eq!(listen_address(false, 5173), address(5173));
+    }
+
     use super::*;
 
     #[test]

@@ -49,5 +49,12 @@
         "then": "run"
       }
     }
+  },
+  "dev": {
+    "servers": {
+      "web": {
+        "port": 5173
+      }
+    }
   }
 }

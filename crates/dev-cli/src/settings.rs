@@ -160,7 +160,7 @@ impl Settings {
     /// `--allow-read` adds paths for the dev loop to watch.
     pub fn with_start(mut self, port: Option<u16>, watch_paths: Vec<String>) -> Settings {
         if let Some(port) = port {
-            self.start.server_port = Some(port);
+            self.start.pinned_port = Some(port);
         }
         self.watch_paths.extend(watch_paths);
         self
@@ -484,16 +484,16 @@ mod tests {
     #[test]
     fn start_flags_replace_the_port_and_add_watch_paths() {
         let mut settings = Settings::empty(PathBuf::from("/p"));
-        settings.start.server_port = Some(3000);
+        settings.start.pinned_port = Some(3000);
         settings.watch_paths = vec!["--allow-read=./assets".to_string()];
         let settings = settings.with_start(Some(4000), vec!["--allow-read=./data".to_string()]);
-        assert_eq!(settings.start.server_port, Some(4000));
+        assert_eq!(settings.start.pinned_port, Some(4000));
         assert_eq!(
             settings.watch_paths,
             ["--allow-read=./assets", "--allow-read=./data"]
         );
         let kept = Settings::empty(PathBuf::from("/p")).with_start(None, Vec::new());
-        assert_eq!(kept.start.server_port, None);
+        assert_eq!(kept.start.pinned_port, None);
     }
 
     /// A library target is built with no alias, whatever the project says.

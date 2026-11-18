@@ -19,15 +19,10 @@
     }
   },
   "dev": {
-    "run": "server",
-    "watch": {
-      "targets": [
-        "server",
-        "web"
-      ]
-    },
-    "app": {
-      "port": 3000
+    "servers": {
+      "server": {
+        "port": 3000
+      }
     }
   }
 }

@@ -26,6 +26,25 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: `dev.servers` is what `esdev start` runs and serves** (DECISIONS
+  D235). One entry per service, on its own port, as in production. An entry
+  naming an HTML target is served by esdev, with an `index.html` fallback and
+  its `proxy` — the production gateway's routes, `"/api": "api"` or a URL. An
+  entry naming a server target is run with `PORT` and restarted when it
+  changes. Every project that starts has the key, a frontend too.
+  `dev.run`, `dev.app`, `dev.server` and `dev.serve` are refused, each with the
+  `dev.servers` the file means printed as the fix. `esdev init` and the bare
+  scaffolds write it.
+- **A proxied request waits for a server that is restarting.** A save used to
+  answer a request for the restarting server with `502`; it now waits for the
+  server to listen again, and a `GET`, `HEAD` or `OPTIONS` the old process
+  closed unanswered is sent to the new one.
+- **The update channel follows the page's host**, so a phone on your network or
+  a forwarded port gets hot updates; `esdev start --host` opens esdev's own
+  listeners to the network. They stay on loopback otherwise.
+
 ## [0.29.0] - 2026-11-18
 
 ### Changed

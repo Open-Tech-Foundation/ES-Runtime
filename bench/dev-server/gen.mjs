@@ -118,7 +118,7 @@ fs.writeFileSync(
   JSON.stringify(
     {
       build: { targets: { web: { entry: "index.html", outDir: "dist" } } },
-      dev: { watch: { targets: ["web"] } },
+      dev: { servers: { web: {} }, watch: { targets: ["web"] } },
     },
     null,
     2

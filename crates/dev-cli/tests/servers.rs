@@ -41,10 +41,10 @@ fn project(name: &str) -> PathBuf {
               "jobs": { "entry": "src/worker.mjs", "out": "dist/jobs.js" } } },
             "dev": {
               "servers": {
+                "web": { "proxy": { "/api": "api" } },
                 "api": { "env": { "ROLE": "public" } },
                 "worker": { "target": "jobs", "after": ["api"],
-                            "env": { "ROLE": "background", "FAIL_AFTER": "1500" } } },
-              "server": { "proxy": { "/api": "api" } } } }"#,
+                            "env": { "ROLE": "background", "FAIL_AFTER": "1500" } } } } }"#,
     )
     .expect("write the config");
     dir

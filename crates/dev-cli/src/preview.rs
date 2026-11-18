@@ -114,7 +114,7 @@ pub async fn run(config: PreviewConfig) -> Result<(), String> {
         serve: Some(dir.clone()),
         reload,
         error,
-        proxy: crate::proxy::Rule::from_config(&project.start.proxy, None),
+        proxy: crate::proxy::Rule::from_config(project.start.proxy(), None),
         trust: es_runtime_default_providers::TrustStore::load(&config.tls_ca)?
             .with_crl_files(&config.tls_crl)?,
         miss: if config.spa {
@@ -167,26 +167,23 @@ fn miss_line(spa: bool, has_404_page: bool) -> &'static str {
 
 /// The directory a project's build wrote.
 ///
-/// The same answer `esdev start` gives when it has no server to run
-/// ([`crate::start`]), and deliberately the same rules: `start.serve` if the
-/// file says, otherwise the one HTML target's output. A project **with** a
-/// server target is the case that differs — the dev loop runs that server, and
+/// The release build of what `esdev start` serves: the HTML target its web
+/// entry names (D235), or — without one — the project's one HTML target. A
+/// server target is the case that differs: the dev loop runs that server, and
 /// a preview cannot, because what it would be running is a production artifact
 /// that belongs under `esrun`.
 fn directory(project: &crate::settings::Settings) -> Result<PathBuf, String> {
-    if let Some(serve) = &project.start.serve {
-        return Ok(project.source.root.join(serve));
-    }
+    let named = project.start.web.as_ref().map(|web| web.target.as_str());
     // What `esdev build` wrote: never a `dev.targets` output (D224).
-    let mut html = project
-        .targets
-        .iter()
-        .filter(|target| target.is_html() && !target.dev_only);
+    let mut html = project.targets.iter().filter(|target| {
+        target.is_html() && !target.dev_only && named.is_none_or(|name| target.name == name)
+    });
     let Some(first) = html.next() else {
         let server = project
             .start
-            .run
-            .as_deref()
+            .servers
+            .first()
+            .map(|server| server.target.as_str())
             .or_else(|| project.targets.first().map(|target| target.name.as_str()));
         return Err(match server {
             Some(name) => format!(
@@ -265,12 +262,13 @@ mod tests {
     /// site", and a preview that ignored it would disagree with the dev loop
     /// about the same project.
     #[test]
-    fn start_serve_wins() {
+    fn the_web_entrys_target_is_what_gets_previewed() {
         let found = directory(&project(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"serve": "public"}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}, "docs": {"entry": "docs.html", "outDir": "dist-docs"}}},
+                "dev": {"servers": {"site": {"target": "docs"}}}}"#,
         ))
         .expect("a directory");
-        assert_eq!(found, PathBuf::from("/p/public"));
+        assert_eq!(found, PathBuf::from("/p/dist-docs"));
     }
 
     /// A server bundle is run, not served — and by `esrun`, which is what will

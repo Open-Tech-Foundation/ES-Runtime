@@ -454,7 +454,7 @@ fn detect_entry(target: &Path) -> Option<String> {
 fn manifest_for(entry: &str) -> String {
     if crate::config::is_html_entry(entry) {
         return format!(
-            "{{\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outDir\": \"dist\"\n      }}\n    }}\n  }}\n}}\n"
+            "{{\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outDir\": \"dist\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"web\": {{\n        \"port\": 5173\n      }}\n    }}\n  }}\n}}\n"
         );
     }
     let stem = Path::new(entry)
@@ -462,7 +462,7 @@ fn manifest_for(entry: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("index");
     format!(
-        "{{\n  \"build\": {{\n    \"targets\": {{\n      \"server\": {{\n        \"entry\": \"{entry}\",\n        \"out\": \"dist/{stem}.js\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"run\": \"server\"\n  }}\n}}\n"
+        "{{\n  \"build\": {{\n    \"targets\": {{\n      \"server\": {{\n        \"entry\": \"{entry}\",\n        \"out\": \"dist/{stem}.js\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"server\": {{\n        \"port\": 3000\n      }}\n    }}\n  }}\n}}\n"
     )
 }
 
@@ -614,7 +614,7 @@ mod tests {
         let server = manifest_for("src/server.ts");
         assert!(server.contains("\"entry\": \"src/server.ts\""), "{server}");
         assert!(server.contains("\"out\": \"dist/server.js\""), "{server}");
-        assert!(server.contains("\"run\": \"server\""), "{server}");
+        assert!(server.contains("\"servers\""), "{server}");
 
         // Parses as the config it will be read as.
         for manifest in [web, server] {

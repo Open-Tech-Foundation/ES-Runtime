@@ -130,9 +130,9 @@ fn server_project(devdir: Option<&str>) -> String {
     let listen = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
     let start = match devdir {
         Some(dev) => format!(
-            r#""dev": {{ "run": "server", "app": {{ "port": {listen} }}, "outDir": "{dev}" }}"#
+            r#""dev": {{ "servers": {{ "server": {{ "port": {listen} }} }}, "outDir": "{dev}" }}"#
         ),
-        None => format!(r#""dev": {{ "run": "server", "app": {{ "port": {listen} }} }}"#),
+        None => format!(r#""dev": {{ "servers": {{ "server": {{ "port": {listen} }} }} }}"#),
     };
     format!(
         r#"{{ "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
@@ -184,7 +184,7 @@ fn the_dev_child_uses_esdev_permissions_not_the_configured_production_grant() {
         &format!(
             r#"{{
               "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
-              "dev": {{ "run": "server", "app": {{ "port": {listen} }} }}
+              "dev": {{ "servers": {{ "server": {{ "port": {listen} }} }} }}
             }}"#
         ),
     );
@@ -277,7 +277,7 @@ fn the_loop_skips_run_after_build_steps() {
             r#"{{ "build": {{ "targets": {{
                     "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }},
                     "prerender": {{ "entry": "src/prerender.ts", "out": "gen/prerender.js", "then": "run" }} }} }},
-                  "dev": {{ "run": "server", "app": {{ "port": {listen} }} }} }}"#
+                  "dev": {{ "servers": {{ "server": {{ "port": {listen} }} }} }} }}"#
         ),
     );
     std::fs::write(
@@ -308,7 +308,7 @@ fn dev_only_project(name: &str, listen: u16) -> PathBuf {
             r#"{{ "build": {{ "targets": {{
                     "prerender": {{ "entry": "src/prerender.ts", "out": "gen/prerender.js", "then": "run" }} }} }},
                   "dev": {{ "targets": {{ "render": {{ "entry": "src/server.ts", "out": "devserver/render.js" }} }},
-                           "run": "render", "app": {{ "port": {listen} }} }} }}"#
+                           "servers": {{ "render": {{ "port": {listen} }} }} }} }}"#
         ),
     );
     std::fs::write(
@@ -388,7 +388,7 @@ fn the_loop_never_calls_finish() {
         &format!(
             r#"{{ "plugins": ["./finish.mjs"],
                   "build": {{ "targets": {{ "server": {{ "entry": "src/server.ts", "out": "dist/server.js" }} }} }},
-                  "dev": {{ "run": "server", "app": {{ "port": {listen} }} }} }}"#
+                  "dev": {{ "servers": {{ "server": {{ "port": {listen} }} }} }} }}"#
         ),
     );
     std::fs::write(
@@ -596,7 +596,7 @@ fn a_failed_first_build_is_not_called_ready() {
 fn a_page_with_nothing_built_shows_the_build_failure() {
     let dir = project(
         "failure-page",
-        r#"{ "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } } }"#,
+        r#"{ "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } }, "dev": { "servers": { "web": {} } } }"#,
     );
     std::fs::write(
         dir.join("index.html"),
@@ -666,7 +666,8 @@ fn a_page_asked_for_during_the_first_build_waits_for_it() {
     let dir = project(
         "early-request",
         r#"{ "plugins": ["./slow.mjs"],
-             "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } } }"#,
+             "build": { "targets": { "web": { "entry": "index.html", "outDir": "dist" } } },
+             "dev": { "servers": { "web": {} } } }"#,
     );
     std::fs::write(
         dir.join("index.html"),

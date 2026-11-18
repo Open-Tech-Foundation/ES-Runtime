@@ -353,7 +353,7 @@ OPTIONS:
     --spa                       Answer a missing path that looks like a route
                                 with index.html, for a client-side router
     --tls-ca=<file|bundled>     Trust exactly these CAs for an https
-                                dev.server.proxy target (repeatable)
+                                `proxy` target (repeatable)
     --tls-crl=<file>            Check that target against these CRLs
     -h, --help                  Show this help
 
@@ -537,17 +537,21 @@ USAGE:
                                 keep both current
 
 OPTIONS:
-    --port=<n>                  The port you open, and it gets that one or
-                                fails. Without it: the app's `dev.app.port`,
-                                or 5173 for a frontend project — and any free
-                                port if that is taken, printed when it moves
+    --port=<n>                  The port of the one `dev.servers` entry, and it
+                                gets that one or fails. Without it: the entry's
+                                `port` — and any free port if that is taken,
+                                printed when it moves
+    --host                      Open esdev's own listeners — the page it
+                                serves, and the update channel — to the
+                                network, for a phone or a container; loopback
+                                otherwise
     --no-hot                    Reload the page on a change instead of patching
                                 the changed module into it
     --config=<path>             Read this instead of ./esdev.json
     --allow-read=<paths>        Also watch these paths for changes
     --shutdown-grace=<ms>       How long the server may drain on a restart
     --tls-ca=<file|bundled>     Trust exactly these CAs, in the server and for
-                                an https dev.server.proxy target (repeatable)
+                                an https `proxy` target (repeatable)
     --tls-crl=<file>            Check servers against these CRLs (repeatable)
     --proxy=<url>               The server's outbound proxy (default:
                                 HTTPS_PROXY/HTTP_PROXY)
@@ -558,13 +562,20 @@ It is `esdev build` on a loop. A dev build differs from a release build in
 exactly two ways — process.env.NODE_ENV is \"development\", and nothing is
 content-hashed. A build that fails leaves everything running.
 
-The server is yours: `\"dev\": { \"run\": \"server\" }` names the target whose
-output esdev runs as a child process with esdev's normal development
-permissions, and restarts with a SIGTERM — the same graceful stop production
-gets. Declare its default port with `dev.app.port`; esdev passes a selected
-free port through `PORT`. It is the same file production runs; nothing wraps
-it. A project with no server of its own is served from its output directory
-instead, with an index.html fallback.
+`dev.servers` is what runs, one entry per service on its own port, as in
+production:
+
+    \"dev\": { \"servers\": {
+      \"web\": { \"port\": 5173, \"proxy\": { \"/api\": \"api\" } },
+      \"api\": { \"port\": 3000 }
+    } }
+
+An entry naming an HTML target is served by esdev, with an index.html
+fallback; its `proxy` is the production gateway's routes. An entry naming a
+server target is yours: esdev runs its output as a child process with esdev's
+normal development permissions, hands it `PORT`, and restarts it with a
+SIGTERM — the same graceful stop production gets. It is the same file
+production runs; nothing wraps it.
 
     The dev loop:  https://esrun.opentechf.org/esdev/start
 ";
@@ -1576,6 +1587,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
     let mut hot = true;
+    let mut host = false;
     let mut options = RunOptions::default();
     let mut watch_paths = Vec::new();
     for arg in args {
@@ -1601,6 +1613,10 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
             "--no-hot" => {
                 reject_value(flag, value)?;
                 hot = false;
+            }
+            "--host" => {
+                reject_value(flag, value)?;
+                host = true;
             }
             "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--port" => {
@@ -1636,7 +1652,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                 "esdev start needs an {0}, and there is none here.\n\n\
              It describes what this project builds and what to run:\n\n  \
              {{ \"build\": {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }} }},\n    \
-             \"dev\": {{ \"run\": \"server\" }} }}\n\n\
+             \"dev\": {{ \"servers\": {{ \"server\": {{ \"port\": 3000 }} }} }} }}\n\n\
              See `esdev build --help` for the rest of {0}.",
                 config::FILE_NAME
             ));
@@ -1650,6 +1666,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         tls_crl: options.tls_crl,
         proxy: options.proxy,
         no_proxy: options.no_proxy,
+        host,
     })
 }
 

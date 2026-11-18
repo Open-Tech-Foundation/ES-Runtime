@@ -11,8 +11,8 @@
 //!
 //! # What runs the app is the app
 //!
-//! For a fullstack or backend project, `dev.run` names the target whose
-//! output is the server, and that output is run as a child process with esdev's
+//! For a fullstack or backend project, a `dev.servers` entry names the target
+//! whose output is the server, and that output is run as a child process with esdev's
 //! normal development permissions. **It is the same file production runs**, on
 //! the same runtime, under the same capability model — there is no development
 //! server standing in for it, no middleware wrapping it, and no second code
@@ -53,7 +53,7 @@
 //!
 //! Before this, `--port` was the endpoint's in every case and only the endpoint
 //! moved. Two projects open in two terminals both ran their server on whatever
-//! `dev.app.port` named, so the second one died on a bound port — on a number
+//! the file named, so the second one died on a bound port — on a number
 //! the developer had not chosen and had no reason to be thinking about, with the
 //! one flag named after ports pointing somewhere else.
 
@@ -95,24 +95,52 @@ const DEFAULT_PORT: u16 = 5173;
 ///
 /// `--port=0` asks for the second behaviour explicitly, and is what a script
 /// that reads the printed URL should pass.
-fn bind(wanted: Option<u16>) -> Result<(std::net::TcpListener, u16), String> {
-    let listener = match wanted {
-        Some(port) => std::net::TcpListener::bind(crate::devserver::address(port)).map_err(|e| {
-            format!(
-                "cannot bind 127.0.0.1:{port}: {e}\n\n                 Something is already listening there. Stop it, or start on \
-                 another port with `--port=<n>` — or drop the flag and let \
-                 esdev pick a free one."
-            )
-        })?,
-        None => std::net::TcpListener::bind(crate::devserver::address(DEFAULT_PORT))
-            .or_else(|_| std::net::TcpListener::bind(crate::devserver::address(0)))
-            .map_err(|e| format!("cannot bind a port on 127.0.0.1: {e}"))?,
+fn bind(
+    open: bool,
+    pinned: Option<u16>,
+    preferred: Option<u16>,
+) -> Result<(std::net::TcpListener, u16, Option<u16>), String> {
+    let (listener, moved_from) = match (pinned, preferred) {
+        // Named on the command line, so it is a promise: something else
+        // holding it is an error rather than a reason to quietly serve on a
+        // different address.
+        (Some(port), _) => (
+            std::net::TcpListener::bind(crate::devserver::listen_address(open, port)).map_err(
+                |e| {
+                    format!(
+                        "cannot bind {}: {e}\n\n\
+                     Something is already listening there. Stop it, or start on \
+                     another port with `--port=<n>` — or drop the flag and let \
+                     esdev pick a free one.",
+                        crate::devserver::listen_address(open, port)
+                    )
+                },
+            )?,
+            None,
+        ),
+        // The file's, or the default: a second project in a second terminal
+        // is an ordinary afternoon, so a busy one moves.
+        (None, Some(port)) => {
+            match std::net::TcpListener::bind(crate::devserver::listen_address(open, port)) {
+                Ok(listener) => (listener, None),
+                Err(_) => (
+                    std::net::TcpListener::bind(crate::devserver::listen_address(open, 0))
+                        .map_err(|e| format!("cannot bind a port: {e}"))?,
+                    Some(port),
+                ),
+            }
+        }
+        (None, None) => (
+            std::net::TcpListener::bind(crate::devserver::listen_address(open, 0))
+                .map_err(|e| format!("cannot bind a port: {e}"))?,
+            None,
+        ),
     };
     let port = listener
         .local_addr()
         .map_err(|e| format!("cannot read the port just bound: {e}"))?
         .port();
-    Ok((listener, port))
+    Ok((listener, port, moved_from))
 }
 
 /// Where the application's own server listens in development.
@@ -147,7 +175,7 @@ fn app_port(listen: Option<u16>, wanted: Option<u16>) -> Result<Option<AppPort>,
         return match wanted {
             None => Ok(None),
             Some(port) => Err(format!(
-                "a pinned app port ({port}) needs `dev.app.port` in {} to say which port the app uses by default.\n\n                 Add `\"app\": {{ \"port\": 8080 }}` under `dev`; the server must read `PORT` to use a moved port.",
+                "a pinned app port ({port}) needs the server's `port` under `dev.servers` in {} to say which port the app uses by default; the server must read `PORT` to use a moved port.",
                 crate::config::FILE_NAME,
             )),
         };
@@ -159,7 +187,7 @@ fn app_port(listen: Option<u16>, wanted: Option<u16>) -> Result<Option<AppPort>,
         Some(port) => {
             free(port).map_err(|e| {
                 format!(
-                    "cannot start the app on port {port}: {e}\n\n                     Something is already listening there. Stop it or choose another port with `--port=<n>` or change `dev.app.port`; remove the pin to let esdev choose."
+                    "cannot start the app on port {port}: {e}\n\n                     Something is already listening there. Stop it or choose another port with `--port=<n>` or change the server's `port` under `dev.servers`; remove the pin to let esdev choose."
                 )
             })?;
             port
@@ -258,6 +286,9 @@ pub struct StartConfig {
     pub proxy: Option<String>,
     /// `--no-proxy`, likewise.
     pub no_proxy: Option<Vec<String>>,
+    /// `--host`: esdev's own listeners on every interface rather than
+    /// loopback (D235). A server's binding is its own `serve()` call.
+    pub host: bool,
 }
 
 /// Runs the dev loop until the user interrupts it.
@@ -294,34 +325,33 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;
 
-    // **`--port` is the port you open**, and which process that is depends on
-    // the project. A project with a server of its own opens *that*, and esdev's
-    // endpoint beside it is plumbing — it carries one message to the page and
-    // nobody types its address. A frontend project has no such server, so esdev
-    // is the one being opened and the flag is this listener's.
-    //
-    // The alternative — `--port` for the endpoint and a second flag for the
-    // application — gives the name everybody's dev server uses to the one thing
-    // here that is not a dev server.
+    // **One entry, one port to name** (D235). `--port` is that entry's: the
+    // page esdev serves, or the one server's. With several, each says its own
+    // in `dev.servers`, and the flag would have to guess which it means.
     let runs_servers = !project.start.servers.is_empty();
-    // **The front door** (D208): with a proxy beside the servers it runs, esdev's
-    // listener is the one address — files, the update channel, and every path
-    // the proxy names, on one origin. Without one, the app's own port is.
-    let front_door = runs_servers && !project.start.proxy.is_empty();
-    let opens_its_own = runs_servers && !front_door;
+    let entries = project.start.servers.len() + usize::from(project.start.web.is_some());
+    if project.start.pinned_port.is_some() && entries > 1 {
+        return Err(format!(
+            "--port names the port of the one entry, and `dev.servers` has {entries}.\n\n\
+             Give each its `port` under `dev.servers` instead."
+        ));
+    }
+    // **Without an entry esdev serves**, a server's own page is the address
+    // opened, and esdev's listener carries only the update channel: nobody
+    // types its address, so it takes a free port and says nothing about which.
+    let opens_its_own = project.start.web.is_none();
 
     // Bound before the first build, so a port already in use is an error at the
     // top rather than after a build the developer then has to watch happen
     // again.
-    let (listener, port) = bind(if opens_its_own {
-        // Nothing to pin it to and nothing asking for one. On a project with a
-        // server of its own this endpoint carries one message to the page, its
-        // address is written into the page by the build, and no human ever types
-        // it — so it takes a free port and says nothing about which.
-        None
-    } else {
-        project.start.server_port
-    })?;
+    let (listener, port, moved_from) = match &project.start.web {
+        Some(web) => bind(
+            config.host,
+            project.start.pinned_port,
+            Some(web.port.unwrap_or(DEFAULT_PORT)),
+        )?,
+        None => bind(config.host, None, None)?,
+    };
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot bind 127.0.0.1:{port}: {e}"))?;
@@ -338,7 +368,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             serve: serve.clone(),
             reload: reload.clone(),
             error: error.clone(),
-            proxy: crate::proxy::Rule::from_config(&project.start.proxy, Some(&ports)),
+            proxy: crate::proxy::Rule::from_config(project.start.proxy(), Some(&ports)),
             trust,
             miss: crate::devserver::Miss::Spa,
             built,
@@ -403,37 +433,23 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let paint = crate::style::Palette::stderr();
     let tag = paint.dim("esdev:");
-    // Only where the flag exists to act on. On a project that runs its own
-    // server this listener has no flag and no reader, so a note about which port
-    // it landed on is noise about plumbing.
-    if !opens_its_own && project.start.server_port.is_none() && port != DEFAULT_PORT {
-        eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
+    // The page's port, moved because something else held it: said once, with
+    // how to keep it.
+    if let Some(asked) = moved_from {
+        eprintln!("{tag} {asked} was taken; use --port to pin one");
     }
 
     let watched = dev_targets(&project);
-    // The port `--port` pins: the app's, when the app is the address opened —
-    // which is one server's, or no one's to choose.
+    // The port `--port` pins, when the one entry is a server.
     let pinned = if opens_its_own {
-        if project.start.servers.len() > 1 && project.start.server_port.is_some() {
-            return Err(format!(
-                "--port names the port you open, and this project runs {} servers.\n\n\
-                 Give each its port under `dev.servers`, or make esdev the one address with \
-                 `dev.server.proxy`, whose port --port then names.",
-                project.start.servers.len()
-            ));
-        }
-        project.start.server_port
+        project.start.pinned_port
     } else {
         None
     };
     let mut running = Vec::with_capacity(project.start.servers.len());
     for spec in &project.start.servers {
         let output = running_output(&project, &spec.target)?;
-        let port = if spec.auto_port {
-            Some(server_port(spec.port, pinned)?)
-        } else {
-            app_port(spec.port, pinned)?
-        };
+        let port = Some(server_port(spec.port, pinned)?);
         if let Some(port) = &port {
             // The reason before the result, so the line a developer's eye lands
             // on is the URL rather than an aside about a port they are leaving.
@@ -456,7 +472,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 .any(|s| s.after.contains(&spec.name))
             || project
                 .start
-                .proxy
+                .proxy()
                 .iter()
                 .any(|(_, target)| target == &spec.name);
         running.push(Running {
@@ -495,34 +511,36 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // line). A project with a server of its own names the app's URL instead
     // of this endpoint's; without one known, the endpoint's is the only URL
     // there is. The app sentence stays recognizable: the test helper reads it.
-    let app_port = match (front_door, running.as_slice()) {
-        // One address for everything: esdev's.
-        (true, _) => Some(port),
-        (false, [only]) => only.port.as_ref().map(|p| p.port),
+    // The page esdev serves is the address opened; beside servers it is the
+    // app's, and each server's own port is listed under it.
+    let app_port = match (opens_its_own, running.as_slice()) {
+        (false, _) => Some(port),
+        (true, [only]) => only.port.as_ref().map(|p| p.port),
         _ => None,
     };
     let mut addresses = Vec::new();
     match app_port {
+        Some(app) if running.is_empty() => addresses.push(format!(
+            "  {}  Local:   {}",
+            paint.dim("→"),
+            paint.cyan(format_args!("http://localhost:{app}/"))
+        )),
         Some(app) => addresses.push(format!(
             "  {}  the app is on {}",
             paint.dim("→"),
             paint.cyan(format_args!("http://localhost:{app}/"))
         )),
-        None if running.is_empty() => addresses.push(format!(
-            "  {}  Local:   {}",
-            paint.dim("→"),
-            paint.cyan(format_args!("http://localhost:{port}/"))
-        )),
-        None => {
-            for server in &running {
-                if let Some(at) = &server.port {
-                    addresses.push(format!(
-                        "  {}  {} is on {}",
-                        paint.dim("→"),
-                        server.spec.name,
-                        paint.cyan(format_args!("http://localhost:{}/", at.port))
-                    ));
-                }
+        None => {}
+    }
+    if !opens_its_own || app_port.is_none() {
+        for server in &running {
+            if let Some(at) = &server.port {
+                addresses.push(format!(
+                    "  {}  {} is on {}",
+                    paint.dim("→"),
+                    server.spec.name,
+                    paint.cyan(format_args!("http://localhost:{}/", at.port))
+                ));
             }
         }
     }
@@ -540,7 +558,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         );
         // Only where something answers: esdev's own endpoint shows the failure
         // on a page. An app's own port has nothing on it until it builds.
-        if running.is_empty() || front_door {
+        if !opens_its_own {
             eprintln!();
             eprintln!(
                 "  {}  {} shows the error until then",
@@ -1315,46 +1333,65 @@ fn running_output(project: &Settings, name: &str) -> Result<PathBuf, String> {
 /// multi-page app, where the directory is shared and either answer is the same
 /// one — but nothing is guessed if the config already said.
 fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
-    if !project.start.servers.is_empty() {
-        // Beside servers, esdev serves files only as the front door, and only
-        // when no proxy rule takes every path — an SPA beside its API (D208).
-        let takes_all = project.start.proxy.iter().any(|(prefix, _)| prefix == "/");
-        if project.start.proxy.is_empty() || takes_all {
-            return Ok(None);
+    let Some(web) = &project.start.web else {
+        if project.start.servers.is_empty() {
+            return Err(nothing_to_start(project));
         }
-        let html = project.targets.iter().find(|target| target.is_html());
-        return Ok(match (&project.start.serve, html.map(|t| &t.output)) {
-            (Some(serve), _) => Some(project.source.root.join(serve)),
-            (None, Some(Output::Dir(dir))) => {
-                Some(project.source.root.join(project.start.out_dir()).join(dir))
-            }
-            _ => None,
-        });
-    }
-    if let Some(serve) = &project.start.serve {
-        return Ok(Some(project.source.root.join(serve)));
-    }
-    let mut html = project.targets.iter().filter(|target| target.is_html());
-    let Some(first) = html.next() else {
-        return Err(format!(
-            "there is nothing for `esdev start` to run or serve.\n\n\
-             Name the target whose output is your server:\n\n  \
-             \"dev\": {{ \"run\": \"{}\" }}\n\n\
-             …or give it a directory to serve: \"dev\": {{ \"serve\": \"dist\" }}.",
-            project
-                .targets
-                .first()
-                .map_or("server", |target| target.name.as_str())
-        ));
+        // Servers alone: each serves what it serves; esdev's listener is the
+        // update channel.
+        return Ok(None);
     };
-    let Output::Dir(dir) = &first.output else {
+    // A proxy rule taking every path leaves no file for esdev to answer with.
+    if project
+        .start
+        .proxy()
+        .iter()
+        .any(|(prefix, _)| prefix == "/")
+    {
+        return Ok(None);
+    }
+    let target = project
+        .targets
+        .iter()
+        .find(|target| target.name == web.target)
+        .ok_or_else(|| format!("`dev.servers.{}` names no target", web.name))?;
+    let Output::Dir(dir) = &target.output else {
         return Err("an HTML target writes a directory".to_string());
     };
-    // The development build, like everything else the loop reads: a `serve`
-    // directory names somewhere as it stands and is left alone.
+    // The development build, like everything else the loop reads.
     Ok(Some(
         project.source.root.join(project.start.out_dir()).join(dir),
     ))
+}
+
+/// What `esdev start` says to a project with no `dev.servers`: the entry its
+/// targets suggest, as the file would hold it (D235).
+fn nothing_to_start(project: &Settings) -> String {
+    let html = project
+        .targets
+        .iter()
+        .find(|target| target.is_html() && !target.lib);
+    let server = project.targets.iter().find(|target| {
+        !target.is_html()
+            && !target.lib
+            && !target.run_after_build
+            && target.runs_in() != crate::config::Platform::Browser
+    });
+    let entry = match (html, server) {
+        (Some(html), _) if html.name == "web" => "\"web\": { \"port\": 5173 }".to_string(),
+        (Some(html), _) => format!(
+            "\"web\": {{ \"target\": \"{}\", \"port\": 5173 }}",
+            html.name
+        ),
+        (None, Some(server)) => format!("\"{}\": {{ \"port\": 3000 }}", server.name),
+        (None, None) => "\"server\": { \"port\": 3000 }".to_string(),
+    };
+    format!(
+        "there is nothing for `esdev start` to run or serve.\n\n\
+         `dev.servers` names each service and its port — an HTML target is served \
+         by esdev, a server target is run:\n\n  \
+         \"dev\": {{ \"servers\": {{ {entry} }} }}"
+    )
 }
 
 /// Every directory the build writes into.
@@ -1699,7 +1736,7 @@ mod tests {
     #[test]
     fn naming_a_port_a_project_cannot_use_says_what_is_missing() {
         let refused = app_port(None, Some(3000)).expect_err("refused");
-        assert!(refused.contains("dev.app.port"), "{refused}");
+        assert!(refused.contains("dev.servers"), "{refused}");
         assert!(refused.contains("PORT"), "{refused}");
     }
 
@@ -1793,7 +1830,7 @@ mod tests {
     fn a_named_dev_directory_is_used_everywhere() {
         let project = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"run": "server", "outDir": "tmp-dev"}}"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"server": {}}, "outDir": "tmp-dev"}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1815,7 +1852,7 @@ mod tests {
     fn the_loop_runs_and_serves_the_development_builds() {
         let backend = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}}}, "dev": {"run": "server"}}"#,
+                r#"{"build": {"targets": {"server": {"entry": "src/s.ts", "out": "dist/server.js"}}}, "dev": {"servers": {"server": {}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1830,7 +1867,7 @@ mod tests {
 
         let frontend = crate::settings::Settings::from_project(
             crate::config::parse(
-                r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+                r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
                 PathBuf::from("/p"),
                 "esdev.json",
             )
@@ -1851,27 +1888,37 @@ mod tests {
         )
     }
 
-    /// What the error suggests is what the file reads: each snippet it names,
-    /// put into the project that failed, parses — the suggestion once named a
-    /// `start` key the file had stopped having.
+    /// What the error suggests is what the file reads: the `dev.servers` it
+    /// names, put into the project that has none, parses and serves or runs
+    /// that project's target — the suggestion once named a `start` key the file
+    /// had stopped having, and then a `dev.run` that D235 removed.
     #[test]
     fn nothing_to_run_suggests_keys_the_file_has() {
-        let targets = r#""build": {"targets": {"web": {"entry": "main.js", "outDir": "dist", "platform": "browser"}}}"#;
-        let err = serve_dir(&settings(&format!("{{{targets}}}"))).expect_err("nothing to serve");
-        let snippets: Vec<&str> = err
-            .lines()
-            .flat_map(|line| {
-                line.split(": \"dev\": ")
-                    .skip(1)
-                    .chain(line.trim().strip_prefix("\"dev\": "))
-            })
-            .map(|rest| rest.trim_end_matches('.'))
-            .collect();
-        assert_eq!(snippets.len(), 2, "{err}");
-        for snippet in snippets {
+        for (targets, entry) in [
+            (
+                r#""build": {"targets": {"site": {"entry": "index.html", "outDir": "dist"}}}"#,
+                "web",
+            ),
+            (
+                r#""build": {"targets": {"api": {"entry": "a.ts", "out": "dist/a.js"}}}"#,
+                "api",
+            ),
+        ] {
+            let err =
+                serve_dir(&settings(&format!("{{{targets}}}"))).expect_err("nothing to serve");
+            let snippet = err
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("\"dev\": "))
+                .unwrap_or_else(|| panic!("no suggestion: {err}"));
             let json = format!("{{{targets}, \"dev\": {snippet}}}");
-            crate::config::parse(&json, PathBuf::from("/p"), "esdev.json")
-                .unwrap_or_else(|e| panic!("the suggestion {snippet} does not parse:\n{e}"));
+            let project = settings(&json);
+            let named = project
+                .start
+                .web
+                .as_ref()
+                .map(|web| web.name.clone())
+                .or_else(|| project.start.servers.first().map(|s| s.name.clone()));
+            assert_eq!(named.as_deref(), Some(entry), "{json}");
         }
     }
 
@@ -1890,7 +1937,7 @@ mod tests {
     #[test]
     fn without_a_step_the_loop_builds_every_target() {
         let app = settings(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist/public"}}}, "dev": {"run": "server"}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js"}, "web": {"entry": "index.html", "outDir": "dist/public"}}}, "dev": {"servers": {"server": {}}}}"#,
         );
         assert!(dev_targets(&app).is_empty());
     }
@@ -1912,7 +1959,7 @@ mod tests {
     #[test]
     fn the_run_target_is_always_built() {
         let app = settings(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js", "then": "run"}, "gen": {"entry": "gen.ts", "out": "dist/gen.js", "then": "run"}}}, "dev": {"run": "server"}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts", "out": "dist/server.js", "then": "run"}, "gen": {"entry": "gen.ts", "out": "dist/gen.js", "then": "run"}}}, "dev": {"servers": {"server": {}}}}"#,
         );
         assert_eq!(dev_targets(&app), vec!["server".to_string()]);
     }

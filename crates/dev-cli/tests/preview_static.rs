@@ -1010,10 +1010,10 @@ fn a_path_prefix_is_forwarded_to_the_api_server() {
     std::fs::write(
         &config,
         format!(
-            r#"{{ "dev": {{ "server": {{ "proxy": {{
+            r#"{{ "dev": {{ "servers": {{ "web": {{ "proxy": {{
                 "/api": "http://127.0.0.1:{api}/v1",
                 "/down": "http://127.0.0.1:{closed}"
-            }} }} }}, "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }} }}"#
+            }} }} }} }}, "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }} }}"#
         ),
     )
     .expect("config");
@@ -1152,7 +1152,7 @@ fn an_https_proxy_target_is_verified_against_tls_ca() {
     std::fs::write(
         &config,
         format!(
-            r#"{{ "dev": {{ "server": {{ "proxy": {{ "/api": "https://localhost:{api}" }} }} }},
+            r#"{{ "dev": {{ "servers": {{ "web": {{ "proxy": {{ "/api": "https://localhost:{api}" }} }} }} }},
                 "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }} }}"#
         ),
     )

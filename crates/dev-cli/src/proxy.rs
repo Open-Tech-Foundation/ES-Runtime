@@ -1,5 +1,5 @@
 //! Forwarding a path prefix to another server, for the page esdev serves
-//! (`dev.server.proxy`, D150).
+//! (a `dev.servers` web entry's `proxy`, D150, D235).
 //!
 //! A frontend calls its API with relative URLs — `fetch("/api/users")` — so the
 //! same build works behind the deployment's reverse proxy. In development the
@@ -41,7 +41,7 @@ enum Target {
     Server(String, ServerPorts),
 }
 
-/// One `dev.server.proxy` entry, ready to forward to.
+/// One `proxy` entry of the web entry, ready to forward to.
 #[derive(Debug, Clone)]
 pub struct Rule {
     /// The start of the request paths it takes.
@@ -136,44 +136,143 @@ pub fn matching<'a>(rules: &'a [Rule], path: &str) -> Option<&'a Rule> {
 /// How long a target has to accept the connection before the page gets a 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How often a restarting server is tried again while a request waits for it.
+const RETRY_EVERY: Duration = Duration::from_millis(20);
+
+/// Connects to a server esdev runs, waiting while it is not listening.
+///
+/// A save restarts it: for a moment nothing holds its port, and a request in
+/// that moment was refused and answered 502 — a page's `fetch` failing because
+/// its author pressed save (D235). A gateway in production waits on a health
+/// check; this waits for the port to accept, the same readiness the link falls
+/// back to (D207), for up to [`CONNECT_TIMEOUT`]. A server that does not come
+/// back is still a 502 that says so.
+async fn connect_server(rule: &Rule) -> Result<TcpStream, String> {
+    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+    loop {
+        let last = match rule.port() {
+            Some(port) => match TcpStream::connect((rule.host(), port)).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => e.to_string(),
+            },
+            None => "it is not running".to_string(),
+        };
+        if tokio::time::Instant::now() + RETRY_EVERY >= deadline {
+            return Err(format!(
+                "{last}, and it did not come back within {}s",
+                CONNECT_TIMEOUT.as_secs()
+            ));
+        }
+        tokio::time::sleep(RETRY_EVERY).await;
+    }
+}
+
 /// Forwards one request, whose head has already been read, and everything
 /// after it on the connection. An `https` target is verified against `trust`,
 /// the store `--tls-ca` describes (D197).
 pub async fn forward(mut client: TcpStream, head: &str, rule: &Rule, trust: &TrustStore) {
     let request_target = crate::inspect::request_path(head).unwrap_or_else(|| "/".to_string());
-    let upstream = match connect(rule, trust).await {
-        Ok(upstream) => upstream,
-        Err(e) => {
-            eprintln!(
-                "esdev: proxy: cannot reach {} for {request_target}: {e}",
-                rule.target()
-            );
-            let body = format!(
-                "esdev could not reach {} to forward {request_target}: {e}\n\n\
-                 Start the server it names, or change `dev.server.proxy` in esdev.json.\n",
-                rule.target()
-            );
-            let _ = client
-                .write_all(
-                    format!(
-                        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n\
-                         Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await;
-            return;
-        }
-    };
     let peer = client
         .peer_addr()
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string());
     let rewritten = rewrite(head, rule, &peer);
+    // A server esdev runs, asked something it can be asked twice: sent again
+    // if the server it reached closes without answering (D235).
+    if matches!(rule.target, Target::Server(..)) && replayable(head) {
+        return forward_replaying(client, rule, rewritten, &request_target).await;
+    }
+    let upstream = match connect(rule, trust).await {
+        Ok(upstream) => upstream,
+        Err(e) => return bad_gateway(&mut client, rule, &request_target, &e).await,
+    };
     match upstream {
         Upstream::Plain(stream) => pipe(client, stream, rewritten).await,
         Upstream::Tls(stream) => pipe(client, *stream, rewritten).await,
+    }
+}
+
+/// Answers the page with why the target could not be reached.
+async fn bad_gateway(client: &mut TcpStream, rule: &Rule, request_target: &str, e: &str) {
+    eprintln!(
+        "esdev: proxy: cannot reach {} for {request_target}: {e}",
+        rule.target()
+    );
+    let body = format!(
+        "esdev could not reach {} to forward {request_target}: {e}\n\n\
+         Start the server it names, or change the web entry's `proxy` in esdev.json.\n",
+        rule.target()
+    );
+    let _ = client
+        .write_all(
+            format!(
+                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n\
+                 Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await;
+}
+
+/// Whether a request can be sent a second time: a method that changes nothing
+/// (RFC 9110 §9.2.2's safe methods), with no body to have buffered. What a
+/// production gateway retries on a connection that closed without an answer
+/// — nginx's `proxy_next_upstream` default.
+fn replayable(head: &str) -> bool {
+    let method = head.split(' ').next().unwrap_or("");
+    if !matches!(method, "GET" | "HEAD" | "OPTIONS") {
+        return false;
+    }
+    !head.lines().skip(1).any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        let name = name.trim();
+        name.eq_ignore_ascii_case("transfer-encoding")
+            || (name.eq_ignore_ascii_case("content-length") && value.trim() != "0")
+    })
+}
+
+/// Forwards a replayable request to a server esdev runs, sending it again when
+/// the server it reached closes before a byte of answer.
+///
+/// A save stops the server as its replacement starts: a request that reached
+/// the old one as it stopped — accepted, never answered — closed empty, which
+/// the page saw as a failed `fetch`. The first byte of the answer is waited
+/// for here, and the request goes to whichever server is listening next, for
+/// up to [`CONNECT_TIMEOUT`]. From the first byte on, it is a plain pipe.
+async fn forward_replaying(mut client: TcpStream, rule: &Rule, head: String, request_target: &str) {
+    use tokio::io::AsyncReadExt;
+    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+    loop {
+        let mut upstream = match connect_server(rule).await {
+            Ok(upstream) => upstream,
+            Err(e) => return bad_gateway(&mut client, rule, request_target, &e).await,
+        };
+        let _ = upstream.set_nodelay(true);
+        let mut first = vec![0u8; 16 * 1024];
+        let answered = match upstream.write_all(head.as_bytes()).await {
+            Ok(()) => upstream.read(&mut first).await.unwrap_or(0),
+            Err(_) => 0,
+        };
+        if answered > 0 {
+            if client.write_all(&first[..answered]).await.is_err() {
+                return;
+            }
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            return;
+        }
+        if tokio::time::Instant::now() + RETRY_EVERY >= deadline {
+            return bad_gateway(
+                &mut client,
+                rule,
+                request_target,
+                "it closed every connection without answering",
+            )
+            .await;
+        }
+        tokio::time::sleep(RETRY_EVERY).await;
     }
 }
 
@@ -183,12 +282,17 @@ enum Upstream {
 }
 
 async fn connect(rule: &Rule, trust: &TrustStore) -> Result<Upstream, String> {
-    let port = rule.port().ok_or_else(|| "it is not running".to_string())?;
-    let address = format!("{}:{port}", rule.host());
-    let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&address))
-        .await
-        .map_err(|_| format!("no answer within {}s", CONNECT_TIMEOUT.as_secs()))?
-        .map_err(|e| e.to_string())?;
+    let stream = match &rule.target {
+        Target::Server(..) => connect_server(rule).await?,
+        Target::Url(_) => {
+            let port = rule.port().ok_or_else(|| "it is not running".to_string())?;
+            let address = format!("{}:{port}", rule.host());
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&address))
+                .await
+                .map_err(|_| format!("no answer within {}s", CONNECT_TIMEOUT.as_secs()))?
+                .map_err(|e| e.to_string())?
+        }
+    };
     let _ = stream.set_nodelay(true);
     if !rule.secure() {
         return Ok(Upstream::Plain(stream));

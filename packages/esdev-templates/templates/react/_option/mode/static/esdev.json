@@ -20,10 +20,10 @@
     }
   },
   "dev": {
-    "watch": {
-      "targets": [
-        "web"
-      ]
+    "servers": {
+      "web": {
+        "port": 5173
+      }
     }
   }
 }

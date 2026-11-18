@@ -11,6 +11,13 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+### Changed
+
+- Every template's `esdev.json` names its services under `dev.servers`
+  (DECISIONS D235): `web` on 5173 for a frontend, `server` on 3000 for an API
+  or a full-stack app, and drops `watch.targets` lists that only repeated the
+  default. Needs esdev 0.30.0 or later: `engines.esdev` is `>=0.30.0`.
+
 ## [0.2.0] - 2026-11-18
 
 ### Changed

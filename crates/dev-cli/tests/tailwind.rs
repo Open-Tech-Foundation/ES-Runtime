@@ -141,7 +141,7 @@ fn html_project(dir: &Path, css: &str) {
     write(
         dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
     write(
         dir,

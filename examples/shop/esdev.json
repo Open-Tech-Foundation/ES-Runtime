@@ -12,9 +12,10 @@
     }
   },
   "dev": {
-    "run": "server",
-    "app": {
-      "port": 8080
+    "servers": {
+      "server": {
+        "port": 8080
+      }
     }
   }
 }

@@ -8,14 +8,10 @@
     }
   },
   "dev": {
-    "run": "server",
-    "watch": {
-      "targets": [
-        "server"
-      ]
-    },
-    "app": {
-      "port": 3000
+    "servers": {
+      "server": {
+        "port": 3000
+      }
     }
   }
 }

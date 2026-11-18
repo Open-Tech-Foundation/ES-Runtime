@@ -440,7 +440,7 @@ fn reload_client(port: u16) -> String {
           }}\
           {overlay}\
           function open(){{\
-          var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
+          var s=new WebSocket((location.protocol===\"https:\"?\"wss://\":\"ws://\")+location.hostname+\":{port}{path}\");\
           s.onopen=function(){{wait=250;}};\
           s.onmessage=function(e){{\
           var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
@@ -1392,9 +1392,15 @@ mod tests {
         assert!(client.contains("__esdev_err"), "no overlay");
         assert!(client.contains("textContent"), "unsafe rendering");
         assert!(!client.contains("innerHTML"), "markup from code");
+        // At the page's own host (D235): a phone on the network reaches the
+        // channel the page came from, not its own loopback.
         assert!(
-            client.contains("ws://127.0.0.1:5173"),
+            client.contains("location.hostname+\":5173"),
             "the channel lost its port"
+        );
+        assert!(
+            !client.contains("127.0.0.1"),
+            "the channel is pinned to loopback"
         );
     }
 

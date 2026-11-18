@@ -42,7 +42,7 @@ fn project(name: &str) -> PathBuf {
             r#"{{ "build": {{ "targets": {{
                   "web": {{ "entry": "index.html", "outDir": "dist/web" }},
                   "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }} }},
-                "dev": {{ "run": "server", "app": {{ "port": {app} }} }} }}"#
+                "dev": {{ "servers": {{ "server": {{ "port": {app} }} }} }} }}"#
         ),
     )
     .expect("write the config");
@@ -119,8 +119,10 @@ impl Loop {
     fn channel(&self) -> u16 {
         let page = find_html(&self.dir.join(".dev")).expect("a dev page");
         let text = std::fs::read_to_string(page).expect("read the page");
-        let at = text.find("ws://127.0.0.1:").expect("the update channel");
-        text[at + "ws://127.0.0.1:".len()..]
+        // At the page's own host (D235), so the port follows `hostname+":`.
+        let marker = "location.hostname+\":";
+        let at = text.find(marker).expect("the update channel");
+        text[at + marker.len()..]
             .chars()
             .take_while(char::is_ascii_digit)
             .collect::<String>()

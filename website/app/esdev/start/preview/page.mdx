@@ -39,8 +39,8 @@ Missing files with an extension, such as `/app.js`, still get a `404`.
 A server bundle has no static output to preview. Run it under `esrun`, as it
 will run in production.
 
-The project's [`dev.server.proxy`](/esdev/start#forward-api-requests) applies
-here too, so a page that calls `/api` reaches the same API server it does in
+The web entry's [`proxy`](/esdev/start#the-gateway-proxy) applies
+here too, for its URL targets, so a page that calls `/api` reaches the same API server it does in
 the dev loop. An `https` target is verified against the bundled roots, or what
 [`--tls-ca`](/api/cli#tls-trust) lists.
 

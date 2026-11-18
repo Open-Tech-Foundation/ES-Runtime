@@ -41,32 +41,64 @@ esdev <version> — ready in <duration>
 ✓ restarted server in <duration>
 ```
 
-A project with a server of its own names the app's URL instead of the
-endpoint's. A failed build prints its error; the loop keeps running, and the
+Beside the web entry, each server is listed with its port; a project with one
+server and no web entry names that server's URL. A failed build prints its error; the loop keeps running, and the
 next save gets its own line. See [Build failures](#build-failures) for browser
 errors and output behavior.
 
-## The server is yours
+## What runs: `dev.servers`
+
+`dev.servers` lists the project's services, one entry each, on the ports they
+use — the same topology production has. What an entry is follows from the
+target it names (its own name, unless `target` says):
 
 ```json
-"dev": { "run": "server" }
+"dev": {
+  "servers": {
+    "web":    { "port": 5173, "proxy": { "/api": "api" } },
+    "api":    { "port": 3000 },
+    "worker": { "target": "jobs", "after": ["api"] }
+  }
+}
 ```
 
-That names the target whose output *is* your server. esdev runs it as a child
-process with esdev's normal development permissions and restarts it with a
-`SIGTERM` — the graceful stop production gets, so a request in flight when you
-save is answered rather than dropped. Put production grants on the `esrun`
+| The target is | esdev |
+| --- | --- |
+| **An HTML target** | Serves its dev build on that port, with an `index.html` fallback for client-side routes, the [update channel](#the-update-channel) and the [gateway's routes](#the-gateway-proxy). Default port 5173 |
+| **A server target** | Runs its output as a child process and restarts it when it changes. Default: a free port |
+
+Every project that starts has the key — a frontend too, so a second service is
+one more entry:
+
+| Project | `dev` |
+| --- | --- |
+| A frontend (a static site, an SPA) | `{ "servers": { "web": { "port": 5173 } } }` |
+| One server — an API, or a full-stack app whose server renders its pages and answers `/api` itself | `{ "servers": { "server": { "port": 3000 } } }` |
+| A frontend, its API and a worker | the example above |
+
+### A server entry
+
+esdev runs it with esdev's normal development permissions and restarts it with
+a `SIGTERM` — the graceful stop production gets, so a request in flight when
+you save is answered rather than dropped. Put production grants on the `esrun`
 command that deploys the built program.
 
-Declare the app's default port under `dev.app.port`:
+The server reads `PORT`. Its `port` is the one it is given; if that is in use,
+esdev chooses a free one, sets it in `PORT` and says so. `--port=<n>` pins the
+one entry's port, which must then be free.
 
-```json
-"dev": { "run": "server", "app": { "port": 3000 } }
-```
+| Key | Meaning |
+| --- | --- |
+| `target` | The build target it runs. Default: the entry's name |
+| `port` | The port it is given in `PORT`. Busy or absent, a free one is |
+| `env` | Environment for this server only |
+| `args` | Arguments for the program |
+| `after` | Servers that must be listening before this one starts |
 
-The server should read `PORT` and use this value as its fallback. If that port
-is already in use, esdev chooses a free one and sets `PORT` in the child. Use
-`--port=<n>` to pin the app to a particular port; that port must be free.
+Each save restarts only the servers whose build output changed, stopping the
+ones that depend on them first. A server's errors reach the page under its name
+(**Server error: worker**) when there are several. A server that binds no port,
+such as a worker, is not waited for unless something names it.
 
 **It is the same build production runs, in development profile.** No dev
 server stands in for it, nothing wraps it, and there is no second code path
@@ -84,9 +116,11 @@ names another directory for the loop's builds. It must stay inside the
 project and clear of every target's `out` and `outDir`; anything overlapping
 is refused when the file is read.
 
-A project with no server of its own — a static site or single-page app — has
-nothing to run, so esdev serves the output directory itself: files, an
-`index.html` fallback for client-side routes, and nothing else.
+### The web entry
+
+The entry naming an HTML target is served by esdev, from the dev build of that
+target. It takes `port` and `proxy`; `env`, `args` and `after` are a server's.
+One entry serves a project's pages.
 
 ## Build failures
 
@@ -135,8 +169,9 @@ than holding its port.
 
 ## The update channel
 
-Every built document gets a WebSocket to
-`ws://127.0.0.1:<port>/@esdev/hmr`. It acts on a module patch, stylesheet swap,
+Every built document gets a WebSocket to `/@esdev/hmr` on esdev's port, at
+the page's own host — so a phone on your network, or a forwarded port, gets
+updates as `localhost` does. It acts on a module patch, stylesheet swap,
 or reload. It is esdev's endpoint rather than your application's, so nothing
 dev-only reaches your source and the file you edit is never written to.
 
@@ -148,94 +183,75 @@ unpinned endpoint chooses a different port, reload the page; the old document
 cannot discover that new endpoint. For a frontend project, use `--port=<n>` to
 pin the endpoint.
 
+esdev's listeners — the web entry's and the update channel — are on loopback.
+`esdev start --host` opens them to the network, for a phone or a container;
+forward the update channel's port too, which the banner names. A server's own
+binding is its `serve()` call, as in production.
+
 ## Options
 
 | | |
 | --- | --- |
-| `--port=<n>` | The port you open |
+| `--port=<n>` | The port of the one `dev.servers` entry |
+| `--host` | Open esdev's listeners to the network rather than loopback |
 | `--no-hot` | Reload the page instead of patching changed modules |
 | `--config=<path>` | Read this instead of `./esdev.json` |
 | `--allow-read=<paths>` | Also watch explicitly granted read paths |
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
-| `--tls-ca=<file\|bundled>` | The CAs the server and an `https` [proxy](#forward-api-requests) target are verified against, as [esrun's](/api/cli#tls-trust); repeatable |
+| `--tls-ca=<file\|bundled>` | The CAs the server and an `https` [proxy](#the-gateway-proxy) target are verified against, as [esrun's](/api/cli#tls-trust); repeatable |
 | `--tls-crl=<file>` | CRLs they are checked against, as [esrun's](/api/cli#tls-trust); repeatable |
 | `--proxy=<url>` | The server's outbound proxy, as [esrun's](/api/cli#outbound-proxy). Default: `HTTPS_PROXY`/`HTTP_PROXY` |
 | `--no-proxy=<list>` | Targets it reaches directly, as [esrun's](/api/cli#outbound-proxy). Default: `NO_PROXY` |
 
 ```json
-"dev": { "run": "server", "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "app": { "port": 3000 }, "outDir": ".dev" }
+"dev": { "servers": { "server": { "port": 3000 } }, "watch": { "targets": ["server", "web"], "paths": ["./config"] }, "outDir": ".dev" }
 ```
 
-These `dev` settings control what the loop rebuilds and serves:
+Beside `servers`, these `dev` settings control what the loop rebuilds and
+watches:
 
 - `watch.targets` selects targets to rebuild. If omitted, esdev rebuilds every
-  target except `"then": "run"` steps, which run only in `esdev build`. The
-  `run` target is always built. List a step here to run it on every save.
+  target except `"then": "run"` steps, which run only in `esdev build`. A
+  target a server entry runs is always built. List a step here to run it on
+  every save.
 - `watch.paths` adds watched paths, resolved relative to `esdev.json`.
-- `serve` selects the directory to serve when no `run` target is configured.
-- `app.port` sets the app server's fallback port. `server.port` pins esdev's
-  listener for a frontend-only project.
+- `outDir` is the [loop's own output directory](#a-server-entry).
 
-In full-stack mode, the app owns the browser endpoint; esdev's listener is an
-internal HMR channel.
+## The gateway: `proxy`
 
-## Forward API requests
-
-A frontend that calls a separate API server with relative URLs
-(`fetch("/api/users")`) names it in `dev.server.proxy`:
-
-```json
-"dev": { "server": { "proxy": { "/api": "http://localhost:8080" } } }
-```
-
-A request whose path starts with a prefix goes to its target, the longest prefix
-first; everything else is served from the build. The target's path is prepended,
-so `"http://localhost:8080/v1"` receives `/v1/api/users`. Bodies, streamed
-responses, server-sent events and WebSocket upgrades pass through as they are.
-The target sees its own `Host`, with the page's in `X-Forwarded-Host`. An
-`https` target is verified like `fetch` verifies one, and a target that is not
-running answers `502` with its address.
-
-A target can also name a server esdev runs (see [Several servers](#several-servers)):
-
-```json
-"dev": { "run": "server", "server": { "proxy": { "/": "server" } } }
-```
-
-Then esdev is the **front door**: the address you open is esdev's, and it routes
-each path to its server, which sees the page's own `Host`. A server named here is
-reached at whatever port it has now. [`esdev preview`](/esdev/start/preview)
-runs no servers, so there only URL targets apply.
-
-## Several servers
-
-`dev.servers` runs more than one server: an API and a background worker, a
-public and an admin API, two versions side by side.
+A split app — the frontend on one port, its API on another — often reaches the
+API through a gateway in production: nginx, an ingress or a host's rewrites
+send `/api/*` to it, so the page calls `fetch("/api/users")` on its own origin,
+with cookies and no CORS. The web entry's `proxy` is that gateway in
+development, written as production's is:
 
 ```json
 "dev": {
   "servers": {
-    "api":    { "port": 4000, "env": { "DATABASE_URL": "file:dev.db" } },
-    "admin":  { "target": "api", "env": { "ROLE": "admin" } },
-    "worker": { "target": "jobs", "after": ["api"] }
-  },
-  "server": { "proxy": { "/api": "api", "/admin": "admin" } }
+    "web": { "port": 5173, "proxy": { "/api": "api", "/legacy": "http://localhost:8080" } },
+    "api": { "port": 3000 }
+  }
 }
 ```
 
-| Key | Meaning |
-| --- | --- |
-| `target` | The build target it runs. Default: the server's name |
-| `port` | The port it is given in `PORT`. Busy or absent, a free one is |
-| `env` | Environment for this server only |
-| `args` | Arguments for the program |
-| `after` | Servers that must be listening before this one starts |
+A request whose path starts with a prefix goes to its target, the longest prefix
+first; everything else is served from the build. A target is a server entry's
+name — reached at whatever port it has now, keeping the page's `Host` — or a
+URL esdev does not run, which sees its own `Host` with the page's in
+`X-Forwarded-Host`, and has its path prepended (`"http://localhost:8080/v1"`
+receives `/v1/api/users`). Bodies, streamed responses, server-sent events and
+WebSocket upgrades pass through as they are. An `https` target is verified like
+`fetch` verifies one.
 
-Each save restarts only the servers whose build output changed, stopping the
-ones that depend on them first. A server's errors reach the page under its name
-(**Server error: worker**). A server that binds no port, such as a worker, is
-not waited for unless something names it. `dev.run` is the one-server form, and
-`dev.servers` and `dev.run` are not used together.
+While a server entry restarts, a request for it waits until it listens again,
+as a production gateway's health check would, and a `GET`, `HEAD` or `OPTIONS`
+the old process closed without answering is sent to the new one. A target that
+does not come back within 10 s answers `502` with why.
+[`esdev preview`](/esdev/start/preview) runs no servers, so there only URL
+targets apply.
+
+`proxy` is on the web entry only: a server's routes are its own code. A project
+whose page calls its API cross-origin (`PUBLIC_API_URL`) needs none.
 
 ## Targets only the dev loop builds
 
@@ -251,7 +267,7 @@ to render its pages on a server while you develop, as the prerender step will:
   } },
   "dev": {
     "targets": { "render": { "entry": "src/dev-render.js", "out": "devserver/render.js" } },
-    "run": "render"
+    "servers": { "render": { "port": 3000 } }
   }
 }
 ```
@@ -260,7 +276,7 @@ to render its pages on a server while you develop, as the prerender step will:
 | --- | --- |
 | **Same keys** | A dev target takes what a build target takes, except `then` — nothing runs after a build that never builds it |
 | **Its own name** | A name is in `build.targets` or `dev.targets`, not both |
-| **Named by the loop** | `dev.run`, `dev.servers.<name>.target` and `dev.watch.targets` may name one |
+| **Named by the loop** | `dev.servers.<name>.target` and `dev.watch.targets` may name one |
 | **Never released** | `esdev build` leaves it out, and refuses `--target=` naming it; `esdev preview` never serves it |
 
 ## What is watched

@@ -2707,7 +2707,7 @@ mod tests {
                 };
                 let config: serde_json::Value =
                     serde_json::from_str(&config).expect("esdev.json is JSON");
-                let app_port = config["dev"]["app"]["port"].as_u64();
+                let app_port = config["dev"]["servers"]["server"]["port"].as_u64();
                 let readme = text("README.md").unwrap_or_default();
                 let shown = readme.split("http://localhost:").nth(1).map(|rest| {
                     rest.chars()
@@ -2748,9 +2748,10 @@ mod tests {
                         }
                     }
                     None => {
-                        assert!(
-                            config["dev"]["server"]["port"].is_null(),
-                            "{at}: a frontend pins no dev port"
+                        assert_eq!(
+                            config["dev"]["servers"]["web"]["port"].as_u64(),
+                            Some(5173),
+                            "{at}: a frontend's page is the web entry, on 5173"
                         );
                         if let Some(shown) = &shown {
                             assert_eq!(shown, "5173", "{at}: the README's URL");

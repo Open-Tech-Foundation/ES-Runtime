@@ -114,29 +114,21 @@ pub struct PluginSpec {
     pub options: Option<Value>,
 }
 
-/// What `esdev start` runs and watches.
+/// What `esdev start` runs, serves and watches: `dev`, read (D235).
 #[derive(Clone, Debug, Default)]
 pub struct Start {
-    /// The target whose output is *the server* — run as a child process, and
-    /// restarted when a rebuild finishes. Absent for a stack with no server of
-    /// its own, where esdev serves the output directory itself.
-    pub run: Option<String>,
     /// The targets to rebuild on a change. Empty means all of them, which is
     /// the useful default: a rebuild costs milliseconds, and a list that has
     /// fallen out of date is a save that appears to do nothing.
     pub watch_targets: Vec<String>,
-    /// The directory to serve when there is no `run` target. Defaults to the
-    /// output of the one HTML target, since that is what a frontend-only stack
-    /// has.
-    pub serve: Option<String>,
-    /// The app's default port. When `esdev start` moves a busy port, it sets
-    /// `PORT` in the server child to the free one it selected.
-    pub app_port: Option<u16>,
-    /// **The port you open.** For a project with a `run` target that is the
-    /// application's own port; for a frontend project, where esdev serves the
-    /// output itself, it is esdev's listener. Either way it is the address a
-    /// developer types.
-    pub server_port: Option<u16>,
+    /// The entry esdev serves itself — the one naming an HTML target — if the
+    /// project has one.
+    pub web: Option<WebEntry>,
+    /// The entries esdev runs, in start order: every server target named in
+    /// `dev.servers`.
+    pub servers: Vec<ServerSpec>,
+    /// `--port`: the one entry's port, kept to rather than moved from.
+    pub pinned_port: Option<u16>,
     /// Where the dev loop writes its builds, as a directory in the project.
     /// `None` is [`DEFAULT_DEV_DIR`].
     ///
@@ -146,14 +138,23 @@ pub struct Start {
     /// spelling of an output: it may not overlap any target's `out` or
     /// `outDir`, and it stays inside the project.
     pub out_dir: Option<String>,
-    /// `dev.server.proxy`: path prefixes forwarded to another server, as
-    /// `(prefix, target)`, longest prefix first (D150). A target is a URL, or
-    /// the name of one of [`servers`](Self::servers) (D208).
+}
+
+/// The `dev.servers` entry esdev serves: an HTML target's dev build on a port
+/// of its own, with the production gateway's routes in front of it (D235).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebEntry {
+    /// Its name in `dev.servers`.
+    pub name: String,
+    /// The HTML target whose build it serves.
+    pub target: String,
+    /// The port it would like; a free one if that is busy, unless `--port`
+    /// pinned one.
+    pub port: Option<u16>,
+    /// `proxy`: path prefixes forwarded elsewhere, as `(prefix, target)`,
+    /// longest prefix first (D150). A target is a URL, or the name of one of
+    /// [`Start::servers`].
     pub proxy: Vec<(String, String)>,
-    /// The servers `esdev start` runs, in start order: `dev.servers`, or the
-    /// one `dev.run` names (D208). Empty for a project with no server of its
-    /// own, where esdev serves the output itself.
-    pub servers: Vec<ServerSpec>,
 }
 
 /// One server `esdev start` runs (`dev.servers.<name>`, D208).
@@ -165,10 +166,6 @@ pub struct ServerSpec {
     pub target: String,
     /// The port handed to it as `PORT`; busy or absent, a free one is.
     pub port: Option<u16>,
-    /// Whether a free port is handed to it when `port` is absent. `dev.run`
-    /// without `dev.app.port` predates `PORT` being esdev's to give, and is
-    /// left as it was.
-    pub auto_port: bool,
     /// Extra environment, for this server only.
     pub env: Vec<(String, String)>,
     /// Arguments for the program, after its file.
@@ -178,6 +175,11 @@ pub struct ServerSpec {
 }
 
 impl Start {
+    /// The web entry's `proxy` rules; none without one.
+    pub fn proxy(&self) -> &[(String, String)] {
+        self.web.as_ref().map_or(&[], |web| web.proxy.as_slice())
+    }
+
     /// Where the dev loop writes: `devdir`, or [`DEFAULT_DEV_DIR`] when the
     /// file is silent.
     pub fn out_dir(&self) -> &str {
@@ -476,12 +478,8 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 
 const BUILD_KEYS: &[&str] = &["targets", "importPolicy", "subresourceIntegrity"];
 const RESOLVE_KEYS: &[&str] = &["alias"];
-const DEV_KEYS: &[&str] = &[
-    "run", "servers", "watch", "serve", "app", "server", "outDir", "targets",
-];
+const DEV_KEYS: &[&str] = &["servers", "watch", "outDir", "targets"];
 const DEV_WATCH_KEYS: &[&str] = &["targets", "paths"];
-const DEV_APP_KEYS: &[&str] = &["port"];
-const DEV_SERVER_KEYS: &[&str] = &["port", "proxy"];
 
 /// The keys `test` may carry.
 const TEST_KEYS: &[&str] = &[
@@ -612,6 +610,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         .map(|v| object(v, name, "`dev`"))
         .transpose()?;
     if let Some(dev) = dev {
+        removed_dev_keys(dev, build.and_then(|build| build.get("targets")), name)?;
         known_keys(dev, name, "`dev`", DEV_KEYS)?;
         if let Some(watch) = dev.get("watch") {
             known_keys(
@@ -620,18 +619,6 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
                 "`dev.watch`",
                 DEV_WATCH_KEYS,
             )?;
-        }
-        if let Some(app) = dev.get("app") {
-            known_keys(
-                object(app, name, "`dev.app`")?,
-                name,
-                "`dev.app`",
-                DEV_APP_KEYS,
-            )?;
-        }
-        if let Some(server) = dev.get("server") {
-            let server = object(server, name, "`dev.server`")?;
-            known_keys(server, name, "`dev.server`", DEV_SERVER_KEYS)?;
         }
     }
     let grouped_targets = build.and_then(|build| build.get("targets"));
@@ -708,7 +695,7 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
             if built.run_after_build {
                 return Err(format!(
                     "{name}: `dev.targets.{target_name}` has `then`, which runs a target after `esdev build` — \
-                     and `esdev build` never builds a dev target. `dev.run` is how the dev loop runs one."
+                     and `esdev build` never builds a dev target. A `dev.servers` entry is how the dev loop runs one."
                 ));
             }
             built.dev_only = true;
@@ -1417,20 +1404,82 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-/// Reads `dev`: what `esdev start` runs, rebuilds, serves and where it writes.
-/// Read from the keys the file has, so every message names one of them (D232).
+/// The `dev` keys D235 replaced with `dev.servers`.
+const REMOVED_DEV_KEYS: &[&str] = &["run", "app", "server", "serve"];
+
+/// Refuses the keys `dev.servers` replaced (D235), with the `dev.servers` this
+/// file means — built from what it says, so the message is the migration.
+fn removed_dev_keys(
+    dev: &Map<String, Value>,
+    targets: Option<&Value>,
+    file: &str,
+) -> Result<(), String> {
+    let found: Vec<&str> = REMOVED_DEV_KEYS
+        .iter()
+        .copied()
+        .filter(|key| dev.contains_key(*key))
+        .collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    let mut servers = match dev.get("servers") {
+        Some(Value::Object(servers)) => servers.clone(),
+        _ => Map::new(),
+    };
+    let field = |section: &str, key: &str| dev.get(section).and_then(|s| s.get(key)).cloned();
+    if let Some(Value::String(run)) = dev.get("run") {
+        let mut entry = Map::new();
+        if let Some(port) = field("app", "port") {
+            entry.insert("port".to_string(), port);
+        }
+        servers.insert(run.clone(), Value::Object(entry));
+    }
+    // The HTML target is what esdev served: it becomes the entry that does.
+    let html = targets.and_then(Value::as_object).and_then(|targets| {
+        targets.iter().find_map(|(name, target)| {
+            target
+                .get("entry")
+                .and_then(Value::as_str)
+                .filter(|entry| is_html_entry(entry))
+                .map(|_| name.clone())
+        })
+    });
+    if let Some(html) = html.filter(|_| dev.contains_key("server") || dev.get("run").is_none()) {
+        let mut entry = Map::new();
+        if html != "web" {
+            entry.insert("target".to_string(), Value::String(html.clone()));
+        }
+        entry.insert(
+            "port".to_string(),
+            field("server", "port").unwrap_or(Value::from(5173)),
+        );
+        if let Some(proxy) = field("server", "proxy") {
+            entry.insert("proxy".to_string(), proxy);
+        }
+        servers.insert("web".to_string(), Value::Object(entry));
+    }
+    let keys = found
+        .iter()
+        .map(|key| format!("`dev.{key}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suggestion = serde_json::to_string_pretty(&serde_json::json!({ "servers": servers }))
+        .unwrap_or_default()
+        .replace('\n', "\n  ");
+    Err(format!(
+        "{file}: {keys} {} replaced by `dev.servers` (D235): one entry per service, on its \
+         own port. An entry naming an HTML target is served by esdev, with its `proxy`; \
+         one naming a server target is run with `PORT`.\n\n\
+         For this file, `dev` becomes:\n\n  \"dev\": {suggestion}",
+        if found.len() == 1 { "is" } else { "are" }
+    ))
+}
+
+/// Reads `dev`: what `esdev start` runs and serves (`servers`), what it
+/// rebuilds (`watch.targets`) and where it writes (`outDir`) — from the keys
+/// the file has, so every message names one of them (D232, D235).
 fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Result<Start, String> {
     let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
-    let run = match value.get("run") {
-        None => None,
-        Some(run) => {
-            let run = string(run, file, "`dev.run`")?;
-            if !names.contains(&run) {
-                return Err(unknown_target(file, "`dev.run`", run, &names));
-            }
-            Some(run.to_string())
-        }
-    };
     let watch = value
         .get("watch")
         .map(|watch| object(watch, file, "`dev.watch`"))
@@ -1445,101 +1494,57 @@ fn read_dev(value: &Map<String, Value>, targets: &[Target], file: &str) -> Resul
             return Err(unknown_target(file, "`dev.watch.targets`", name, &names));
         }
     }
-    let serve = match value.get("serve") {
-        None => None,
-        Some(serve) => Some(string(serve, file, "`dev.serve`")?.to_string()),
-    };
-    let app = value
-        .get("app")
-        .map(|app| object(app, file, "`dev.app`"))
-        .transpose()?;
-    let app_port = match app {
-        Some(app) => read_port(app, "port", "`dev.app.port`", file)?,
-        None => None,
-    };
-    let server = value
-        .get("server")
-        .map(|server| object(server, file, "`dev.server`"))
-        .transpose()?;
-    let server_port = match server {
-        Some(server) => read_port(server, "port", "`dev.server.port`", file)?,
-        None => None,
-    };
     let out_dir = read_dev_out_dir(value, file, targets)?;
-    let mut start = Start {
-        run,
+    let (web, servers) = match value.get("servers") {
+        Some(servers) => read_servers(servers, targets, file)?,
+        None => (None, Vec::new()),
+    };
+    // A proxy target that is not a URL names a server esdev runs (D208).
+    if let Some(web) = &web {
+        for (prefix, target) in &web.proxy {
+            if !target.contains("://") && !servers.iter().any(|s| &s.name == target) {
+                let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+                return Err(format!(
+                    "{file}: `dev.servers.{}.proxy` \"{prefix}\" is \"{target}\", which is neither \
+                     a URL nor a server{}. A target is \"http://localhost:8080\", or the name of a \
+                     server entry under `dev.servers`.",
+                    web.name,
+                    if names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (servers: {})", names.join(", "))
+                    }
+                ));
+            }
+        }
+    }
+    Ok(Start {
         watch_targets,
-        serve,
-        app_port,
-        server_port,
+        web,
+        servers,
+        pinned_port: None,
         out_dir,
-        proxy: Vec::new(),
-        servers: Vec::new(),
-    };
-    if let Some(server) = value.get("server") {
-        let server = object(server, file, "`dev.server`")?;
-        start.proxy = read_proxy(server.get("proxy"), file)?;
-    }
-    if start.run.is_none() && value.get("app").is_some() {
-        return Err(format!(
-            "{file}: `dev.app` requires `dev.run` to name the server target."
-        ));
-    }
-    start.servers = match (value.get("servers"), &start.run) {
-        (Some(_), Some(_)) => {
-            return Err(format!(
-                "{file}: `dev.servers` and `dev.run` both say what to run. `dev.run` is \
-                 the one-server form; name it under `dev.servers` instead."
-            ));
-        }
-        (Some(servers), None) => read_servers(servers, targets, file)?,
-        (None, Some(run)) => vec![ServerSpec {
-            name: run.clone(),
-            target: run.clone(),
-            port: start.app_port,
-            auto_port: false,
-            ..ServerSpec::default()
-        }],
-        (None, None) => Vec::new(),
-    };
-    if !start.servers.is_empty() && value.get("server").is_some() && start.proxy.is_empty() {
-        return Err(format!(
-            "{file}: `dev.server` is esdev's own listener. Beside the servers a project \
-             runs it is the front door, and that needs `dev.server.proxy` to say where \
-             requests go — `{{ \"/\": \"{}\" }}` sends everything to that server.",
-            start.servers[0].name
-        ));
-    }
-    // A proxy target that is not a URL names a server (D208).
-    for (prefix, target) in &start.proxy {
-        if !target.contains("://") && !start.servers.iter().any(|s| &s.name == target) {
-            let names: Vec<&str> = start.servers.iter().map(|s| s.name.as_str()).collect();
-            return Err(format!(
-                "{file}: `dev.server.proxy` \"{prefix}\" is \"{target}\", which is neither a URL \
-                 nor a server{}. A target is \"http://localhost:8080\", or the name of a \
-                 server under `dev.servers`.",
-                if names.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (servers: {})", names.join(", "))
-                }
-            ));
-        }
-    }
-    Ok(start)
+    })
 }
 
 /// The keys a `dev.servers` entry takes.
-const SERVER_KEYS: &[&str] = &["target", "port", "env", "args", "after"];
+const SERVER_KEYS: &[&str] = &["target", "port", "proxy", "after", "env", "args"];
 
-/// `dev.servers` (D208): name → `{ target?, port?, env?, args?, after? }`,
-/// returned in start order — every server after the ones its `after` names.
-fn read_servers(value: &Value, targets: &[Target], file: &str) -> Result<Vec<ServerSpec>, String> {
+/// `dev.servers` (D208, D235): name → `{ target?, port?, proxy?, after?, env?,
+/// args? }`. What an entry is follows from its target: the one naming an HTML
+/// target is the entry esdev serves, returned apart; every one naming a server
+/// target is run, returned in start order — after the ones its `after` names.
+fn read_servers(
+    value: &Value,
+    targets: &[Target],
+    file: &str,
+) -> Result<(Option<WebEntry>, Vec<ServerSpec>), String> {
     let map = object(value, file, "`dev.servers`")?;
     if map.is_empty() {
         return Err(format!("{file}: `dev.servers` names no server."));
     }
     let target_names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
+    let mut web: Option<WebEntry> = None;
     let mut specs = Vec::with_capacity(map.len());
     for (name, entry) in map {
         let at = format!("`dev.servers.{name}`");
@@ -1550,12 +1555,63 @@ fn read_servers(value: &Value, targets: &[Target], file: &str) -> Result<Vec<Ser
         }
         let entry = object(entry, file, &at)?;
         known_keys(entry, file, &at, SERVER_KEYS)?;
-        let target = match entry.get("target") {
+        let target_name = match entry.get("target") {
             Some(target) => string(target, file, &format!("{at}'s `target`"))?.to_string(),
             None => name.clone(),
         };
-        if !target_names.contains(&target.as_str()) {
-            return Err(unknown_target(file, &at, &target, &target_names));
+        let Some(target) = targets.iter().find(|t| t.name == target_name) else {
+            return Err(unknown_target(file, &at, &target_name, &target_names));
+        };
+        let port = read_port(entry, "port", &format!("`dev.servers.{name}.port`"), file)?;
+        if target.lib {
+            return Err(format!(
+                "{file}: {at} names \"{target_name}\", a library. A library is imported by \
+                 somebody else's build; there is nothing to run or serve."
+            ));
+        }
+        if target.is_html() {
+            // Served by esdev: nothing of a process's to give it.
+            for key in ["env", "args", "after"] {
+                if entry.contains_key(key) {
+                    return Err(format!(
+                        "{file}: {at} serves the HTML target \"{target_name}\", and has `{key}`, \
+                         which is a server's. esdev serves this entry itself; `{key}` belongs \
+                         on an entry naming a server target."
+                    ));
+                }
+            }
+            if let Some(first) = &web {
+                return Err(format!(
+                    "{file}: `dev.servers.{}` and {at} both serve an HTML target. One entry \
+                     serves a project's pages for now; a second frontend is a second HTML target \
+                     in the first one's build, or a project of its own.",
+                    first.name
+                ));
+            }
+            web = Some(WebEntry {
+                name: name.clone(),
+                target: target_name,
+                port,
+                proxy: read_proxy(
+                    entry.get("proxy"),
+                    file,
+                    &format!("`dev.servers.{name}.proxy`"),
+                )?,
+            });
+            continue;
+        }
+        if target.runs_in() == Platform::Browser {
+            return Err(format!(
+                "{file}: {at} names \"{target_name}\", a browser bundle. A page loads it; the \
+                 entry to give a port is the HTML target that does."
+            ));
+        }
+        if entry.contains_key("proxy") {
+            return Err(format!(
+                "{file}: {at} runs the server \"{target_name}\", and has `proxy`. A server's \
+                 routes are its own code; `proxy` belongs on the entry that serves an HTML target, \
+                 as the production gateway in front of it."
+            ));
         }
         let env = match entry.get("env") {
             None => Vec::new(),
@@ -1569,9 +1625,8 @@ fn read_servers(value: &Value, targets: &[Target], file: &str) -> Result<Vec<Ser
         };
         specs.push(ServerSpec {
             name: name.clone(),
-            target,
-            port: read_port(entry, "port", &format!("{at}'s `port`"), file)?,
-            auto_port: true,
+            target: target_name,
+            port,
             env,
             args: string_array(entry.get("args"), file, &format!("{at}'s `args`"))?,
             after: string_array(entry.get("after"), file, &format!("{at}'s `after`"))?,
@@ -1581,7 +1636,7 @@ fn read_servers(value: &Value, targets: &[Target], file: &str) -> Result<Vec<Ser
         for wanted in &spec.after {
             if !specs.iter().any(|s| &s.name == wanted) {
                 return Err(format!(
-                    "{file}: `dev.servers.{}`'s `after` names \"{wanted}\", which is not a server.",
+                    "{file}: `dev.servers.{}`'s `after` names \"{wanted}\", which is not a server esdev runs.",
                     spec.name
                 ));
             }
@@ -1610,21 +1665,25 @@ fn read_servers(value: &Value, targets: &[Target], file: &str) -> Result<Vec<Ser
         batch.reverse();
         ordered.extend(batch);
     }
-    Ok(ordered)
+    Ok((web, ordered))
 }
 
 /// `dev.server.proxy`: `{ "/api": "http://localhost:8080" }` (D150).
 ///
 /// A prefix is a path, so it starts with `/`; a target is an `http` or `https`
 /// origin with an optional path, which is prepended to what is forwarded.
-fn read_proxy(value: Option<&Value>, file: &str) -> Result<Vec<(String, String)>, String> {
+fn read_proxy(
+    value: Option<&Value>,
+    file: &str,
+    label: &str,
+) -> Result<Vec<(String, String)>, String> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
-    let map = object(value, file, "`dev.server.proxy`")?;
+    let map = object(value, file, label)?;
     let mut rules = Vec::with_capacity(map.len());
     for (prefix, target) in map {
-        let at = format!("`dev.server.proxy` \"{prefix}\"");
+        let at = format!("{label} \"{prefix}\"");
         if !prefix.starts_with('/') {
             return Err(format!(
                 "{file}: {at} is not a path. A prefix is the start of a request path, \
@@ -2583,7 +2642,7 @@ mod tests {
     #[test]
     fn a_dev_target_is_a_target_the_dev_loop_owns() {
         let project = read(
-            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"targets": {"render": {"entry": "render.ts", "out": "devserver/render.js"}}, "run": "render"}}"#,
+            r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"targets": {"render": {"entry": "render.ts", "out": "devserver/render.js"}}, "servers": {"render": {}}}}"#,
         )
         .expect("read");
         let render = project
@@ -2600,7 +2659,7 @@ mod tests {
                 .unwrap()
                 .dev_only
         );
-        assert_eq!(project.start.run.as_deref(), Some("render"));
+        assert_eq!(project.start.servers[0].target, "render");
 
         let both = read(
             r#"{"build": {"targets": {"render": {"entry": "a.ts"}}}, "dev": {"targets": {"render": {"entry": "b.ts"}}}}"#,
@@ -2623,25 +2682,109 @@ mod tests {
     #[test]
     fn start_must_name_targets_that_exist() {
         let err = read(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "sever"}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"servers": {"api": {"target": "sever"}}}}"#,
         )
         .expect_err("refused");
         assert!(err.contains("is not a target"), "{err}");
         assert!(err.contains("Did you mean \"server\"?"), "{err}");
 
-        let conflict = read(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "watch": {"targets": ["server"]}, "app": {"port": 8080}, "server": {"port": 5173}}}"#,
-        )
-        .expect_err("a front door needs a proxy");
-        assert!(conflict.contains("needs `dev.server.proxy`"), "{conflict}");
-
         let start = read(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "watch": {"targets": ["server"]}, "app": {"port": 8080}}}"#,
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"servers": {"server": {"port": 8080}}, "watch": {"targets": ["server"]}}}"#,
         )
         .expect("parsed")
         .start;
-        assert_eq!(start.app_port, Some(8080));
-        assert_eq!(start.server_port, None);
+        assert_eq!(start.servers[0].port, Some(8080));
+        assert_eq!(start.web, None);
+        assert_eq!(start.pinned_port, None);
+    }
+
+    /// The keys `dev.servers` replaced are refused, and the message is the
+    /// migration: the `dev.servers` this file means, built from what it said.
+    #[test]
+    fn the_keys_dev_servers_replaced_name_the_entries_they_become() {
+        let err = read(
+            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "app": {"port": 3000}}}"#,
+        )
+        .expect_err("dev.run");
+        assert!(
+            err.contains("`dev.run`, `dev.app` are replaced by `dev.servers`"),
+            "{err}"
+        );
+        assert!(err.contains("\"server\": {"), "{err}");
+        assert!(err.contains("\"port\": 3000"), "{err}");
+
+        let err = read(
+            r#"{"build": {"targets": {"site": {"entry": "index.html"}, "api": {"entry": "a.ts"}}}, "dev": {"servers": {"api": {}}, "server": {"port": 5174, "proxy": {"/api": "api"}}}}"#,
+        )
+        .expect_err("dev.server");
+        assert!(err.contains("`dev.server` is replaced"), "{err}");
+        assert!(err.contains("\"target\": \"site\""), "{err}");
+        assert!(err.contains("\"port\": 5174"), "{err}");
+        assert!(err.contains("\"/api\": \"api\""), "{err}");
+        let start = err.find("\"dev\": ").expect("a suggestion") + "\"dev\": ".len();
+        let suggested: Value = serde_json::from_str(&err[start..]).expect("the suggestion is JSON");
+        assert!(suggested["servers"]["web"].is_object(), "{suggested}");
+        assert!(suggested["servers"]["api"].is_object(), "{suggested}");
+
+        let serve = read(r#"{"build": {"targets": {"web": {"entry": "index.html"}}}, "dev": {"serve": "public"}}"#)
+            .expect_err("dev.serve");
+        assert!(serve.contains("`dev.serve` is replaced"), "{serve}");
+    }
+
+    /// What an entry is follows from its target: an HTML target is served by
+    /// esdev and carries the proxy; a server target is run and carries a
+    /// process's settings; anything else is not an entry (D235).
+    #[test]
+    fn an_entry_is_what_its_target_is() {
+        let project = read(
+            r#"{ "build": { "targets": {
+                   "web": { "entry": "index.html" },
+                   "api": { "entry": "a.ts", "out": "dist/a.js" },
+                   "client": { "entry": "c.ts", "outDir": "dist/c", "platform": "browser" },
+                   "kit": { "entry": "src", "lib": true, "outDir": "dist/kit" } } },
+                 "dev": { "servers": {
+                   "web": { "port": 5173, "proxy": { "/api": "api", "/legacy": "http://localhost:9000" } },
+                   "api": { "port": 3000 } } } }"#,
+        )
+        .expect("parsed");
+        let web = project.start.web.expect("the web entry");
+        assert_eq!(
+            (web.name.as_str(), web.target.as_str(), web.port),
+            ("web", "web", Some(5173))
+        );
+        assert_eq!(
+            web.proxy[0],
+            ("/legacy".to_string(), "http://localhost:9000".to_string())
+        );
+        assert_eq!(project.start.servers.len(), 1);
+        assert_eq!(project.start.servers[0].name, "api");
+
+        let entry = |entries: &str| {
+            read(&format!(
+                r#"{{ "build": {{ "targets": {{
+                       "web": {{ "entry": "index.html" }}, "docs": {{ "entry": "docs.html" }},
+                       "api": {{ "entry": "a.ts", "out": "dist/a.js" }},
+                       "client": {{ "entry": "c.ts", "outDir": "dist/c", "platform": "browser" }},
+                       "kit": {{ "entry": "src", "lib": true, "outDir": "dist/kit" }} }} }},
+                     "dev": {{ "servers": {entries} }} }}"#
+            ))
+            .expect_err(entries)
+        };
+        assert!(
+            entry(r#"{ "api": { "proxy": { "/x": "http://a.b" } } }"#)
+                .contains("routes are its own code")
+        );
+        assert!(entry(r#"{ "web": { "env": { "A": "1" } } }"#).contains("which is a server's"));
+        assert!(
+            entry(r#"{ "web": { "after": ["api"] }, "api": {} }"#).contains("which is a server's")
+        );
+        assert!(entry(r#"{ "web": {}, "docs": {} }"#).contains("both serve an HTML target"));
+        assert!(entry(r#"{ "client": {} }"#).contains("a browser bundle"));
+        assert!(entry(r#"{ "kit": {} }"#).contains("a library"));
+        assert!(
+            entry(r#"{ "api": { "after": ["web"] }, "web": {} }"#)
+                .contains("not a server esdev runs")
+        );
     }
 
     /// A key in its pre-D232 spelling is refused by name, with the one it has
@@ -2678,10 +2821,20 @@ mod tests {
     #[test]
     fn dev_errors_name_the_keys_of_the_file() {
         for (dev, named) in [
-            (r#"{"run": "server", "app": {"port": 0}}"#, "`dev.app.port`"),
-            (r#"{"server": {"port": 70000}}"#, "`dev.server.port`"),
-            (r#"{"run": 3}"#, "`dev.run`"),
-            (r#"{"serve": 3}"#, "`dev.serve`"),
+            (
+                r#"{"servers": {"server": {"port": 0}}}"#,
+                "`dev.servers.server.port`",
+            ),
+            (
+                r#"{"servers": {"server": {"port": 70000}}}"#,
+                "`dev.servers.server.port`",
+            ),
+            (
+                r#"{"servers": {"server": {"target": 3}}}"#,
+                "`dev.servers.server`'s `target`",
+            ),
+            (r#"{"run": "server"}"#, "`dev.run`"),
+            (r#"{"serve": "public"}"#, "`dev.serve`"),
             (r#"{"watch": {"targets": ["nope"]}}"#, "`dev.watch.targets`"),
             (r#"{"outDir": ""}"#, "`dev.outDir`"),
         ] {
@@ -2775,8 +2928,7 @@ mod tests {
                 "build": { "targets": { "server": { "entry": "src/server.ts" } } },
                 "resolve": { "alias": { "@": "./src" } },
                 "dev": {
-                    "run": "server",
-                    "app": { "port": 8080 },
+                    "servers": { "server": { "port": 8080 } },
                     "watch": { "targets": ["server"], "paths": ["./config"] },
                     "outDir": ".work"
                 }
@@ -2784,8 +2936,8 @@ mod tests {
         )
         .expect("parsed");
         assert_eq!(project.targets[0].name, "server");
-        assert_eq!(project.start.run.as_deref(), Some("server"));
-        assert_eq!(project.start.app_port, Some(8080));
+        assert_eq!(project.start.servers[0].target, "server");
+        assert_eq!(project.start.servers[0].port, Some(8080));
         assert_eq!(project.start.watch_targets, ["server"]);
         assert_eq!(project.watch_paths, ["./config"]);
         assert_eq!(project.alias[0].0, "@");
@@ -2795,28 +2947,23 @@ mod tests {
             .expect_err("permission block refused");
         assert!(err.contains("not an esdev setting"), "{err}");
 
-        let static_site = read(
-            r#"{
-                "build": { "targets": { "web": { "entry": "index.html" } } },
-                "dev": { "server": { "port": 5174 } }
-            }"#,
-        )
-        .expect("static dev server config");
-        assert_eq!(static_site.start.server_port, Some(5174));
-
         // Longest prefix first, so `/api/admin` is not taken by `/api`.
         let proxy = read(
             r#"{
                 "build": { "targets": { "web": { "entry": "index.html" } } },
-                "dev": { "server": { "proxy": {
+                "dev": { "servers": { "web": { "port": 5174, "proxy": {
                     "/api": "http://localhost:8080",
                     "/api/admin": "https://admin.example.com/v1"
-                } } }
+                } } } }
             }"#,
         )
         .expect("a proxy");
         assert_eq!(
-            proxy.start.proxy,
+            proxy.start.web.as_ref().and_then(|web| web.port),
+            Some(5174)
+        );
+        assert_eq!(
+            proxy.start.proxy(),
             [
                 (
                     "/api/admin".to_string(),
@@ -2827,18 +2974,22 @@ mod tests {
         );
     }
 
-    /// A proxy forwards a path to an http or https origin, and only where esdev
-    /// serves the page: with `dev.run` the application owns the endpoint.
+    /// A proxy forwards a path to an http or https origin, or to a server
+    /// entry by name, from the entry esdev serves.
     #[test]
     fn a_proxy_names_a_path_and_an_http_origin() {
         let with = |proxy: &str| {
             read(&format!(
                 r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html" }} }} }},
-                     "dev": {{ "server": {{ "proxy": {proxy} }} }} }}"#
+                     "dev": {{ "servers": {{ "web": {{ "proxy": {proxy} }} }} }} }}"#
             ))
         };
         let not_a_path = with(r#"{ "api": "http://localhost:8080" }"#).expect_err("a path");
         assert!(not_a_path.contains("is not a path"), "{not_a_path}");
+        assert!(
+            not_a_path.contains("`dev.servers.web.proxy`"),
+            "{not_a_path}"
+        );
         let not_http = with(r#"{ "/api": "ftp://localhost" }"#).expect_err("http");
         assert!(not_http.contains("http or https origin"), "{not_http}");
         // Without a scheme it reads as a server's name, and there is none.
@@ -2846,17 +2997,6 @@ mod tests {
         assert!(
             not_a_url.contains("neither a URL nor a server"),
             "{not_a_url}"
-        );
-
-        // Beside a server, the proxy makes esdev the front door (D208).
-        let front_door = read(
-            r#"{ "build": { "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } } },
-                 "dev": { "run": "server", "server": { "proxy": { "/": "server" } } } }"#,
-        )
-        .expect("a front door");
-        assert_eq!(
-            front_door.start.proxy,
-            [("/".to_string(), "server".to_string())]
         );
     }
 
@@ -2884,31 +3024,22 @@ mod tests {
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["api", "v2", "worker"]);
         assert_eq!(specs[0].port, Some(4000));
-        assert!(specs[0].auto_port);
         assert_eq!(specs[1].target, "api");
         assert_eq!(specs[2].target, "jobs");
         assert_eq!(specs[2].env, [("QUEUE".to_string(), "dev".to_string())]);
         assert_eq!(specs[2].args, ["--once"]);
-
-        // `dev.run` is the one-server form, and keeps its meaning.
-        let legacy = servers(r#"{ "run": "api", "app": { "port": 8080 } }"#).expect("parsed");
-        assert_eq!(legacy.len(), 1);
-        assert_eq!(
-            (legacy[0].name.as_str(), legacy[0].port),
-            ("api", Some(8080))
-        );
-        assert!(!legacy[0].auto_port);
     }
 
     #[test]
     fn servers_refuse_what_cannot_run() {
-        let both = servers(r#"{ "run": "api", "servers": { "api": {} } }"#).expect_err("both");
-        assert!(both.contains("both say what to run"), "{both}");
         let target =
             servers(r#"{ "servers": { "x": { "target": "nope" } } }"#).expect_err("target");
         assert!(target.contains("is not a target"), "{target}");
         let after = servers(r#"{ "servers": { "api": { "after": ["db"] } } }"#).expect_err("after");
-        assert!(after.contains("\"db\", which is not a server"), "{after}");
+        assert!(
+            after.contains("\"db\", which is not a server esdev runs"),
+            "{after}"
+        );
         let cycle = servers(
             r#"{ "servers": { "api": { "after": ["jobs"] }, "jobs": { "after": ["api"] } } }"#,
         )
@@ -2916,14 +3047,6 @@ mod tests {
         assert!(cycle.contains("wait for each other"), "{cycle}");
         let key = servers(r#"{ "servers": { "api": { "watch": true } } }"#).expect_err("a key");
         assert!(key.contains("watch"), "{key}");
-        let proxy =
-            servers(r#"{ "servers": { "api": {} }, "server": { "proxy": { "/x": "web" } } }"#)
-                .expect_err("an unknown server");
-        assert!(proxy.contains("(servers: api)"), "{proxy}");
-        let named =
-            servers(r#"{ "servers": { "api": {} }, "server": { "proxy": { "/api": "api" } } }"#)
-                .expect("a proxy naming a server");
-        assert_eq!(named[0].name, "api");
     }
 
     /// A document decides its own shape, so the keys that would decide it here
@@ -2962,7 +3085,7 @@ mod tests {
     fn a_file_with_no_targets_says_so() {
         // `dev` builds and serves targets, so a file naming one without them
         // is incomplete — and so is a file that says nothing at all.
-        let missing = read(r#"{"dev": {"run": "a"}}"#).expect_err("refused");
+        let missing = read(r#"{"dev": {"servers": {"a": {}}}}"#).expect_err("refused");
         assert!(missing.contains("no `build.targets`"), "{missing}");
         assert!(read(r#"{ }"#).is_err());
 

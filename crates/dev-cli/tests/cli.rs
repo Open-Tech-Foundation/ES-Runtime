@@ -4091,7 +4091,7 @@ fn a_failed_dev_build_says_its_output_may_be_partial() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build":{"targets":{"app":{"entry":"index.html","outDir":"dist"},"z-broken":{"entry":"src/broken.ts","out":"dist/broken.js"}}}}"#,
+        r#"{"build":{"targets":{"app":{"entry":"index.html","outDir":"dist"},"z-broken":{"entry":"src/broken.ts","out":"dist/broken.js"}}},"dev":{"servers":{"web":{"target":"app"}}}}"#,
     );
 
     let (_supervisor, log) = start_in_logging(&dir, &[]);
@@ -10565,7 +10565,8 @@ fn init_adopts_an_existing_project() {
         manifest.contains("\"entry\": \"src/server.js\""),
         "{manifest}"
     );
-    assert!(manifest.contains("\"run\": \"server\""), "{manifest}");
+    assert!(manifest.contains("\"servers\""), "{manifest}");
+    assert!(manifest.contains("\"server\": {"), "{manifest}");
     assert!(
         stdout(&out).contains("types not installed"),
         "{}",
@@ -10603,7 +10604,8 @@ fn init_adopts_a_root_main() {
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
     let manifest = std::fs::read_to_string(dir.join("esdev.json")).expect("read esdev.json");
     assert!(manifest.contains("\"entry\": \"main.js\""), "{manifest}");
-    assert!(manifest.contains("\"run\": \"server\""), "{manifest}");
+    assert!(manifest.contains("\"servers\""), "{manifest}");
+    assert!(manifest.contains("\"server\": {"), "{manifest}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -10751,7 +10753,7 @@ fn project_dir(name: &str) -> PathBuf {
             "prerender": { "entry": "src/prerender.mjs", "out": "dist/prerender.js",
                            "then": "run" }
           } },
-          "dev": { "run": "server", "watch": { "targets": ["server", "browser"] } }
+          "dev": { "servers": { "server": {} }, "watch": { "targets": ["server", "browser"] } }
         }"#,
     );
     dir
@@ -11091,7 +11093,7 @@ fn html_project(name: &str) -> PathBuf {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
     dir
 }
@@ -11188,7 +11190,7 @@ fn a_stylesheet_that_is_linked_and_imported_is_written_once() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11265,7 +11267,7 @@ fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     let build = || {
@@ -11628,7 +11630,7 @@ fn a_css_module_is_scoped_and_reaches_both_the_bundle_and_a_stylesheet() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11734,7 +11736,7 @@ fn composes_is_transitive_and_a_plain_stylesheet_is_imported_whole() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
@@ -11799,7 +11801,7 @@ fn a_reference_that_is_not_there_stops_the_build() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -11827,7 +11829,7 @@ fn two_module_scripts_that_would_collide_are_refused() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
     let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
     assert!(!out.status.success());
@@ -12480,7 +12482,7 @@ fn start_finds_a_free_port_when_none_was_named() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     // The default must be taken for the length of the test. This test holds
@@ -12532,7 +12534,7 @@ fn start_refuses_a_named_port_that_is_taken() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}}"#,
+        r#"{"build": {"targets": {"web": {"entry": "index.html", "outDir": "dist"}}}, "dev": {"servers": {"web": {}}}}"#,
     );
 
     let _held = std::net::TcpListener::bind(("127.0.0.1", port)).expect("hold the port");
@@ -12583,7 +12585,7 @@ fn the_dev_loop_serves_an_imported_asset_and_maps_its_bundle() {
         "esdev.json",
         &format!(
             r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
-                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+                 "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }} }}"#
         ),
     );
 
@@ -12630,7 +12632,7 @@ fn start_serves_a_frontend_project_and_reloads_it() {
         "esdev.json",
         &format!(
             r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
-                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+                 "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }} }}"#
         ),
     );
 
@@ -12716,7 +12718,7 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
         r#"{ "build": { "targets": {
                    "server": { "entry": "src/server.mjs", "out": "dist/server.js" },
                    "web": { "entry": "index.html", "outDir": "dist" } } },
-                 "dev": { "run": "server" } }"#,
+                 "dev": { "servers": { "server": {} } } }"#,
     );
 
     let (_supervisor, log) = start_in_logging(&dir, &[]);
@@ -12804,7 +12806,7 @@ fn a_failed_build_leaves_the_running_server_alone() {
         &dir,
         "esdev.json",
         r#"{ "build": { "targets": { "server": { "entry": "src/server.mjs", "out": "dist/server.js" } } },
-                 "dev": { "run": "server" } }"#,
+                 "dev": { "servers": { "server": {} } } }"#,
     );
 
     let _supervisor = start_in(&dir);
@@ -12854,7 +12856,7 @@ fn a_parse_error_in_the_loop_is_reported_once() {
     write_in(
         &dir,
         "esdev.json",
-        r#"{"build":{"targets":{"web":{"entry":"index.html","outDir":"dist"}}}}"#,
+        r#"{"build":{"targets":{"web":{"entry":"index.html","outDir":"dist"}}},"dev":{"servers":{"web":{}}}}"#,
     );
     let (_supervisor, log) = start_in_logging(&dir, &[]);
     let _port = announced_port(&log);
@@ -13289,13 +13291,18 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
     // and names no server; a fullstack one does both.
     let statik = std::fs::read_to_string(parent.join("static/esdev.json")).expect("read");
     assert!(!statik.contains("permissions"), "{statik}");
-    // `"run":` rather than `"run"` — the prerender target says `"then": "run"`,
-    // which is a target that is executed after the build, not a server.
-    assert!(!statik.contains("\"run\":"), "{statik}");
+    // The page esdev serves, and nothing it runs.
+    let statik_dev: serde_json::Value = serde_json::from_str(&statik).expect("JSON");
+    assert_eq!(
+        statik_dev["dev"]["servers"],
+        serde_json::json!({ "web": { "port": 5173 } }),
+        "{statik}"
+    );
     let full = std::fs::read_to_string(parent.join("fullstack/esdev.json")).expect("read");
-    assert!(full.contains("\"run\": \"server\""), "{full}");
-    assert!(
-        full.contains("\"app\":") && full.contains("\"port\": 3000"),
+    let full_dev: serde_json::Value = serde_json::from_str(&full).expect("JSON");
+    assert_eq!(
+        full_dev["dev"]["servers"],
+        serde_json::json!({ "server": { "port": 3000 } }),
         "{full}"
     );
 
@@ -14139,7 +14146,7 @@ export default {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"plugins": ["./plugin.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"plugins": ["./plugin.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }}}}"#
         ),
     );
     let _supervisor = start_in(&dir);
@@ -14189,7 +14196,7 @@ fn the_dev_loop_rebuilds_for_a_file_a_plugin_compiles() {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"plugins": ["./sass.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"plugins": ["./sass.mjs"], "build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist"}}}}}}, "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }}}}"#
         ),
     );
     let css = |dir: &Path| -> String {
@@ -14259,7 +14266,7 @@ fn reload_project(name: &str) -> PathBuf {
         &dir,
         "esdev.json",
         &format!(
-            r#"{{"build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist", "assets": ["public"]}}}}}}, "dev": {{"server": {{"port": {port}}}}}}}"#
+            r#"{{"build": {{"targets": {{"web": {{"entry": "index.html", "outDir": "dist", "assets": ["public"]}}}}}}, "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }}}}"#
         ),
     );
     dir
@@ -15178,7 +15185,7 @@ test('initializes once', () => {
             r#"{{
       "plugins": ["@opentf/esdev-plugin-react"],
       "build": {{"targets": {{"web": {{"entry":"index.html","outDir":"dist"}}}}}},
-      "dev": {{"server": {{"port":{port}}}}}
+      "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }}
     }}"#
         ),
     );
@@ -15369,7 +15376,7 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
          <body><div id=root></div></body></html>\n",
     );
     let start = port.map_or_else(String::new, |port| {
-        format!(r#", "dev": {{ "server": {{ "port": {port} }} }}"#)
+        format!(r#", "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }}"#)
     });
     write_in(
         dir,
@@ -15497,7 +15504,7 @@ export default {
         &format!(
             r#"{{ "plugins": ["./plugin.mjs"],
                  "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
-                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+                 "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }} }}"#
         ),
     );
 
@@ -15523,6 +15530,99 @@ export default {
         "the plugin was reloaded for the rebuild: {rebuilt}"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A proxied request waits for a server that is restarting** (D235). The web
+/// entry is the team's gateway in front of its API; a save restarts the API,
+/// and a request in that moment used to be refused and answered 502. It waits
+/// for the server to listen again instead: across several saves under steady
+/// traffic, every request is answered by the API.
+#[test]
+fn the_proxy_waits_for_a_server_that_is_restarting() {
+    let dir = watch_dir("s_proxy_wait");
+    let web = test_port("s_proxy_wait_web");
+    let api = test_port("s_proxy_wait_api");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    let server = |word: &str| {
+        format!(
+            "import {{ serve }} from 'runtime:http';\n\
+             import {{ env, unmask }} from 'runtime:process';\n\
+             serve({{ port: Number(unmask(env.PORT)) }}, () => new Response('{word}'));\n"
+        )
+    };
+    write_in(&dir, "src/api.mjs", &server("V1"));
+    write_in(&dir, "src/main.mjs", "document.title = 'page';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head><script type=\"module\" src=\"./src/main.mjs\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "build": {{ "targets": {{
+                   "web": {{ "entry": "index.html", "outDir": "dist" }},
+                   "api": {{ "entry": "src/api.mjs", "out": "dist/api.js" }} }} }},
+                 "dev": {{ "servers": {{
+                   "web": {{ "port": {web}, "proxy": {{ "/api": "api" }} }},
+                   "api": {{ "port": {api} }} }} }} }}"#
+        ),
+    );
+    let _supervisor = start_in(&dir);
+    let first = wait_for_http(web, "/api/x", |body| body.contains("V1"));
+    assert!(first.contains("V1"), "{first}");
+
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let traffic = {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let mut answers = Vec::new();
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                answers.push(http_get(web, "/api/x"));
+            }
+            answers
+        })
+    };
+    for word in ["V2", "V3", "V4"] {
+        std::thread::sleep(Duration::from_millis(700));
+        write_in(&dir, "src/api.mjs", &server(word));
+    }
+    let last = wait_for_http(web, "/api/x", |body| body.contains("V4"));
+    std::thread::sleep(Duration::from_millis(300));
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    let answers = traffic.join().expect("the traffic thread");
+    assert!(last.contains("V4"), "the last save never landed: {last}");
+    assert!(
+        answers.len() > 20,
+        "too little traffic to mean anything: {}",
+        answers.len()
+    );
+    let failed: Vec<String> = answers
+        .iter()
+        .filter(|answer| {
+            !answer
+                .as_deref()
+                .is_some_and(|a| a.starts_with("HTTP/1.1 200"))
+        })
+        .map(|answer| {
+            answer
+                .clone()
+                .unwrap_or_else(|| "no answer".to_string())
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "{} of {} requests were not answered by the API: {:?}",
+        failed.len(),
+        answers.len(),
+        &failed[..failed.len().min(5)]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -15567,7 +15667,7 @@ fn start_rebuilds_for_an_edit_to_a_linked_package() {
         "esdev.json",
         &format!(
             r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
-                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+                 "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }} }}"#
         ),
     );
     let _supervisor = start_in(&app);
@@ -15628,7 +15728,7 @@ export default {
         &format!(
             r#"{{ "plugins": ["./plugin.mjs"],
                  "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
-                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+                 "dev": {{ "servers": {{ "web": {{ "port": {port} }} }} }} }}"#
         ),
     );
 
