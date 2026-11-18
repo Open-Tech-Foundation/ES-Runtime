@@ -2040,7 +2040,21 @@ pub async fn forget_shipped() {
 /// The patch is *written*, not returned: rolldown hands back the code and the
 /// name it should have, and leaves the writing to whoever is serving it — which
 /// is us, out of the same directory the bundle is served from.
-pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
+///
+/// `Err` is rolldown failing to compute one, with its words. Not printed here:
+/// the usual reason is a module that no longer parses, and the full build that
+/// follows reports exactly that with a codeframe — so the caller says it only
+/// when that build succeeds, which is when it is news.
+pub async fn hot_update(changed: &[PathBuf]) -> Result<Option<Hot>, String> {
+    let mut failure = None;
+    let hot = compute_hot_update(changed, &mut failure).await;
+    match failure {
+        Some(why) => Err(why),
+        None => Ok(hot),
+    }
+}
+
+async fn compute_hot_update(changed: &[PathBuf], failure: &mut Option<String>) -> Option<Hot> {
     let mut held = warm().lock().await;
     let warm = held.as_mut()?;
     if !warm.graph {
@@ -2090,13 +2104,13 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
         .await;
     let updates = match updates {
         Ok(updates) => updates,
-        // Reported rather than swallowed. A patch that cannot be computed is a
-        // page that reloads, which looks exactly like a dev loop with no hot
-        // updates at all — so the one thing that must not happen is this failing
-        // quietly. Human words (this is anyhow, so Display is the message, not
+        // Reported rather than swallowed — by the caller, once it knows the
+        // build did not say it first. A patch that cannot be computed is a page
+        // that reloads, which looks exactly like a dev loop with no hot updates
+        // at all. Human words (this is anyhow, so Display is the message, not
         // the backtrace); the loop's cycle line states the reload itself.
         Err(errors) => {
-            eprintln!("esdev: no hot update — {errors}");
+            *failure = Some(errors.to_string());
             return None;
         }
     };

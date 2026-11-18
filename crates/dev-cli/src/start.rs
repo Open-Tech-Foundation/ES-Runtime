@@ -627,7 +627,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         let hot = if config.hot && !changed.is_empty() && !plugins_changed {
             crate::build::hot_update(&changed).await
         } else {
-            None
+            Ok(None)
         };
 
         // **Rebuilt before anything is stopped.** A syntax error mid-edit is
@@ -636,6 +636,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // which is why the stop is here and not above.
         match rebuild(&project, &watched, port, config.hot).await {
             Ok(servers) => server_files = files_of(&project, servers),
+            // The build's codeframe says why; a hot update failing for the
+            // same reason would say it twice.
             Err(err) => {
                 eprintln!("esdev: {err}");
                 // Keep this as current state as well as notifying connected
@@ -709,6 +711,12 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // What the page loads, after: the dev output without the servers' own
         // files.
         let page_after = page_fingerprint(&devdir, &server_files);
+        // The build succeeded, so a hot update that could not be computed
+        // failed for a reason of its own, and that is worth a line.
+        let hot = hot.unwrap_or_else(|why| {
+            eprintln!("esdev: no hot update — {why}");
+            None
+        });
         let update = match hot {
             Some(hot) => Some(Update::Patch {
                 // Relative, so it is fetched from whatever origin the page is
@@ -1331,8 +1339,8 @@ fn serve_dir(project: &Settings) -> Result<Option<PathBuf>, String> {
         return Err(format!(
             "there is nothing for `esdev start` to run or serve.\n\n\
              Name the target whose output is your server:\n\n  \
-             \"start\": {{ \"run\": \"{}\" }}\n\n\
-             …or give it a directory to serve: \"start\": {{ \"serve\": \"dist\" }}.",
+             \"dev\": {{ \"run\": \"{}\" }}\n\n\
+             …or give it a directory to serve: \"dev\": {{ \"serve\": \"dist\" }}.",
             project
                 .targets
                 .first()
@@ -1831,6 +1839,30 @@ mod tests {
                 .expect("parsed")
                 .expect("a config"),
         )
+    }
+
+    /// What the error suggests is what the file reads: each snippet it names,
+    /// put into the project that failed, parses — the suggestion once named a
+    /// `start` key the file had stopped having.
+    #[test]
+    fn nothing_to_run_suggests_keys_the_file_has() {
+        let targets = r#""build": {"targets": {"web": {"entry": "main.js", "outdir": "dist", "platform": "browser"}}}"#;
+        let err = serve_dir(&settings(&format!("{{{targets}}}"))).expect_err("nothing to serve");
+        let snippets: Vec<&str> = err
+            .lines()
+            .flat_map(|line| {
+                line.split(": \"dev\": ")
+                    .skip(1)
+                    .chain(line.trim().strip_prefix("\"dev\": "))
+            })
+            .map(|rest| rest.trim_end_matches('.'))
+            .collect();
+        assert_eq!(snippets.len(), 2, "{err}");
+        for snippet in snippets {
+            let json = format!("{{{targets}, \"dev\": {snippet}}}");
+            crate::config::parse(&json, PathBuf::from("/p"), "esdev.json")
+                .unwrap_or_else(|e| panic!("the suggestion {snippet} does not parse:\n{e}"));
+        }
     }
 
     /// A prerender step is a release step: the loop builds the site it

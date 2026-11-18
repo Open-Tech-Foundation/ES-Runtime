@@ -37,6 +37,19 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **Messages that named what is gone.** The "nothing for `esdev start` to run or
+  serve" error suggested `"start": { "run": … }`, a key the file no longer
+  has; it says `"dev"` now, and a test parses each suggestion it makes.
+  `esdev create --help` listed `spa` and `fullstack`, templates that no longer
+  exist, and left out `app`: the templates are released apart from esdev, so
+  the help points at `--list` instead of naming them. `--list` and `create`
+  label the template packages they read as "Template packages:", which
+  `--list` had printed as a second "Templates:". "needs a esdev.json" reads
+  "needs an esdev.json".
+- **A syntax error in the dev loop is reported once.** A hot update that could
+  not be computed printed `esdev: no hot update — …` before the build printed
+  the same parse error with its codeframe. It is said only when the build
+  succeeds, which is when it is news.
 - **`esdev start`, `--watch` and `test --watch` no longer watch what the
   project ignores.** On Linux a recursive watch is one inotify watch per
   directory, and the watch covered the whole project: this repository's site

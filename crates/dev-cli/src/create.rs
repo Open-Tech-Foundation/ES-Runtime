@@ -372,7 +372,7 @@ pub(crate) async fn load_library(
             Err(Unfetched::Failed(why)) => return Err(why),
         }
     }
-    crate::prompt::log(&format!("Templates: {}", read.join(", ")));
+    crate::prompt::log(&format!("Template packages: {}", read.join(", ")));
     Ok(library)
 }
 

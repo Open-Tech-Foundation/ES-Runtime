@@ -183,7 +183,7 @@ fn templates_come_from_the_newest_release_this_esdev_reads() {
     let said = text(&out);
     assert!(out.status.success(), "{said}");
     assert!(
-        said.contains("Templates: @opentf/esdev-templates@0.1.0"),
+        said.contains("Template packages: @opentf/esdev-templates@0.1.0"),
         "{said}"
     );
     assert!(
@@ -540,7 +540,7 @@ fn a_package_the_root_lists_is_read_beside_it() {
     let said = text(&out);
     assert!(out.status.success(), "{said}");
     assert!(
-        said.contains("Templates: @opentf/esdev-templates@0.2.0, @opentf/create-afw@0.6.1"),
+        said.contains("Template packages: @opentf/esdev-templates@0.2.0, @opentf/create-afw@0.6.1"),
         "{said}"
     );
     assert!(app.join("package.json").is_file());

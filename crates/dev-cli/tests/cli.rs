@@ -12662,6 +12662,62 @@ fn a_failed_build_leaves_the_running_server_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A syntax error mid-edit is said once, by the build, with its codeframe —
+/// not first by the hot update that could not be computed for the same reason.
+#[test]
+fn a_parse_error_in_the_loop_is_reported_once() {
+    let dir = watch_dir("s_parse_once");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.ts", "document.title = 'working';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body><script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{"build":{"targets":{"web":{"entry":"index.html","outdir":"dist"}}}}"#,
+    );
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
+    let _port = announced_port(&log);
+
+    write_in(&dir, "src/main.ts", "document.title = ;\n");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let mut said = String::new();
+    while std::time::Instant::now() < deadline {
+        said = std::fs::read_to_string(&log).unwrap_or_default();
+        if said.contains("PARSE_ERROR") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Long enough for a second report to have followed the first.
+    std::thread::sleep(Duration::from_millis(500));
+    let said = std::fs::read_to_string(&log).unwrap_or(said);
+    assert!(
+        said.contains("PARSE_ERROR"),
+        "the error was never reported:\n{said}"
+    );
+    assert!(!said.contains("no hot update"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The templates are released apart from esdev (D220), so its help names
+/// none: a list there is one that goes stale — it named two that were gone.
+#[test]
+fn create_help_points_at_the_list_rather_than_naming_templates() {
+    let out = esdev_in(&std::env::temp_dir())
+        .args(["create", "--help"])
+        .output()
+        .expect("spawn esdev create --help");
+    let help = stdout(&out);
+    assert!(help.contains("--list names"), "{help}");
+    for gone in ["spa,", "fullstack,"] {
+        assert!(!help.contains(gone), "{help}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `esdev create` (DECISIONS D65)
 //

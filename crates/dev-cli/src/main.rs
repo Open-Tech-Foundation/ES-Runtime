@@ -485,9 +485,8 @@ USAGE:
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           Which template, no default: react, api, hono,
-                                elysia, vanilla, micro-ui, preact, lit, lib,
-                                spa, fullstack, docs or library
+    --template=<name>           Which template, no default. --list names
+                                them: they are released apart from esdev
     --<option>=<value>          One of the template's own options, such as
                                 --mode=fullstack or --language=ts; a yes/no
                                 is --<option> or --no-<option>. Each template's
@@ -1156,7 +1155,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         }
         if let Some(name) = target {
             return Err(format!(
-                "--target={name} needs a {0}, and there is none here.\n\n\
+                "--target={name} needs an {0}, and there is none here.\n\n\
                  A target is one thing the project builds; {0} is where they are \
                  described.",
                 config::FILE_NAME
@@ -1633,7 +1632,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
         true => settings.with_start(port, watch_paths),
         false => {
             return Err(format!(
-                "esdev start needs a {0}, and there is none here.\n\n\
+                "esdev start needs an {0}, and there is none here.\n\n\
              It describes what this project builds and what to run:\n\n  \
              {{ \"build\": {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }} }},\n    \
              \"dev\": {{ \"run\": \"server\" }} }}\n\n\
