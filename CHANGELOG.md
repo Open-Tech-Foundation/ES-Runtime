@@ -11,6 +11,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **Filesystem calls are fast again** (DECISIONS D229). Since 0.47.0 every
+  `runtime:fs` call resolved its path twice — canonicalizing it (one
+  `readlink` per component) and then walking it by descriptor — which made
+  `exists()` and `stat()` 35–70% slower than in 0.46.0. A plain path, with no
+  link and no `..` in it, is now walked once and proven canonical by the walk
+  itself; anything else is resolved as before. `exists()`/`stat()` are back to
+  0.46.0's speed, and small reads, writes and appends are 12–26% faster than
+  in 0.48.0. The jail's guarantees are unchanged: directories are still pinned
+  by descriptor, and the final name still refuses a symlink swapped in.
+
 ### Added
 
 - **Typed ops** (DECISIONS D228): `OpDecl::typed` and `OpDecl::typed_async`

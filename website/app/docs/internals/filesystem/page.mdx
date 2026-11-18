@@ -73,6 +73,18 @@ check, and it is refused as an escape rather than followed. Recursive `mkdir`
 and `remove` descend the same way, one descriptor at a time — a recursive delete
 redirected halfway is the one outcome nobody can undo.
 
+**A plain path is proven canonical by that walk, not by resolving it first.**
+Canonicalizing costs one `readlink` per component of the absolute path, and the
+walk opens every directory `NOFOLLOW` anyway. So a path with nothing but names in
+it — no `..`, no trailing separator, under a root — is walked as written, and its
+final name is checked not to be a symlink. If every step holds, there is no link
+anywhere in it, the path as written *is* its real location, and the jail and the
+scope lists judged the right path. A link anywhere, a missing directory or any
+refusal sends the path through full canonicalize-then-confine above, which is
+what decides every refusal and writes every error. A plain path costs the walk
+and one `lstat`; one with a link in it costs that walk as well, before it is
+resolved in full.
+
 Three things this does not cover, said here rather than left to be discovered.
 **Windows** has no `*at` family, keeps the path-based behaviour, and keeps the
 race. **Hard links** are invisible to `NOFOLLOW` — a hard link *is* the file —

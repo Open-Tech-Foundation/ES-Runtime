@@ -209,6 +209,70 @@ pub fn anchor(real: &Path, roots: &[PathBuf], shown: &str) -> Result<Anchored, P
     })
 }
 
+/// [`anchor`] for a path **as the program wrote it**, which is only safe to
+/// call because the walk itself proves the path canonical (DECISIONS D229).
+///
+/// `abs` must lie under `root` and have only normal components below it — the
+/// caller checks that lexically. Every directory is then opened from the one
+/// above with `NOFOLLOW`, as [`anchor`] does, and when `follow_final` (the
+/// operation acts on what the name points at, not on a link there) the final
+/// name is `lstat`ed and must not be a symlink. If both hold, no component of
+/// `abs` is a link, so `abs` is its own canonical form and the jail's checks
+/// on it were the checks `confine` would have made.
+///
+/// `None` for anything else — a link anywhere, a missing or unreadable
+/// directory, any error — and the caller takes the canonicalizing path, which
+/// reports it the way it always has. This never decides a refusal.
+#[cfg(unix)]
+pub fn anchor_plain(abs: &Path, root: &Path, shown: &str, follow_final: bool) -> Option<Anchored> {
+    use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, openat, statat};
+    use rustix::io::Errno;
+
+    let inside = abs.strip_prefix(root).ok()?;
+    let mut components = inside.components().peekable();
+    let mut dir = openat(
+        CWD,
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .ok()?;
+    let mut name = None;
+    while let Some(component) = components.next() {
+        let Component::Normal(part) = component else {
+            return None;
+        };
+        if components.peek().is_none() {
+            name = Some(part.to_os_string());
+            break;
+        }
+        dir = openat(
+            &dir,
+            part,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .ok()?;
+    }
+    // The root itself has no final name; it is the canonicalizing path's case.
+    let name = name?;
+    if follow_final {
+        match statat(&dir, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::Symlink => return None,
+            // Not there: created, or reported missing, by the operation itself —
+            // exactly what `confine` hands it for a name that does not exist yet.
+            Ok(_) | Err(Errno::NOENT) => {}
+            Err(_) => return None,
+        }
+    }
+    Some(Anchored {
+        parent: dir,
+        name,
+        path: abs.to_path_buf(),
+        shown: shown.to_string(),
+    })
+}
+
 /// Why a component would not open, told apart from the outside.
 ///
 /// `NOFOLLOW` refuses a symlink whatever else is going on, but *which* error it

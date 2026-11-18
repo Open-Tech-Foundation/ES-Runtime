@@ -40,6 +40,10 @@ pub(crate) use tree::PinnedTree;
 /// added (D54), and the scope lists (D38).
 pub struct Jail {
     base: PathBuf,
+    /// Whether `base` canonicalized when the jail was built. A path joined onto
+    /// a base that did not may hold a link above anything the walk sees, so
+    /// only a canonical base lets [`plain`](Self::plain) skip resolution.
+    base_canonical: bool,
     root: PathBuf,
     /// Paths reads may touch (`--allow-read=<paths>`). `None` ⇒ anywhere inside
     /// the root jail.
@@ -65,10 +69,13 @@ impl Jail {
         // Spelled the way the root is, so `spelled` can find one in the other
         // where the two differ only by a link (`/tmp` on macOS). Resolution
         // canonicalizes every path it joins onto the base anyway.
-        let base =
-            path::canonicalize(base.as_ref()).unwrap_or_else(|_| base.as_ref().to_path_buf());
+        let (base, base_canonical) = match path::canonicalize(base.as_ref()) {
+            Ok(base) => (base, true),
+            Err(_) => (base.as_ref().to_path_buf(), false),
+        };
         Jail {
             base,
+            base_canonical,
             read_roots: vec![root.clone()],
             write_roots: vec![root.clone()],
             root,
@@ -284,8 +291,58 @@ impl Jail {
         shown: &str,
         access: Access,
     ) -> Result<Anchored, ProviderError> {
+        if let Some(anchored) = self.plain(p, shown, access, true) {
+            return Ok(anchored);
+        }
         let real = self.jailed_as(p, shown, access)?;
         anchor::anchor(&real, self.roots(access), &self.spelled(shown))
+    }
+
+    /// A plain path, pinned without being canonicalized (DECISIONS D229) — or
+    /// `None`, and the caller resolves it the full way.
+    ///
+    /// Plain means: not empty, no trailing separator, nothing but normal names
+    /// below a root of this access kind — `.` normalizes away, `..` does not —
+    /// joined onto a canonical base. The
+    /// root-mutation guard and the scope list are applied to it as written,
+    /// then [`anchor_plain`](anchor::anchor_plain) walks it and proves no
+    /// component is a link — which makes the path as written its canonical
+    /// form, and those checks the ones [`confine`] would have made.
+    ///
+    /// Only an unremarkable success is decided here. A link, a `..`, a refusal
+    /// or any error falls through to the canonicalizing path, so every refusal
+    /// and every message stays its own.
+    #[cfg(unix)]
+    fn plain(&self, p: &str, shown: &str, access: Access, follow_final: bool) -> Option<Anchored> {
+        use std::path::Component;
+        if p.is_empty() || has_trailing_separator(p) || !self.base_canonical {
+            return None;
+        }
+        let raw = Path::new(p);
+        let abs = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.base.join(raw)
+        };
+        if !abs
+            .components()
+            .all(|part| matches!(part, Component::RootDir | Component::Normal(_)))
+        {
+            return None;
+        }
+        let roots = self.roots(access);
+        let root = roots
+            .iter()
+            .find(|root| abs.starts_with(root) && abs != **root)?;
+        let abs = reject_root_mutation(abs, roots, access).ok()?;
+        let abs = self.scoped(abs, access).ok()?;
+        anchor::anchor_plain(&abs, root, &self.spelled(shown), follow_final)
+    }
+
+    /// Windows has no `*at` family to walk with; every path resolves in full.
+    #[cfg(not(unix))]
+    fn plain(&self, _: &str, _: &str, _: Access, _: bool) -> Option<Anchored> {
+        None
     }
 
     /// The same, without resolving the final component — for an operation
@@ -305,6 +362,11 @@ impl Jail {
         shown: &str,
         access: Access,
     ) -> Result<Anchored, ProviderError> {
+        // The final name is acted on as itself, so it may be a link: only the
+        // parents need proving plain.
+        if let Some(anchored) = self.plain(p, shown, access, false) {
+            return Ok(anchored);
+        }
         let real = self.jailed_nofollow_as(p, shown, access)?;
         anchor::anchor(&real, self.roots(access), &self.spelled(shown))
     }
@@ -547,5 +609,173 @@ pub(crate) fn reject_trailing_slash_on_a_file(
             message: format!("{input}: not a directory (the trailing separator requires one)"),
         }),
         _ => Ok(()),
+    }
+}
+
+/// The plain-path route (DECISIONS D229). It may only ever *accept*: these pin
+/// down that it accepts exactly the paths the walk proves canonical and hands
+/// every other one to the canonicalizing path — and that the answer is the one
+/// that path gives.
+#[cfg(all(test, unix))]
+mod plain_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// A jail `project/` holding `data/notes.txt`, beside an `outside/` holding
+    /// `secret.txt`.
+    fn scene(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("esrun-plain-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("data/notes.txt"), "notes").unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        let root = crate::path::canonicalize(&root).unwrap();
+        let outside = crate::path::canonicalize(&outside).unwrap();
+        (base, root, outside)
+    }
+
+    fn jail(root: &Path) -> Jail {
+        Jail::new(root, root)
+    }
+
+    #[test]
+    fn a_plain_path_is_pinned_without_resolution() {
+        let (base, root, _) = scene("plain");
+        let jail = jail(&root);
+        // A `.` names nothing: the components are the same names, walked alike.
+        for p in [
+            "data/notes.txt",
+            "data",
+            "data/missing.txt",
+            "./data/notes.txt",
+            "data/./notes.txt",
+        ] {
+            let fast = jail.plain(p, p, Access::Read, true).expect(p);
+            // The same pin the canonicalizing path produces.
+            let full = anchor::anchor(
+                &jail.jailed(p, Access::Read).unwrap(),
+                jail.roots(Access::Read),
+                p,
+            )
+            .unwrap();
+            assert_eq!(fast.path(), full.path(), "{p}");
+        }
+        // Absolute, under the root: as plain as the relative spelling.
+        let abs = root.join("data/notes.txt");
+        let abs = abs.to_str().unwrap();
+        assert!(jail.plain(abs, abs, Access::Read, true).is_some());
+        assert_eq!(
+            jail.anchored("data/notes.txt", Access::Read)
+                .unwrap()
+                .stat()
+                .unwrap()
+                .size,
+            5
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn anything_the_walk_cannot_prove_is_left_to_resolution() {
+        let (base, root, outside) = scene("unproven");
+        symlink(root.join("data"), root.join("alias")).unwrap();
+        symlink(root.join("data/notes.txt"), root.join("data/link.txt")).unwrap();
+        symlink(&outside, root.join("out")).unwrap();
+        let jail = jail(&root);
+        let parent = root.parent().unwrap().join("outside/secret.txt");
+        for p in [
+            "",  // names nothing
+            ".", // the root itself
+            "data/../data/notes.txt",
+            "data/",                  // a trailing separator
+            "alias/notes.txt",        // a link in a directory
+            "data/link.txt",          // a link at the final name, followed
+            "out/secret.txt",         // a link leading out of the jail
+            "missing/notes.txt",      // a directory that is not there
+            parent.to_str().unwrap(), // outside every root
+        ] {
+            assert!(jail.plain(p, p, Access::Read, true).is_none(), "{p:?}");
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn the_answers_resolution_gives_are_unchanged() {
+        let (base, root, _) = scene("answers");
+        symlink(root.join("data"), root.join("alias")).unwrap();
+        symlink(root.join("data/notes.txt"), root.join("data/link.txt")).unwrap();
+        symlink(base.join("outside"), root.join("out")).unwrap();
+        let jail = jail(&root);
+        // A link inside the jail still works, through the full path.
+        for p in ["alias/notes.txt", "data/link.txt"] {
+            assert_eq!(
+                jail.anchored(p, Access::Read).unwrap().stat().unwrap().size,
+                5,
+                "{p}"
+            );
+        }
+        // One out of it is still the escape it always was.
+        let escape = jail.anchored("out/secret.txt", Access::Read).unwrap_err();
+        assert_eq!(escape.code(), Some(ErrorCode::JailEscape), "{escape}");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// `remove` and `readLink` act on a link itself, so a link at the final name
+    /// is plain for them — and it is the link that is pinned, not its target.
+    #[test]
+    fn a_link_at_the_final_name_is_plain_when_the_link_is_the_subject() {
+        let (base, root, outside) = scene("nofollow");
+        symlink(outside.join("secret.txt"), root.join("data/away.txt")).unwrap();
+        let jail = jail(&root);
+        let pinned = jail.plain("data/away.txt", "data/away.txt", Access::Write, false);
+        assert_eq!(pinned.unwrap().path(), root.join("data/away.txt"));
+        jail.remove_anchored("data/away.txt", Access::Write, false)
+            .unwrap();
+        assert!(
+            outside.join("secret.txt").exists(),
+            "the target is untouched"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn the_root_guard_and_the_scope_list_still_apply() {
+        let (base, root, _) = scene("scoped");
+        std::fs::create_dir_all(root.join("public")).unwrap();
+        std::fs::write(root.join("public/index.html"), "hi").unwrap();
+        let allow = PathAllowlist::parse(["public"], &root).unwrap();
+        let jail = Jail::new(&root, &root).with_read_allowlist(allow);
+        assert!(
+            jail.plain("public/index.html", "public/index.html", Access::Read, true)
+                .is_some()
+        );
+        // Outside the list: left to resolution, which refuses it as before.
+        assert!(
+            jail.plain("data/notes.txt", "data/notes.txt", Access::Read, true)
+                .is_none()
+        );
+        assert!(jail.anchored("data/notes.txt", Access::Read).is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A component swapped for a link before the call: the walk refuses to
+    /// follow it, and resolution then sees where it leads and refuses that.
+    #[test]
+    fn a_directory_swapped_for_a_link_is_refused_not_followed() {
+        let (base, root, outside) = scene("swapped");
+        std::fs::rename(root.join("data"), root.join("data.real")).unwrap();
+        symlink(&outside, root.join("data")).unwrap();
+        std::fs::write(outside.join("notes.txt"), "outside").unwrap();
+        let jail = jail(&root);
+        assert!(
+            jail.plain("data/notes.txt", "data/notes.txt", Access::Read, true)
+                .is_none()
+        );
+        let refused = jail.anchored("data/notes.txt", Access::Read).unwrap_err();
+        assert_eq!(refused.code(), Some(ErrorCode::JailEscape), "{refused}");
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
