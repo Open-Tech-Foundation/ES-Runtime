@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use brotli::{CompressorWriter, DecompressorWriter};
 use es_runtime_common::ExceptionClass;
-use es_runtime_engine::{Engine, OpDecl, OpError, Value};
+use es_runtime_engine::{Engine, OpDecl, OpError};
 use flate2::write::{DeflateEncoder, GzDecoder, GzEncoder, ZlibEncoder};
 use flate2::{Compression, Decompress, FlushDecompress, Status};
 
@@ -193,51 +193,53 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
     let next_id = Rc::new(RefCell::new(0u64));
 
     let reg = registry.clone();
-    engine.register_op(OpDecl::sync("compression_new", move |args| {
-        let format = args.first().and_then(Value::as_str).unwrap_or("");
-        let decompress = matches!(args.get(1), Some(Value::Bool(true)));
-        let codec = Codec::new(format, decompress).ok_or_else(|| {
-            OpError::new(
-                ExceptionClass::TypeError,
-                format!("Unsupported compression format: '{format}'"),
-            )
-        })?;
-        let mut id = next_id.borrow_mut();
-        *id += 1;
-        reg.borrow_mut().insert(*id, codec);
-        Ok(Value::Number(*id as f64))
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "compression_new",
+        move |format: String, decompress: bool| {
+            let format = format.as_str();
+            let codec = Codec::new(format, decompress).ok_or_else(|| {
+                OpError::new(
+                    ExceptionClass::TypeError,
+                    format!("Unsupported compression format: '{format}'"),
+                )
+            })?;
+            let mut id = next_id.borrow_mut();
+            *id += 1;
+            reg.borrow_mut().insert(*id, codec);
+            Ok(*id as f64)
+        },
+    ))?;
 
     let reg = registry.clone();
-    engine.register_op(OpDecl::sync("compression_write", move |args| {
-        let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-        let chunk = args.get(1).and_then(Value::as_bytes).unwrap_or(&[]);
-        let mut map = reg.borrow_mut();
-        let codec = map.get_mut(&id).ok_or_else(|| {
-            OpError::new(ExceptionClass::TypeError, "the stream is already closed")
-        })?;
-        match codec.write(chunk) {
-            Ok(out) => Ok(Value::Bytes(out)),
-            Err(e) => {
-                map.remove(&id); // errored streams never flush; free eagerly
-                Err(type_error(e))
+    engine.register_op(OpDecl::typed(
+        "compression_write",
+        move |id: u64, chunk: Vec<u8>| {
+            let chunk = chunk.as_slice();
+            let mut map = reg.borrow_mut();
+            let codec = map.get_mut(&id).ok_or_else(|| {
+                OpError::new(ExceptionClass::TypeError, "the stream is already closed")
+            })?;
+            match codec.write(chunk) {
+                Ok(out) => Ok(out),
+                Err(e) => {
+                    map.remove(&id); // errored streams never flush; free eagerly
+                    Err(type_error(e))
+                }
             }
-        }
-    }))?;
+        },
+    ))?;
 
     let reg = registry.clone();
-    engine.register_op(OpDecl::sync("compression_finish", move |args| {
-        let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+    engine.register_op(OpDecl::typed("compression_finish", move |id: u64| {
         let codec = reg.borrow_mut().remove(&id).ok_or_else(|| {
             OpError::new(ExceptionClass::TypeError, "the stream is already closed")
         })?;
-        codec.finish().map(Value::Bytes).map_err(type_error)
+        codec.finish().map_err(type_error)
     }))?;
 
-    engine.register_op(OpDecl::sync("compression_free", move |args| {
-        let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+    engine.register_op(OpDecl::typed("compression_free", move |id: u64| {
         registry.borrow_mut().remove(&id);
-        Ok(Value::Undefined)
+        Ok(())
     }))?;
 
     Ok(())

@@ -153,66 +153,55 @@ pub(crate) fn install(
 
     let n = net.clone();
     let owned = sockets.clone();
-    engine.register_op(OpDecl::r#async("net_read", move |args| {
+    engine.register_op(OpDecl::typed_async("net_read", move |id: u64| {
         let n = n.clone();
         let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
-            match require(&n)?.read(owned.check(id)?).await.map_err(map_err)? {
-                Some(bytes) => Ok(Value::Bytes(bytes)),
-                None => Ok(Value::Null),
+        // `None` is the end of the stream, `null` to the guest.
+        async move { require(&n)?.read(owned.check(id)?).await.map_err(map_err) }
+    }))?;
+
+    let n = net.clone();
+    let owned = sockets.clone();
+    // The chunk is the one copy of the JS view, moved to the provider as it
+    // is (it used to be copied a second time out of the marshaled value).
+    engine.register_op(OpDecl::typed_async(
+        "net_write",
+        move |id: u64, data: Vec<u8>| {
+            let n = n.clone();
+            let owned = owned.clone();
+            async move {
+                require(&n)?
+                    .write(owned.check(id)?, data)
+                    .await
+                    .map_err(map_err)
             }
-        })
-    }))?;
+        },
+    ))?;
 
     let n = net.clone();
     let owned = sockets.clone();
-    engine.register_op(OpDecl::r#async("net_write", move |args| {
+    engine.register_op(OpDecl::typed_async("net_shutdown", move |id: u64| {
         let n = n.clone();
         let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        let data = args
-            .get(1)
-            .and_then(Value::as_bytes)
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
-        Box::pin(async move {
-            require(&n)?
-                .write(owned.check(id)?, data)
-                .await
-                .map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
-    }))?;
-
-    let n = net.clone();
-    let owned = sockets.clone();
-    engine.register_op(OpDecl::r#async("net_shutdown", move |args| {
-        let n = n.clone();
-        let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             require(&n)?
                 .shutdown(owned.check(id)?)
                 .await
-                .map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
+                .map_err(map_err)
+        }
     }))?;
 
     let n = net.clone();
     let owned = sockets.clone();
-    engine.register_op(OpDecl::r#async("net_close", move |args| {
+    engine.register_op(OpDecl::typed_async("net_close", move |id: u64| {
         let n = n.clone();
         let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             require(&n)?
                 .close(owned.check_and_release(id)?)
                 .await
-                .map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
+                .map_err(map_err)
+        }
     }))?;
 
     let n = net.clone();
@@ -254,18 +243,17 @@ pub(crate) fn install(
     let n = net.clone();
     let owned_listeners = listeners.clone();
     let owned_sockets = sockets.clone();
-    engine.register_op(OpDecl::r#async("net_accept", move |args| {
+    engine.register_op(OpDecl::typed_async("net_accept", move |id: u64| {
         let n = n.clone();
         let owned_listeners = owned_listeners.clone();
         let owned_sockets = owned_sockets.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             let id = owned_listeners.check(id)?;
             match require(&n)?.accept(id).await.map_err(map_err)? {
                 Some((sid, info)) => Ok(socket_value(owned_sockets.own(sid), &info)),
                 None => Ok(Value::Null),
             }
-        })
+        }
     }))?;
 
     // Checked but **not** released: a program holds a handful of listeners, not

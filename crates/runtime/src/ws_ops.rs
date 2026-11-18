@@ -106,28 +106,28 @@ pub(crate) fn install(
 
     let w = ws.clone();
     let owned = connections.clone();
-    engine.register_op(OpDecl::r#async("ws_send", move |args| {
-        let w = w.clone();
-        let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        // A JS string ⇒ text frame; bytes (ArrayBuffer/typed-array) ⇒ binary.
-        let message = match args.get(1) {
-            Some(Value::String(s)) => WsMessage::Text(s.clone()),
-            other => WsMessage::Binary(
-                other
-                    .and_then(Value::as_bytes)
-                    .map(<[u8]>::to_vec)
-                    .unwrap_or_default(),
-            ),
-        };
-        Box::pin(async move {
-            require(&w)?
-                .send(owned.check(id)?, message)
-                .await
-                .map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
-    }))?;
+    engine.register_op(OpDecl::typed_async(
+        "ws_send",
+        move |id: u64, payload: Value| {
+            let w = w.clone();
+            let owned = owned.clone();
+            // A JS string ⇒ text frame; bytes ⇒ binary. Taken, not copied: the
+            // marshaled value is the one copy of the payload.
+            let message = match payload {
+                Value::String(s) => Ok(WsMessage::Text(s)),
+                Value::Bytes(b) => Ok(WsMessage::Binary(b)),
+                _ => Err(OpError::type_error(
+                    "ws_send: argument 2 must be a string or a typed array",
+                )),
+            };
+            async move {
+                require(&w)?
+                    .send(owned.check(id)?, message?)
+                    .await
+                    .map_err(map_err)
+            }
+        },
+    ))?;
 
     // Batched fan-out: one op crossing + one payload marshal for a message sent
     // to many connections (the `runtime:websocket` `broadcast()`); no capability
@@ -164,11 +164,10 @@ pub(crate) fn install(
 
     let w = ws.clone();
     let owned = connections.clone();
-    engine.register_op(OpDecl::r#async("ws_recv", move |args| {
+    engine.register_op(OpDecl::typed_async("ws_recv", move |id: u64| {
         let w = w.clone();
         let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             match require(&w)?.recv(owned.check(id)?).await.map_err(map_err)? {
                 Some(WsIncoming::Text(s)) => Ok(frame("text", Value::String(s))),
                 Some(WsIncoming::Binary(b)) => Ok(frame("binary", Value::Bytes(b))),
@@ -179,7 +178,7 @@ pub(crate) fn install(
                 ])),
                 None => Ok(Value::Null),
             }
-        })
+        }
     }))?;
 
     let w = ws.clone();

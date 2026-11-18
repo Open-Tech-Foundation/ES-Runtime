@@ -328,27 +328,26 @@ pub(crate) fn install(
 
     let bodies_for_read = req_bodies.clone();
     let owned = requests.clone();
-    engine.register_op(OpDecl::r#async("http_body_read", move |args| {
+    engine.register_op(OpDecl::typed_async("http_body_read", move |rid: u64| {
         let bodies = bodies_for_read.clone();
         let owned = owned.clone();
-        let rid = arg_u64(&args, 0);
-        Box::pin(async move {
+        async move {
             let rid = owned.check(rid)?;
             // Take the stream out so no RefCell borrow is held across the await.
             let stream = bodies.borrow_mut().remove(&rid);
             let Some(mut stream) = stream else {
-                return Ok(Value::Null); // unknown id, drained, or dropped
+                return Ok(None); // unknown id, drained, or dropped
             };
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     bodies.borrow_mut().insert(rid, stream);
-                    Ok(Value::Bytes(chunk))
+                    Ok(Some(chunk))
                 }
                 Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())
                     .with_code_opt(e.code())),
-                None => Ok(Value::Null), // end of stream; not reinserted
+                None => Ok(None), // end of stream; not reinserted
             }
-        })
+        }
     }))?;
 
     // ---- http_response_body_new ---------------------------------------------
@@ -356,13 +355,13 @@ pub(crate) fn install(
         let resp_senders = resp_senders.clone();
         let resp_receivers = resp_receivers.clone();
         engine.register_op(
-            OpDecl::sync("http_response_body_new", move |_args| {
+            OpDecl::typed("http_response_body_new", move || {
                 let id = resp_id_gen.get();
                 resp_id_gen.set(id + 1);
                 let (tx, rx) = mpsc::channel::<BodyItem>(RESPONSE_BODY_BUFFER);
                 resp_senders.borrow_mut().insert(id, tx);
                 resp_receivers.borrow_mut().insert(id, rx);
-                Ok(Value::Number(id as f64))
+                Ok(id as f64)
             })
             .requires(Capability::NetListen),
         )?;
@@ -524,35 +523,32 @@ pub(crate) fn install(
     // ---- http_response_body_push ---------------------------------------------
     {
         let resp_senders = resp_senders.clone();
-        engine.register_op(OpDecl::r#async("http_response_body_push", move |args| {
-            let resp_senders = resp_senders.clone();
-            let mut args = args;
-            let id = arg_u64(&args, 0);
-            // `marshal` already copied the JS view into this owned Vec. Move
-            // that allocation into the response channel rather than copying it.
-            let chunk = args
-                .get_mut(1)
-                .map(|value| std::mem::replace(value, Value::Undefined))
-                .and_then(Value::into_bytes)
-                .unwrap_or_default();
-            Box::pin(async move {
-                // Take the sender out so no borrow is held across the send await;
-                // the guest pump is sequential per id, so there is no contention.
-                let Some(mut tx) = resp_senders.borrow_mut().remove(&id) else {
-                    return Ok(Value::Bool(false)); // unknown/closed id
-                };
-                match tx.send(Ok(chunk)).await {
-                    // Accepted (channel had room or the provider drained one):
-                    // put the sender back for the next chunk.
-                    Ok(()) => {
-                        resp_senders.borrow_mut().insert(id, tx);
-                        Ok(Value::Bool(true))
+        engine.register_op(OpDecl::typed_async(
+            "http_response_body_push",
+            move |id: u64, chunk: Vec<u8>| {
+                let resp_senders = resp_senders.clone();
+                // The chunk is the one copy of the JS view; it moves into the
+                // response channel as it is.
+                async move {
+                    // Take the sender out so no borrow is held across the send
+                    // await; the guest pump is sequential per id, so there is no
+                    // contention.
+                    let Some(mut tx) = resp_senders.borrow_mut().remove(&id) else {
+                        return Ok(false); // unknown/closed id
+                    };
+                    match tx.send(Ok(chunk)).await {
+                        // Accepted (channel had room or the provider drained
+                        // one): put the sender back for the next chunk.
+                        Ok(()) => {
+                            resp_senders.borrow_mut().insert(id, tx);
+                            Ok(true)
+                        }
+                        // Receiver gone (client disconnected) — stop pumping.
+                        Err(_) => Ok(false),
                     }
-                    // Receiver gone (client disconnected) — stop pumping.
-                    Err(_) => Ok(Value::Bool(false)),
                 }
-            })
-        }))?;
+            },
+        ))?;
     }
 
     // ---- http_response_body_close --------------------------------------------
@@ -563,50 +559,51 @@ pub(crate) fn install(
         let req_bodies = req_bodies;
         let resp_trailers_for_close = resp_trailers;
         let owned_requests_for_close = requests.clone();
-        engine.register_op(OpDecl::r#async("http_response_body_close", move |args| {
-            let resp_senders = resp_senders.clone();
-            let req_bodies = req_bodies.clone();
-            let resp_rids = resp_rids.clone();
-            let owned_requests_for_close = owned_requests_for_close.clone();
-            let resp_trailers = resp_trailers_for_close.clone();
-            let id = arg_u64(&args, 0);
-            let err = args.get(1).and_then(Value::as_str).map(str::to_string);
-            // Trailers the guest promised at `http_respond` time, now that the
-            // body they describe has been produced.
-            let trailers = match args.get(2) {
-                Some(Value::Array(items)) => Some(trailer_pairs(items.clone())),
-                _ => None,
-            };
-            Box::pin(async move {
-                // Deliver (or drop) the promised trailers before the body ends,
-                // so the provider's trailer future is already settled by the
-                // time it is polled. Dropping the sender means "none", which is
-                // what a close with no trailers should look like.
-                if let Some(tx) = resp_trailers.borrow_mut().remove(&id)
-                    && let Some(trailers) = trailers
-                {
-                    let _ = tx.send(trailers);
+        engine.register_op(OpDecl::typed_async(
+            "http_response_body_close",
+            move |id: u64, err: Option<String>, trailers: Option<Value>| {
+                let resp_senders = resp_senders.clone();
+                let req_bodies = req_bodies.clone();
+                let resp_rids = resp_rids.clone();
+                let owned_requests_for_close = owned_requests_for_close.clone();
+                let resp_trailers = resp_trailers_for_close.clone();
+                // Trailers the guest promised at `http_respond` time, now that the
+                // body they describe has been produced.
+                let trailers = match trailers {
+                    Some(Value::Array(items)) => Some(trailer_pairs(items)),
+                    _ => None,
+                };
+                async move {
+                    // Deliver (or drop) the promised trailers before the body ends,
+                    // so the provider's trailer future is already settled by the
+                    // time it is polled. Dropping the sender means "none", which is
+                    // what a close with no trailers should look like.
+                    if let Some(tx) = resp_trailers.borrow_mut().remove(&id)
+                        && let Some(trailers) = trailers
+                    {
+                        let _ = tx.send(trailers);
+                    }
+                    // The response is over — drop the request's body stream too, if
+                    // the handler never finished (or started) draining it, and give
+                    // up the request id, which `http_respond` held onto for exactly
+                    // this moment.
+                    if let Some(rid) = resp_rids.borrow_mut().remove(&id) {
+                        req_bodies.borrow_mut().remove(&rid);
+                        owned_requests_for_close.release(rid);
+                    }
+                    // Take the sender out (dropping the borrow before any await);
+                    // letting it drop ends the response body cleanly at its next
+                    // `None`.
+                    let tx = resp_senders.borrow_mut().remove(&id);
+                    if let (Some(mut tx), Some(err)) = (tx, err) {
+                        // Surface a guest-side stream error to the provider as an
+                        // aborting item; best-effort (the receiver may be gone).
+                        let _ = tx.send(Err(ProviderError::Other(err))).await;
+                    }
+                    Ok(())
                 }
-                // The response is over — drop the request's body stream too, if
-                // the handler never finished (or started) draining it, and give
-                // up the request id, which `http_respond` held onto for exactly
-                // this moment.
-                if let Some(rid) = resp_rids.borrow_mut().remove(&id) {
-                    req_bodies.borrow_mut().remove(&rid);
-                    owned_requests_for_close.release(rid);
-                }
-                // Take the sender out (dropping the borrow before any await);
-                // letting it drop ends the response body cleanly at its next
-                // `None`.
-                let tx = resp_senders.borrow_mut().remove(&id);
-                if let (Some(mut tx), Some(err)) = (tx, err) {
-                    // Surface a guest-side stream error to the provider as an
-                    // aborting item; best-effort (the receiver may be gone).
-                    let _ = tx.send(Err(ProviderError::Other(err))).await;
-                }
-                Ok(Value::Null)
-            })
-        }))?;
+            },
+        ))?;
     }
 
     // ---- http_request_disconnected -------------------------------------------
@@ -617,15 +614,17 @@ pub(crate) fn install(
     {
         let h = http.clone();
         let owned = requests;
-        engine.register_op(OpDecl::r#async("http_request_disconnected", move |args| {
-            let h = h.clone();
-            let owned = owned.clone();
-            let rid = arg_u64(&args, 0);
-            Box::pin(async move {
-                let rid = owned.check(rid)?;
-                Ok(Value::Bool(require(&h)?.request_disconnected(rid).await))
-            })
-        }))?;
+        engine.register_op(OpDecl::typed_async(
+            "http_request_disconnected",
+            move |rid: u64| {
+                let h = h.clone();
+                let owned = owned.clone();
+                async move {
+                    let rid = owned.check(rid)?;
+                    Ok(require(&h)?.request_disconnected(rid).await)
+                }
+            },
+        ))?;
     }
 
     // Checked, not released — see `net_ops`' note on `net_close_listener`: a

@@ -234,11 +234,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     {
         let bodies = bodies.clone();
         let trailers = trailers.clone();
-        engine.register_op(OpDecl::r#async("fetch_body_read", move |args| {
+        engine.register_op(OpDecl::typed_async("fetch_body_read", move |id: u64| {
             let bodies = bodies.clone();
             let trailers = trailers.clone();
-            let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-            Box::pin(async move {
+            async move {
                 // Take the stream out so no RefCell borrow is held across the await.
                 let stream = bodies.borrow_mut().remove(&id);
                 let Some(mut stream) = stream else {
@@ -280,7 +279,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                         Ok(Value::Array(flat))
                     }
                 }
-            })
+            }
         }))?;
     }
 
@@ -292,11 +291,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
         let bodies = bodies.clone();
         let trailers = trailers.clone();
         engine.register_op(
-            OpDecl::sync("fetch_body_cancel", move |args| {
-                let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+            OpDecl::typed("fetch_body_cancel", move |id: u64| {
                 bodies.borrow_mut().remove(&id);
                 trailers.borrow_mut().remove(&id);
-                Ok(Value::Null)
+                Ok(())
             })
             .requires(Capability::Net),
         )?;
@@ -306,34 +304,27 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     {
         let req_senders = req_senders.clone();
         engine.register_op(
-            OpDecl::r#async("fetch_request_body_push", move |args| {
+            OpDecl::typed_async("fetch_request_body_push", move |id: u64, chunk: Vec<u8>| {
                 let req_senders = req_senders.clone();
-                let mut args = args;
-                let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-                // `marshal` already copied the JS view into this owned Vec.
-                // Move it into the bounded body channel instead of cloning it.
-                let chunk = args
-                    .get_mut(1)
-                    .map(|value| std::mem::replace(value, Value::Undefined))
-                    .and_then(Value::into_bytes)
-                    .unwrap_or_default();
-                Box::pin(async move {
+                // The chunk is the one copy of the JS view; it moves into the
+                // bounded body channel as it is.
+                async move {
                     // Take the sender out so no borrow is held across the send await;
                     // the guest pump is sequential per id, so there is no contention.
                     let Some(mut tx) = req_senders.borrow_mut().remove(&id) else {
-                        return Ok(Value::Bool(false)); // unknown/closed id
+                        return Ok(false); // unknown/closed id
                     };
                     match tx.send(Ok(chunk)).await {
                         // Accepted (channel had room or the transport drained one):
                         // put the sender back for the next chunk.
                         Ok(()) => {
                             req_senders.borrow_mut().insert(id, tx);
-                            Ok(Value::Bool(true))
+                            Ok(true)
                         }
                         // Receiver gone (request finished or failed) — stop pumping.
-                        Err(_) => Ok(Value::Bool(false)),
+                        Err(_) => Ok(false),
                     }
-                })
+                }
             })
             .requires(Capability::Net),
         )?;
@@ -343,23 +334,24 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     {
         let req_senders = req_senders;
         engine.register_op(
-            OpDecl::r#async("fetch_request_body_close", move |args| {
-                let req_senders = req_senders.clone();
-                let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
-                let err = args.get(1).and_then(Value::as_str).map(str::to_string);
-                Box::pin(async move {
-                    // Take the sender out (dropping the borrow before any await);
-                    // letting it drop closes the channel → the request body stream
-                    // ends cleanly at its next `None`.
-                    let tx = req_senders.borrow_mut().remove(&id);
-                    if let (Some(mut tx), Some(err)) = (tx, err) {
-                        // Surface a guest-side stream error to the transport as an
-                        // aborting item; best-effort (the receiver may be gone).
-                        let _ = tx.send(Err(ProviderError::Other(err))).await;
+            OpDecl::typed_async(
+                "fetch_request_body_close",
+                move |id: u64, err: Option<String>| {
+                    let req_senders = req_senders.clone();
+                    async move {
+                        // Take the sender out (dropping the borrow before any await);
+                        // letting it drop closes the channel → the request body stream
+                        // ends cleanly at its next `None`.
+                        let tx = req_senders.borrow_mut().remove(&id);
+                        if let (Some(mut tx), Some(err)) = (tx, err) {
+                            // Surface a guest-side stream error to the transport as an
+                            // aborting item; best-effort (the receiver may be gone).
+                            let _ = tx.send(Err(ProviderError::Other(err))).await;
+                        }
+                        Ok(())
                     }
-                    Ok(Value::Null)
-                })
-            })
+                },
+            )
             .requires(Capability::Net),
         )?;
     }

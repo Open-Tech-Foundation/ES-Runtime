@@ -19,110 +19,89 @@ use crate::Result;
 pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) -> Result<()> {
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_read", move |args| {
+        OpDecl::typed_async("fs_read", move |path: String| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            Box::pin(async move {
-                let bytes = require(&f)?.read(path).await.map_err(map_err)?;
-                Ok(Value::Bytes(bytes))
-            })
+            async move { require(&f)?.read(path).await.map_err(map_err) }
         })
         .requires(Capability::FileRead),
     )?;
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_stat", move |args| {
+        OpDecl::typed_async("fs_stat", move |path: String| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            Box::pin(async move {
+            async move {
                 let s = require(&f)?.stat(path).await.map_err(map_err)?;
                 Ok(stat_value(&s))
-            })
+            }
         })
         .requires(Capability::FileRead),
     )?;
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_exists", move |args| {
+        OpDecl::typed_async("fs_exists", move |path: String| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            Box::pin(async move {
-                let exists = require(&f)?.exists(path).await.map_err(map_err)?;
-                Ok(Value::Bool(exists))
-            })
+            async move { require(&f)?.exists(path).await.map_err(map_err) }
         })
         .requires(Capability::FileRead),
     )?;
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_read_dir", move |args| {
+        OpDecl::typed_async("fs_read_dir", move |path: String| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            Box::pin(async move {
+            async move {
                 let entries = require(&f)?.read_dir(path).await.map_err(map_err)?;
                 Ok(dir_value(&entries))
-            })
+            }
         })
         .requires(Capability::FileRead),
     )?;
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_write", move |mut args| {
+        OpDecl::typed_async(
+            "fs_write",
+            move |path: String, data: Value, append: bool| {
+                let f = f.clone();
+                // A `Value`, not `Vec<u8>`: the payload is bytes or a string. A
+                // Uint8Array arrives as `Value::Bytes` (the one copy) and its Vec is
+                // taken; a string arrives as `Value::String` and its already-UTF-8
+                // bytes are taken — so writing a string costs no JS-side
+                // `TextEncoder` buffer and no second copy here.
+                let data = data.into_bytes();
+                async move {
+                    let Some(data) = data else {
+                        return Err(OpError::type_error(
+                            "fs_write: argument 2 must be a string or a typed array",
+                        ));
+                    };
+                    let n = require(&f)?
+                        .write(path, data, append)
+                        .await
+                        .map_err(map_err)?;
+                    Ok(n as f64)
+                }
+            },
+        )
+        .requires(Capability::FileWrite),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::typed_async("fs_mkdir", move |path: String, recursive: bool| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            let append = arg_bool(&args, 2);
-            // Move the payload out instead of borrowing + `to_vec`: a Uint8Array
-            // arrives as `Value::Bytes` (marshal's one copy) and we take that Vec;
-            // a string arrives as `Value::String` and we take its already-UTF-8
-            // bytes — so writing a string costs no JS-side `TextEncoder` buffer
-            // and no second copy here.
-            let data = args
-                .get_mut(1)
-                .map(|v| std::mem::replace(v, Value::Undefined))
-                .and_then(Value::into_bytes)
-                .unwrap_or_default();
-            Box::pin(async move {
-                let n = require(&f)?
-                    .write(path, data, append)
-                    .await
-                    .map_err(map_err)?;
-                Ok(Value::Number(n as f64))
-            })
+            async move { require(&f)?.mkdir(path, recursive).await.map_err(map_err) }
         })
         .requires(Capability::FileWrite),
     )?;
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_mkdir", move |args| {
+        OpDecl::typed_async("fs_remove", move |path: String, recursive: bool| {
             let f = f.clone();
-            let path = arg_str(&args, 0);
-            let recursive = arg_bool(&args, 1);
-            Box::pin(async move {
-                require(&f)?.mkdir(path, recursive).await.map_err(map_err)?;
-                Ok(Value::Undefined)
-            })
-        })
-        .requires(Capability::FileWrite),
-    )?;
-
-    let f = fs.clone();
-    engine.register_op(
-        OpDecl::r#async("fs_remove", move |args| {
-            let f = f.clone();
-            let path = arg_str(&args, 0);
-            let recursive = arg_bool(&args, 1);
-            Box::pin(async move {
-                require(&f)?
-                    .remove(path, recursive)
-                    .await
-                    .map_err(map_err)?;
-                Ok(Value::Undefined)
-            })
+            async move { require(&f)?.remove(path, recursive).await.map_err(map_err) }
         })
         .requires(Capability::FileWrite),
     )?;

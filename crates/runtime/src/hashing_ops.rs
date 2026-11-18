@@ -280,7 +280,11 @@ fn type_error(message: impl Into<String>) -> OpError {
 
 /// The algorithm argument at `index`, or a refusal naming what is available.
 fn alg_arg(args: &[Value], index: usize) -> Result<Alg, OpError> {
-    let name = args.get(index).and_then(Value::as_str).unwrap_or("");
+    alg_named(args.get(index).and_then(Value::as_str).unwrap_or(""))
+}
+
+/// The algorithm called `name`, or a refusal that lists the known ones.
+fn alg_named(name: &str) -> Result<Alg, OpError> {
     Alg::parse(name).ok_or_else(|| {
         let known = Alg::ALL
             .iter()
@@ -295,7 +299,13 @@ fn alg_arg(args: &[Value], index: usize) -> Result<Alg, OpError> {
 
 /// The encoding argument at `index`, or a refusal.
 fn encoding_arg(args: &[Value], index: usize) -> Result<Encoding, OpError> {
-    let name = args.get(index).and_then(Value::as_str);
+    encoding_of(args.get(index))
+}
+
+/// The encoding `value` names — `None` (or a non-string) for bytes — or a
+/// refusal.
+fn encoding_of(value: Option<&Value>) -> Result<Encoding, OpError> {
+    let name = value.and_then(Value::as_str);
     Encoding::parse(name).ok_or_else(|| {
         type_error(format!(
             "unknown encoding '{}' (expected 'hex', 'base64', 'base64url', or none for bytes)",
@@ -309,14 +319,16 @@ fn encoding_arg(args: &[Value], index: usize) -> Result<Encoding, OpError> {
 /// Taken out of the argument list rather than cloned: a digest's input is the
 /// largest thing crossing this boundary, and marshaling already copied it once.
 fn bytes_arg(args: &mut [Value], index: usize) -> Result<Vec<u8>, OpError> {
-    args.get_mut(index)
-        .map(|slot| std::mem::replace(slot, Value::Undefined))
-        .and_then(Value::into_bytes)
-        .ok_or_else(|| type_error("expected a string or a BufferSource"))
+    bytes_of(args.get_mut(index).map_or(Value::Undefined, |slot| {
+        std::mem::replace(slot, Value::Undefined)
+    }))
 }
 
-fn id_arg(args: &[Value], index: usize) -> u64 {
-    args.get(index).and_then(Value::as_number).unwrap_or(0.0) as u64
+/// `value`'s bytes, taken rather than copied; a string is its UTF-8.
+fn bytes_of(value: Value) -> Result<Vec<u8>, OpError> {
+    value
+        .into_bytes()
+        .ok_or_else(|| type_error("expected a string or a BufferSource"))
 }
 
 // ---- HMAC ------------------------------------------------------------------
@@ -503,52 +515,59 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
     let registry: Rc<RefCell<HashMap<u64, State>>> = Rc::new(RefCell::new(HashMap::new()));
     let next_id = Rc::new(RefCell::new(0u64));
 
-    engine.register_op(OpDecl::sync("hash_digest", |mut args| {
-        let alg = alg_arg(&args, 0)?;
-        let encoding = encoding_arg(&args, 2)?;
-        let data = bytes_arg(&mut args, 1)?;
-        Ok(encoding.apply(alg.oneshot(&data)))
-    }))?;
+    // `data` and `encoding` stay `Value`s: the data is a string or bytes, and
+    // the encoding comes from the caller unchecked, so its refusal is the
+    // message below rather than a bare type mismatch.
+    engine.register_op(OpDecl::typed(
+        "hash_digest",
+        |alg: String, data: Value, encoding: Option<Value>| {
+            let alg = alg_named(&alg)?;
+            let encoding = encoding_of(encoding.as_ref())?;
+            let data = bytes_of(data)?;
+            Ok(encoding.apply(alg.oneshot(&data)))
+        },
+    ))?;
 
     let (reg, ids) = (registry.clone(), next_id.clone());
-    engine.register_op(OpDecl::sync("hash_new", move |args| {
-        let alg = alg_arg(&args, 0)?;
+    engine.register_op(OpDecl::typed("hash_new", move |alg: String| {
+        let alg = alg_named(&alg)?;
         let mut id = ids.borrow_mut();
         *id += 1;
         reg.borrow_mut().insert(*id, State::new(alg));
-        Ok(Value::Number(*id as f64))
+        Ok(*id as f64)
     }))?;
 
     let reg = registry.clone();
-    engine.register_op(OpDecl::sync("hash_update", move |mut args| {
-        let id = id_arg(&args, 0);
-        let data = bytes_arg(&mut args, 1)?;
+    engine.register_op(OpDecl::typed("hash_update", move |id: u64, data: Value| {
+        let data = bytes_of(data)?;
         let mut map = reg.borrow_mut();
         let state = map
             .get_mut(&id)
             .ok_or_else(|| type_error("this hasher has already produced its digest"))?;
         state.update(&data);
-        Ok(Value::Undefined)
+        Ok(())
     }))?;
 
     let reg = registry.clone();
-    engine.register_op(OpDecl::sync("hash_finish", move |args| {
-        let id = id_arg(&args, 0);
-        let encoding = encoding_arg(&args, 1)?;
-        let state = reg
-            .borrow_mut()
-            .remove(&id)
-            .ok_or_else(|| type_error("this hasher has already produced its digest"))?;
-        Ok(encoding.apply(state.finish()))
-    }))?;
+    engine.register_op(OpDecl::typed(
+        "hash_finish",
+        move |id: u64, encoding: Option<Value>| {
+            let encoding = encoding_of(encoding.as_ref())?;
+            let state = reg
+                .borrow_mut()
+                .remove(&id)
+                .ok_or_else(|| type_error("this hasher has already produced its digest"))?;
+            Ok(encoding.apply(state.finish()))
+        },
+    ))?;
 
     // Called from the module's `FinalizationRegistry`, for a hasher dropped
     // without ever being digested. `hash_finish` is the ordinary end of life;
     // this is the one that keeps an abandoned hasher from holding its state for
     // the life of the isolate.
-    engine.register_op(OpDecl::sync("hash_free", move |args| {
-        registry.borrow_mut().remove(&id_arg(&args, 0));
-        Ok(Value::Undefined)
+    engine.register_op(OpDecl::typed("hash_free", move |id: u64| {
+        registry.borrow_mut().remove(&id);
+        Ok(())
     }))?;
 
     engine.register_op(OpDecl::sync("hash_hmac", |mut args| {

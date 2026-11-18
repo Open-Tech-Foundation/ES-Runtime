@@ -727,3 +727,34 @@ console.log(typeof totp.verify(code, secret), totp.uri({ secret, issuer: "A", ac
     );
     assert_eq!(s, "number true\n");
 }
+
+/// The hasher ops read their arguments as declared types (D228), and a mistake
+/// a program can make still reaches it as the module's own message — never as
+/// a refusal naming an internal op.
+#[test]
+fn a_mistake_is_reported_in_the_modules_words() {
+    let s = run(
+        "hash_messages.mjs",
+        &format!(
+            r#"
+import {{ hash, Hasher }} from "runtime:hashing";
+{EQ}
+const message = (f) => {{
+  try {{ f(); return "no error"; }} catch (e) {{ return `${{e.constructor.name}}: ${{e.message}}`; }}
+}};
+eq(message(() => hash("sha256", "x", "hexx")).startsWith("TypeError: unknown encoding 'hexx'"), true, "encoding");
+eq(message(() => hash("nope", "x")).startsWith("TypeError: unknown hash algorithm 'nope'"), true, "algorithm");
+eq(message(() => new Hasher("nope")).startsWith("TypeError: unknown hash algorithm 'nope'"), true, "hasher algorithm");
+const spent = new Hasher("sha256");
+spent.digest();
+eq(message(() => spent.update("b")), "TypeError: this hasher has already produced its digest", "update after digest");
+eq(message(() => spent.digest("hex")), "TypeError: this hasher has already produced its digest", "digest twice");
+// Chunks of either kind add up to the one-shot digest.
+const chunked = new Hasher("sha256").update("ab").update(new Uint8Array([99])).digest("hex");
+eq(chunked, hash("sha256", "abc", "hex"), "chunked");
+console.log("ok");
+"#
+        ),
+    );
+    assert!(s.contains("ok"), "{s}");
+}

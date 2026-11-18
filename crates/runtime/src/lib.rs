@@ -2671,7 +2671,7 @@ mod tests {
         );
         let out = eval_async(
             &mut rt,
-            "await __ops.fs_write('/a', new TextEncoder().encode('payload')); \
+            "await __ops.fs_write('/a', new TextEncoder().encode('payload'), false); \
              try { await __ops.fs_copy('/a', '/a'); return 'no throw'; } catch (e) { return e.code; }",
         );
         assert_eq!(out, Value::String("ERR_SAME_FILE".into()));

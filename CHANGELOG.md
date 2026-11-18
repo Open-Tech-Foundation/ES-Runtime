@@ -24,7 +24,11 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Changed
 
 - `performance.now()`, `TextEncoder`/`TextDecoder`, `URL`, `crypto`'s random
-  bytes and the HTTP server's per-request ops run on typed ops.
+  bytes and the HTTP server's per-request ops run on typed ops, and so do the
+  per-chunk ops: request and response bodies (server and `fetch`), file reads
+  and writes, socket reads and writes, WebSocket messages, `Hasher.update` and
+  compression streams. A socket write and a WebSocket message are copied once
+  on the way to the host instead of twice.
 - Every op call skips the diagnostics recorder unless op spans are subscribed,
   reads its op id without a JS conversion, and borrows the op table once: ~10 ns
   less per call.
