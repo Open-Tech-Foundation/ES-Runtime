@@ -50,7 +50,7 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           changed="$(git diff --name-only "$base"...HEAD)"
-          if printf '%s\n' "$changed" | grep -qE '^(packages/|crates/runtime/js/|crates/runtime/src/runtime_modules/|website/|bench/|biome\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tasks\.toml|\.github/workflows/js\.yml)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(packages/|crates/runtime/js/|crates/runtime/src/runtime_modules/|website/|bench/|biome\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tasks\.toml|scripts/template-matrix\.sh|\.github/workflows/js\.yml)'; then
             echo "js=true" >> "$GITHUB_OUTPUT"
           else
             echo "js=false" >> "$GITHUB_OUTPUT"
@@ -108,6 +108,33 @@ jobs:
       # until a behaviour bug. Rebuild and require the tree to be unchanged.
       - run: tsr build
       - run: git diff --exit-code -- crates/runtime/src/runtime_modules/serialization.js crates/dev-cli/src/dom/std-color.js
+
+  # Every template `esdev create` writes, created with its real dependencies and
+  # then typechecked, tested, built and served — the first five minutes of a
+  # new user, which the Rust suite cannot reach because it has no registry. The
+  # released esdev and esrun run this commit's templates and type declarations,
+  # which is the pair the next release ships.
+  templates:
+    name: templates (create → typecheck → test → build → serve)
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
+      # The smoke run serves a built server under esrun.
+      - name: install esrun
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash -s -- --only=esrun
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: tsr test:templates
 
   # Biome over the JS packages (config: biome.json). Formatting and lint in one
   # pass — `biome check` is what `tsr lint` runs locally.
