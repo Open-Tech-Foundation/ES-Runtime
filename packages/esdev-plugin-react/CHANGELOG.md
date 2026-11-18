@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The README's `esdev.json` example writes a target's output directory as
+  `outDir`, the camelCase spelling esdev 0.29 reads (DECISIONS D232). The
+  plugin itself is unchanged.
+
 ## [0.2.0] - 2026-10-01
 
 ### Fixed
