@@ -120,6 +120,11 @@ fn engine_rows() {
             Ok(b.len() as u32)
         }))
         .expect("typed_bytes_len");
+    engine
+        .register_op(OpDecl::typed("typed_out", |n: u32| {
+            Ok(vec![7u8; n as usize])
+        }))
+        .expect("typed_out");
     engine.eval(SETUP).expect("setup");
 
     let mut time = |name: &str, call: &str| {
@@ -136,6 +141,8 @@ fn engine_rows() {
     time("typed op: add_u32(i, 1)", "__ops.typed_add_u32(i, 1)");
     time("typed op: str_len(12 chars)", "__ops.typed_str_len(s)");
     time("typed op: bytes_len(1 KiB)", "__ops.typed_bytes_len(b)");
+    time("typed op: returns 11 B", "__ops.typed_out(11).length");
+    time("typed op: returns 64 KiB", "__ops.typed_out(65536).length");
 }
 
 // --- bare V8 floors --------------------------------------------------------
@@ -171,6 +178,38 @@ fn slow_bytes_len(
     let len =
         v8::Local::<v8::ArrayBufferView>::try_from(args.get(0)).map_or(0, |v| v.byte_length());
     rv.set_uint32(len as u32);
+}
+
+/// A `Uint8Array` over a Rust `Vec`, adopted as an external backing store —
+/// how the engine returns bytes.
+fn slow_out_vec(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let n = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
+    let store = v8::ArrayBuffer::new_backing_store_from_vec(vec![7u8; n]).make_shared();
+    let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+    let array = v8::Uint8Array::new(scope, buffer, 0, n).expect("array");
+    rv.set(array.into());
+}
+
+/// A `Uint8Array` over a buffer V8 allocates, with the bytes copied in.
+fn slow_out_copy(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let n = args.get(0).uint32_value(scope).unwrap_or(0) as usize;
+    let bytes = vec![7u8; n];
+    let buffer = v8::ArrayBuffer::new(scope, n);
+    if let Some(data) = buffer.data() {
+        // SAFETY: V8 allocated `n` bytes for this buffer, and nothing else
+        // holds it yet.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_ptr().cast(), n) };
+    }
+    let array = v8::Uint8Array::new(scope, buffer, 0, n).expect("array");
+    rv.set(array.into());
 }
 
 fn fast_nop(_recv: v8::Local<v8::Object>) -> u32 {
@@ -223,6 +262,10 @@ fn v8_rows() {
     set(scope, "slowStrLen", t);
     let t = v8::FunctionTemplate::new(scope, slow_bytes_len);
     set(scope, "slowBytesLen", t);
+    let t = v8::FunctionTemplate::new(scope, slow_out_vec);
+    set(scope, "slowOutVec", t);
+    let t = v8::FunctionTemplate::new(scope, slow_out_copy);
+    set(scope, "slowOutCopy", t);
     let t = v8::FunctionTemplate::builder(slow_nop).build_fast(scope, FAST_NOP);
     set(scope, "fastNop", t);
     let t = v8::FunctionTemplate::builder(slow_add).build_fast(scope, FAST_ADD);
@@ -244,6 +287,11 @@ fn v8_rows() {
     time("v8 slow: bytes_len(1 KiB)", "slowBytesLen(b)");
     time("v8 fast: nop()", "fastNop()");
     time("v8 fast: add(i, 1)", "fastAdd(i, 1)");
+    time("v8 slow: 11 B, adopted Vec", "slowOutVec(11).length");
+    time("v8 slow: 11 B, copied", "slowOutCopy(11).length");
+    time("js: new Uint8Array(11)", "new Uint8Array(11).length");
+    time("v8 slow: 64 KiB, adopted Vec", "slowOutVec(65536).length");
+    time("v8 slow: 64 KiB, copied", "slowOutCopy(65536).length");
 }
 
 fn main() {

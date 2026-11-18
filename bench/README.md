@@ -943,6 +943,16 @@ gap between the first two is the dispatch's own cost (DECISIONS D228).
 cargo run --release --example op_crossing -p es-runtime-engine
 ```
 
+`crates/engine/examples/buffer_churn.rs` times making `ArrayBuffer`s through the
+engine at 11 B to 1 MiB, dropped at once or kept 64 at a time. V8 flags are
+process-wide, so pass one as an argument to compare it against a run without
+(DECISIONS D227, D228):
+
+```sh
+cargo run --release --example buffer_churn -p es-runtime-engine
+cargo run --release --example buffer_churn -p es-runtime-engine -- --no-concurrent-array-buffer-sweeping
+```
+
 For a profile with function names, build `cargo build --profile profiling -p
 es-runtime-cli` (release settings, unstripped). Call graphs through Rust code
 need frame pointers as well: `CARGO_TARGET_DIR=target/fp RUSTFLAGS="-C
