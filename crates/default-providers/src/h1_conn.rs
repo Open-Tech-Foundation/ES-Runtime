@@ -208,6 +208,18 @@ where
                 let _ = wr.shutdown().await;
                 return;
             }
+            // A stopping server dropped it: queued when the drain took the
+            // program's request queue away, it never reached the program.
+            // Closed with no answer — what a client reads as "not processed",
+            // and a gateway retries (RFC 9110 §9.2.2) — rather than a 500 for
+            // an error nobody made. Otherwise the program dropped it.
+            Answered::Dropped => {
+                if !*ctx.drain_rx.borrow() {
+                    let _ = write_error(&mut wr, 500).await;
+                }
+                let _ = wr.shutdown().await;
+                return;
+            }
             Answered::KeepAlive => {
                 if stopped_reading || !body_done.load(Ordering::Acquire) || *ctx.drain_rx.borrow() {
                     let _ = wr.shutdown().await;
@@ -384,6 +396,8 @@ enum Answered {
     KeepAlive,
     Close,
     Upgraded,
+    /// The program's answer never came: the request was dropped.
+    Dropped,
 }
 
 /// The writing half: waits for the guest's answer and writes it.
@@ -402,11 +416,11 @@ async fn respond<W: AsyncWrite + Unpin>(
     answering.store(true, Ordering::Release);
     let response = match answer {
         Ok(response) => response,
+        // Dropped without an answer: what that means depends on whether the
+        // server is stopping, which the connection decides.
         Err(_) => {
-            // The guest dropped the request without answering.
             let _ = dtx.send(());
-            write_error(wr, 500).await?;
-            return Ok(Answered::Close);
+            return Ok(Answered::Dropped);
         }
     };
     // "Delivered", so a handler waiting on the disconnect signal learns the

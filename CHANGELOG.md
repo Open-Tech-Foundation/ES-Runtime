@@ -15,6 +15,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A server stops promptly when it is asked to, and drops nothing it was
+  given.** On `SIGTERM` (or `^C`), a request could wait unanswered for the whole
+  shutdown grace — 10 seconds by default — and hold the process open with it.
+  Three paths led there: a connection accepted but not yet speaking was held
+  through protocol detection and its first request handed to a program that
+  had stopped taking them; a shutdown while the program was waiting for
+  requests put the request queue back afterwards, so later requests were
+  queued into a channel nobody read; and a request dropped that way was then
+  answered `500`. A connection with nothing said is now closed when the drain
+  begins, the queue goes with the server, and a request the program never saw
+  is closed unanswered — what a client takes as "not processed" and a gateway
+  retries. A server with an idle connection open now exits at once rather than
+  after the grace.
 - **Filesystem calls are fast again** (DECISIONS D229). Since 0.47.0 every
   `runtime:fs` call resolved its path twice — canonicalizing it (one
   `readlink` per component) and then walking it by descriptor — which made

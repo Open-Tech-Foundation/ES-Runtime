@@ -318,6 +318,16 @@ pub(crate) fn valid_authority(authority: &str) -> Option<String> {
 /// Awaits `fut` under an optional deadline, logging and yielding `None` if it
 /// expires. `None` for the duration means no deadline, so a disabled timeout
 /// costs a branch rather than a timer.
+/// Resolves once a drain has begun — at once if it already has, and when the
+/// server that would send one is gone.
+async fn drained(drain: &mut watch::Receiver<bool>) {
+    while !*drain.borrow_and_update() {
+        if drain.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 async fn with_timeout<F: Future>(
     limit: Option<std::time::Duration>,
     fut: F,
@@ -424,8 +434,21 @@ async fn serve_connection<S>(
             // The detection read needs its own deadline: it happens before any
             // protocol timer exists, and a peer that connects and says nothing
             // would otherwise hold the task and descriptor (D43).
-            let Some(Ok((h2, prefix))) =
-                with_timeout(timeouts.handshake, detect_h2(&mut io), "first byte").await
+            //
+            // And it ends with a drain. A connection that has said nothing when
+            // the server begins to stop is idle, and is closed now, as an idle
+            // keep-alive one is: read on, its first request arrived after the
+            // program had stopped taking requests, waited unanswered for the
+            // whole grace, and held the process open with it.
+            let mut drain = drain_rx.clone();
+            let detected = async {
+                tokio::select! {
+                    detected = detect_h2(&mut io) => Some(detected),
+                    () = drained(&mut drain) => None,
+                }
+            };
+            let Some(Some(Ok((h2, prefix)))) =
+                with_timeout(timeouts.handshake, detected, "first byte").await
             else {
                 return;
             };
@@ -744,8 +767,18 @@ impl HttpServerProvider for SystemHttpServer {
             let mut rx = match this.requests.lock().unwrap().remove(&id) {
                 Some(rx) => {
                     let back = this.requests.clone();
+                    let controls = this.controls.clone();
                     Checkout::new(rx, move |rx| {
-                        back.lock().unwrap().insert(id, rx);
+                        // Back only to a server that is still serving. A
+                        // shutdown while this call held the queue found none to
+                        // remove; put back after it, the queue outlived the
+                        // server, and every request that reached it waited in a
+                        // channel nobody read for the whole grace. Dropped, a
+                        // queued request's connection closes and a new one is
+                        // answered 503.
+                        if controls.lock().unwrap().contains_key(&id) {
+                            back.lock().unwrap().insert(id, rx);
+                        }
                     })
                 }
                 None => return Ok(Vec::new()), // closed
@@ -2083,6 +2116,93 @@ mod http2_tests {
             .expect("the client must be answered, not left hanging")
             .unwrap();
         assert_eq!(status, 500);
+    }
+
+    /// A connection that has said nothing when the drain begins is idle, and is
+    /// closed at once — not held through the protocol-detection read until its
+    /// first request arrives, handed to a program that has stopped taking
+    /// requests, and left unanswered for the whole grace.
+    #[tokio::test]
+    async fn a_drain_closes_a_connection_that_has_said_nothing() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let mut silent = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        // Accepted, and waiting for its first byte.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(http.shutdown_all(), 1);
+        let _ = silent
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await;
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            silent.read_to_end(&mut answer),
+        )
+        .await;
+        assert!(read.is_ok(), "the connection was held through the drain");
+        assert!(answer.is_empty(), "{}", String::from_utf8_lossy(&answer));
+        assert!(
+            http.wait_for_idle(std::time::Duration::from_secs(2)).await,
+            "the server must go idle without waiting out the grace"
+        );
+        http.close(id).await.unwrap();
+    }
+
+    /// A shutdown while the program waits for requests does not leave the queue
+    /// behind. `next_requests` holds the queue as it waits, so the shutdown
+    /// finds none to remove; put back when the wait ended, it outlived the
+    /// server, and every request that reached it waited for the whole grace.
+    #[tokio::test]
+    async fn a_shutdown_during_a_wait_for_requests_leaves_no_queue() {
+        let (http, id, _port) = super::tests::bound_with(None).await;
+        let waiting = {
+            let http = http.clone();
+            tokio::spawn(async move { http.next_requests(id, 8).await })
+        };
+        // Parked, holding the queue.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(http.shutdown_all(), 1);
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(2), waiting)
+            .await
+            .expect("the wait ends with the shutdown")
+            .unwrap()
+            .unwrap();
+        assert!(woke.is_empty());
+        assert!(
+            !http.requests.lock().unwrap().contains_key(&id),
+            "the queue was put back after the server it belonged to stopped"
+        );
+    }
+
+    /// A request whose head finishes arriving after the drain began is refused
+    /// with a 503 and a closed connection, rather than handed to nobody: the
+    /// drain takes the request channel away, and a request with nowhere to go
+    /// is answered at once.
+    #[tokio::test]
+    async fn a_request_completed_after_the_drain_began_is_refused() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let mut late = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        late.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(http.shutdown_all(), 1);
+        late.write_all(b"Host: x\r\n\r\n").await.unwrap();
+        let mut answer = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            late.read_to_end(&mut answer),
+        )
+        .await
+        .expect("answered, not left hanging")
+        .unwrap();
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+        assert!(http.wait_for_idle(std::time::Duration::from_secs(2)).await);
+        http.close(id).await.unwrap();
     }
 
     /// Graceful shutdown over HTTP/2: an in-flight request still gets its
