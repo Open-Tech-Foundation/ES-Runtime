@@ -269,8 +269,11 @@ to render its pages on a server while you develop, as the prerender step will:
 passed with `--allow-read`, and the build inputs those paths may contain. The
 dev directory is always excluded, which covers every target
 output at once since the loop mirrors them all underneath it — so a build
-cannot trigger itself. Rules in the project's root `.gitignore` also exclude
-matching paths; other directory names are not hardcoded exclusions.
+cannot trigger itself. A directory the project's root `.gitignore` names is
+not watched at all — `node_modules` and `dist` in every template — and neither
+is `.git`; other directory names are not hardcoded exclusions. An edit to
+`.gitignore` applies while the loop runs, and a directory created later is
+watched from when it appears.
 
 That includes modules and the things a build consumes that a run does not:
 `index.html`, stylesheets, images and fonts. An explicit allowed path is both

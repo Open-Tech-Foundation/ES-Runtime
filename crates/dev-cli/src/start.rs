@@ -63,8 +63,7 @@ use std::time::Duration;
 
 use es_runtime_default_providers::{TrustSource, TrustStore};
 use ignore::Match;
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use notify::{Event, RecursiveMode, Watcher};
+use ignore::gitignore::Gitignore;
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, mpsc};
 
@@ -373,7 +372,6 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let root = project.source.root.clone();
     let ignored = output_dirs(&project);
-    let ignore_rules = IgnoreRules::load(&root)?;
     let watch_roots = watch_roots(&project);
     let scopes = watch_roots.clone();
     // The *paths*, not just the fact of a change: a stylesheet can be swapped
@@ -381,37 +379,27 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // path says which this was.
     let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
     let edits = crate::watch::Edits::new();
-    // Held for the duration: dropping the watcher stops the thread behind it.
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res
-            && crate::watch::is_change(&event.kind)
-        {
+    // Held for the duration: dropping the watch stops the thread behind it.
+    // Only the directories nothing ignores are watched (watch_tree).
+    let _watch = crate::watch_tree::watch_project(
+        &watch_roots,
+        &root,
+        ignored.clone(),
+        move |event, rules| {
+            if !crate::watch::is_change(&event.kind) {
+                return;
+            }
             for path in &event.paths {
-                if ignore_rules.refresh(path) {
-                    continue;
-                }
-                let rules = ignore_rules.current();
                 if scopes
                     .iter()
-                    .any(|scope| is_source(path, scope, &ignored, rules.as_ref()))
+                    .any(|scope| is_source(path, scope, &ignored, rules))
                     && edits.is_edit(&event.kind, path)
                 {
                     let _ = tx.send(path.clone());
                 }
             }
-        }
-    })
-    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-    for path in &watch_roots {
-        let mode = if path.is_dir() {
-            RecursiveMode::Recursive
-        } else {
-            RecursiveMode::NonRecursive
-        };
-        watcher
-            .watch(path, mode)
-            .map_err(|e| format!("cannot watch {}: {e}", path.display()))?;
-    }
+        },
+    )?;
 
     let paint = crate::style::Palette::stderr();
     let tag = paint.dim("esdev:");
@@ -1406,66 +1394,6 @@ fn is_read_by_a_build(path: &Path) -> bool {
             .is_ok_and(|canonical| crate::build::is_input(&canonical))
 }
 
-/// The project's `.gitignore`, kept current while the loop runs.
-///
-/// Read once, the rules were whatever the file said when `esdev start` began:
-/// a directory added to it afterwards — screenshots, a cache, a browser profile
-/// a script writes into — kept triggering rebuilds, and every rebuild reloads
-/// the page, until the loop was restarted. The watcher already sees the file
-/// change, so that is when the rules are read again.
-struct IgnoreRules {
-    root: PathBuf,
-    file: PathBuf,
-    rules: std::sync::RwLock<Option<Gitignore>>,
-}
-
-impl IgnoreRules {
-    fn load(root: &Path) -> Result<Self, String> {
-        Ok(Self {
-            root: root.to_path_buf(),
-            file: root.join(".gitignore"),
-            rules: std::sync::RwLock::new(load_gitignore(root)?),
-        })
-    }
-
-    /// Whether `path` is the `.gitignore` itself, re-reading it if so. The
-    /// file is not a build input, so its own change is never a rebuild. A file
-    /// that no longer parses leaves the rules it had; the mistake is the
-    /// user's to fix, and dropping every rule would rebuild on everything.
-    fn refresh(&self, path: &Path) -> bool {
-        if path != self.file {
-            return false;
-        }
-        if let Ok(rules) = load_gitignore(&self.root)
-            && let Ok(mut held) = self.rules.write()
-        {
-            *held = rules;
-        }
-        true
-    }
-
-    fn current(&self) -> std::sync::RwLockReadGuard<'_, Option<Gitignore>> {
-        self.rules
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-fn load_gitignore(root: &Path) -> Result<Option<Gitignore>, String> {
-    let path = root.join(".gitignore");
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let mut builder = GitignoreBuilder::new(root);
-    if let Some(err) = builder.add(&path) {
-        return Err(format!("cannot read {}: {err}", path.display()));
-    }
-    builder
-        .build()
-        .map(Some)
-        .map_err(|err| format!("cannot parse {}: {err}", path.display()))
-}
-
 /// The project tree plus every explicitly scoped read path in the config.
 ///
 /// A scoped read path can name an external config, certificate or data file
@@ -1766,7 +1694,7 @@ mod tests {
         std::fs::create_dir_all(root.join("shots")).expect("create project");
         std::fs::write(root.join(".gitignore"), "node_modules/\n").expect("write .gitignore");
         let shot = root.join("shots/01.png");
-        let rules = IgnoreRules::load(&root).expect("load");
+        let rules = crate::watch_tree::IgnoreRules::load(&root).expect("load");
         assert!(is_source(&shot, &root, &[], rules.current().as_ref()));
 
         std::fs::write(root.join(".gitignore"), "node_modules/\nshots/\n")

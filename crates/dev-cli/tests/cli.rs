@@ -15293,6 +15293,78 @@ export default {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **What the project ignores is not watched, and a new directory is.** A
+/// write under a `.gitignore`d directory never rebuilds — it is not watched at
+/// all — and a file saved into a directory made after the loop started does.
+#[test]
+fn start_watches_new_directories_and_not_ignored_ones() {
+    let dir = watch_dir("s_tree");
+    let port = test_port("s_tree");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::create_dir_all(dir.join("generated")).expect("create generated");
+    write_in(&dir, ".gitignore", "generated/\n");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+let builds = 0;
+export default {
+  name: "counter",
+  resolve: {
+    filter: { id: "virtual:builds" },
+    handler: () => ({ id: "virtual:builds", virtual: true }),
+  },
+  load: {
+    filter: { id: "virtual:builds" },
+    handler: () => ({ code: `export default ${++builds};` }),
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "src/main.mjs",
+        "import builds from 'virtual:builds';\ndocument.title = 'build ' + builds;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "plugins": ["./plugin.mjs"],
+                 "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }} }},
+                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+        ),
+    );
+
+    let _supervisor = start_in(&dir);
+    let first = wait_for_http(port, "/assets/main.js", |body| body.contains("build 1"));
+    assert!(first.contains("build 1"), "{first}");
+
+    write_in(&dir, "generated/types.mjs", "export const x = 1;\n");
+    std::thread::sleep(Duration::from_millis(1500));
+    let still = wait_for_http(port, "/assets/main.js", |body| body.contains("build 1"));
+    assert!(
+        still.contains("build 1"),
+        "a write under an ignored directory rebuilt: {still}"
+    );
+
+    std::fs::create_dir_all(dir.join("src/feature/deep")).expect("mkdir -p");
+    write_in(&dir, "src/feature/deep/x.mjs", "export const y = 2;\n");
+    let rebuilt = wait_for_http(port, "/assets/main.js", |body| body.contains("build 2"));
+    assert!(
+        rebuilt.contains("build 2"),
+        "a file in a new directory never rebuilt: {rebuilt}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // `runtime:build` — the bundler, from guest JS (the other esdev-only module).
 // ---------------------------------------------------------------------------

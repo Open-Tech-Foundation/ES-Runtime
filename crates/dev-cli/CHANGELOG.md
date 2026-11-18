@@ -37,6 +37,16 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **`esdev start`, `--watch` and `test --watch` no longer watch what the
+  project ignores.** On Linux a recursive watch is one inotify watch per
+  directory, and the watch covered the whole project: this repository's site
+  took 1,491, 1,084 of them under `node_modules` and 192 under `dist`, all
+  walked at every start and every event from them discarded. Only directories
+  the root `.gitignore` does not name are watched now (193 for the site), with
+  `.git` and esdev's own output left out too, and a directory created later is
+  watched when it appears. `--watch` and `test --watch` take the `.gitignore`
+  rules as `esdev start` does. macOS and Windows keep their native recursive
+  watch, filtered by the same rules. Running out of watches says which limit.
 - **A CSS `@import` with `layer()` or `supports()` is bundled.** It was left
   as written, naming a path relative to a stylesheet now in `assets/` — a 404 in
   development and production, which broke the AFW docs starter's code

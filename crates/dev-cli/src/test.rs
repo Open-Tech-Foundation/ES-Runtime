@@ -1277,13 +1277,11 @@ pub fn change_watcher(
     project_file: &Path,
 ) -> Result<
     (
-        notify::RecommendedWatcher,
+        crate::watch_tree::TreeWatch,
         tokio::sync::mpsc::UnboundedReceiver<Change>,
     ),
     String,
 > {
-    use notify::{RecursiveMode, Watcher};
-
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Change>();
     let scope = root.to_path_buf();
     let same = |a: &Path, b: &Path| {
@@ -1293,29 +1291,30 @@ pub fn change_watcher(
     };
     let project_file = project_file.to_path_buf();
     let edits = crate::watch::Edits::new();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
-        if !crate::watch::is_change(&event.kind) {
-            return;
-        }
-        if event
-            .paths
-            .iter()
-            .any(|path| same(path, &project_file) && edits.is_edit(&event.kind, path))
-        {
-            let _ = tx.send(Change::Project);
-        } else if event.paths.iter().any(|path| {
-            crate::watch::is_interesting(path, &scope) && edits.is_edit(&event.kind, path)
-        }) {
-            let _ = tx.send(Change::Source);
-        }
-    })
-    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-    watcher
-        .watch(root, RecursiveMode::Recursive)
-        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+    // What the project's `.gitignore` names is not watched at all (watch_tree).
+    let watch = crate::watch_tree::watch_project(
+        &[root.to_path_buf()],
+        root,
+        Vec::new(),
+        move |event, _| {
+            if !crate::watch::is_change(&event.kind) {
+                return;
+            }
+            if event
+                .paths
+                .iter()
+                .any(|path| same(path, &project_file) && edits.is_edit(&event.kind, path))
+            {
+                let _ = tx.send(Change::Project);
+            } else if event.paths.iter().any(|path| {
+                crate::watch::is_interesting(path, &scope) && edits.is_edit(&event.kind, path)
+            }) {
+                let _ = tx.send(Change::Source);
+            }
+        },
+    )?;
 
-    Ok((watcher, rx))
+    Ok((watch, rx))
 }
 
 /// The line a `--list` run ends with: nothing passed, because nothing ran.

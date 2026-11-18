@@ -34,12 +34,14 @@ program runs. If the working directory cannot be obtained, it falls back to
 the entry file's directory. It walks that directory recursively and watches
 source extensions.
 
-The generic watcher excludes esdev's own output: its staging directories and
-any `.esdev` directory, which holds converted CommonJS packages and screenshot
-diffs. It takes no rules from `esdev.json` or `.gitignore`, and it does not add
-build assets or explicit permission paths. Those project-aware rules belong to
-[`esdev start`](/esdev/start), which watches its configured build inputs and
-allowed read paths as well.
+A directory the root `.gitignore` names is not watched, and neither is `.git`
+or esdev's own output: its staging directories and any `.esdev` directory,
+which holds converted CommonJS packages and screenshot diffs. No other
+directory name is excluded for being one — a project without a `.gitignore`
+has its `node_modules` watched. An edit to `.gitignore` applies at once. The
+watcher takes no rules from `esdev.json`, and it does not add build assets or
+explicit permission paths. Those belong to [`esdev start`](/esdev/start), which
+watches its configured build inputs and allowed read paths as well.
 
 Each run starts a fresh `esdev <file>` process and reads the current project
 settings: `jsx`, `resolve.alias`, plugins and `tsconfig.json` paths. Editing

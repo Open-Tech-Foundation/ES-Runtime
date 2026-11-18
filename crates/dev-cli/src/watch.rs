@@ -33,7 +33,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::event::{EventKind, ModifyKind};
-use notify::{Event, RecursiveMode, Watcher};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
@@ -118,25 +117,26 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
     let watch_scope = root.clone();
     let edits = Edits::new();
     // The watcher runs on its own thread and must outlive this scope, so it is
-    // held here for the duration.
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res
-            && is_change(&event.kind)
-            && event
-                .paths
-                .iter()
-                .any(|p| is_interesting(p, &watch_scope) && edits.is_edit(&event.kind, p))
-        {
-            // Unbounded and ignore-on-failure: the receiver only ever needs to
-            // learn *that* something changed, so a full or closed channel costs
-            // nothing worth reporting.
-            let _ = tx.send(());
-        }
-    })
-    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-    watcher
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+    // held here for the duration. What the project's `.gitignore` names is not
+    // watched at all (watch_tree).
+    let _watch = crate::watch_tree::watch_project(
+        std::slice::from_ref(&root),
+        &root,
+        Vec::new(),
+        move |event, _| {
+            if is_change(&event.kind)
+                && event
+                    .paths
+                    .iter()
+                    .any(|p| is_interesting(p, &watch_scope) && edits.is_edit(&event.kind, p))
+            {
+                // Unbounded and ignore-on-failure: the receiver only ever needs
+                // to learn *that* something changed, so a full or closed
+                // channel costs nothing worth reporting.
+                let _ = tx.send(());
+            }
+        },
+    )?;
     // One banner, like the dev loop's: version, and what is watched —
     // relative when it is under here (`.` for here itself), absolute when
     // it is not. Then only events: the loop's older per-event `esdev:` lines

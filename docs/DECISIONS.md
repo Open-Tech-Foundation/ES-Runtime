@@ -4885,3 +4885,17 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** refusing a step whose `out` is inside another target's `outdir` — it pushes every template and framework to invent a scratch location and a way back to the pages, and the leftover survives there anyway. Removing the step before `finish` — a plugin reading what the step produced would break.
 
 **Consequences:** `dist` holds what is deployed and nothing that made it. A step that wants a file kept writes it.
+
+### D231 — A watch registers only what the project does not ignore · *Accepted (2026-11-19)*
+
+**Context:** reported by AFW ("esdev start scans gitignored folders"). `esdev start` filtered each event through the root `.gitignore`, but registered one recursive watch on the project root; on Linux that is one inotify watch per directory, walked at every start. This repository's site took 1,491 — 1,084 under `node_modules`, 192 under `dist` — none of whose events would ever be acted on. `--watch` and `test --watch` read no `.gitignore` at all.
+
+**Decision:**
+- One function watches a project for all three (`watch_tree::watch_project`). The rule that drops an event is the rule that decides where to look for one: a directory is registered only if it is not `.git`, not esdev's own (staging, `.esdev`), not the loop's output, and not matched by the root `.gitignore`. A root is always watched.
+- On Linux and the BSDs, each kept directory gets a watch of its own; one created or moved in later is watched when it appears, and the files already in it by then are reported as created. A `.gitignore` edit re-reads the rules and walks again.
+- macOS and Windows keep one native recursive watch — FSEvents and `ReadDirectoryChangesW` cost one stream or handle for a tree, where per-directory watches would cost thousands — and the same rule filters their events.
+- Running out of watches is an error that names `fs.inotify.max_user_watches`.
+
+**Rejected:** excluding `node_modules`, `dist` and friends by name, as Vite's chokidar defaults do — a project says what it does not edit in `.gitignore`, which every tool it uses reads, and a name list is a second policy to disagree with it (the existing `directory_names_are_not_hardcoded_exclusions` stance). Nested `.gitignore` files — the root's is what the loop has always read; widening it is a separate change.
+
+**Consequences:** the site's watch is 193 directories. Editing a linked workspace package under a gitignored `node_modules` still does not rebuild, as before; that is linked packages' own change (P1).

@@ -97,6 +97,7 @@ mod unbundled;
 mod upgrade;
 mod watch;
 mod watch_keys;
+mod watch_tree;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use config::TestIsolation;
 use create::CreateConfig;
