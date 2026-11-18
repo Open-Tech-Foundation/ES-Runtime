@@ -21,7 +21,11 @@ imports under `esdev test`.
 ## Bundling
 
 `@import` inlines the named stylesheet, resolved the way the build resolves
-everything else. A `url()` naming a local file copies it into
+everything else. Its conditions come along as the rules they mean:
+`@import "pkg/theme.css" layer(lib) supports(display: grid) print;` becomes
+`@media print` around `@supports (display: grid)` around `@layer lib`, and the
+layer keeps the place in the layer order the import gave it. Only an `@import`
+of a remote URL is left for the browser. A `url()` naming a local file copies it into
 `dist/assets/` under a content-hashed name and points the URL at the copy:
 
 ```css

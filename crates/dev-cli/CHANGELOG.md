@@ -37,6 +37,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A CSS `@import` with `layer()` or `supports()` is bundled.** It was left
+  as written, naming a path relative to a stylesheet now in `assets/` — a 404 in
+  development and production, which broke the AFW docs starter's code
+  highlighting. It is inlined inside `@media`, `@supports` and `@layer`, in the
+  order CSS Cascade 5 applies them, and a named layer is declared where the
+  import stood so it keeps its place in the layer order. A remote URL is still
+  left for the browser.
 - **A cold `esdev test` no longer fails at random on a CommonJS dependency.**
   With two or more test files, one could load a converted package before the
   packages it requires had been converted, and fail with `…/.esdev/deps/…mjs:

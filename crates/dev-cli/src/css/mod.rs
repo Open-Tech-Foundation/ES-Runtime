@@ -328,29 +328,109 @@ mod tests {
         assert_eq!(built.code, "@media print{body{color:#000}}");
     }
 
-    /// `layer()` and `supports()` order the cascade in ways a `@media` wrapper
-    /// cannot reproduce, so they are left for the browser rather than mangled.
+    /// Every condition an `@import` may carry, wrapped as CSS Cascade 5 says it
+    /// applies: the media list outermost, then `supports()`, then the layer.
     #[test]
-    fn an_import_this_pass_cannot_reproduce_is_left_alone() {
+    fn an_import_with_a_layer_or_supports_is_inlined_inside_them() {
+        for (import, expected) in [
+            ("layer(base)", "@layer base{a{color:blue}}"),
+            ("layer", "@layer{a{color:blue}}"),
+            ("LAYER(base.theme)", "@layer base.theme{a{color:blue}}"),
+            (
+                "supports(display: grid)",
+                "@supports (display:grid){a{color:blue}}",
+            ),
+            (
+                "supports(not (display: grid))",
+                "@supports not (display:grid){a{color:blue}}",
+            ),
+            (
+                "layer(base) supports(display: grid) screen and (min-width: 40em)",
+                "@layer base;@media screen and (min-width:40em){@supports (display:grid){@layer base{a{color:blue}}}}",
+            ),
+            (
+                "layer(base) print",
+                "@layer base;@media print{@layer base{a{color:blue}}}",
+            ),
+            ("layer print", "@media print{@layer{a{color:blue}}}"),
+        ] {
+            let entry = project(
+                "layered",
+                &[
+                    ("styles.css", &format!("@import \"./a.css\" {import};")),
+                    ("a.css", "a{color:blue}"),
+                ],
+            );
+            let built = build(&entry, true).expect("bundles");
+            assert_eq!(built.code, expected, "@import … {import}");
+            assert_eq!(built.sources, 2, "@import … {import}");
+        }
+    }
+
+    /// The AFW docs starter's code highlighting: a package's stylesheet in a
+    /// layer, which a stylesheet in `assets/` cannot fetch by that name.
+    #[test]
+    fn a_package_import_in_a_layer_is_inlined() {
         let entry = project(
-            "layered",
+            "layered-package",
             &[
                 (
                     "styles.css",
-                    "@import \"./a.css\" layer(base);\nbody{color:red}",
+                    "@import \"pkg/x.css\" layer(lib);\nbody{color:red}",
                 ),
-                ("a.css", "a{color:blue}"),
+                (
+                    "node_modules/pkg/package.json",
+                    r#"{"name":"pkg","version":"1.0.0"}"#,
+                ),
+                ("node_modules/pkg/x.css", ".x{color:blue}"),
             ],
         );
+        let built = build(&entry, true).expect("bundles");
+        assert_eq!(built.code, "@layer lib{.x{color:blue}}body{color:red}");
+    }
 
+    /// The layers keep the order the imports gave them: the earlier import's
+    /// layer is declared first, whatever the sheets inside them say.
+    #[test]
+    fn layered_imports_keep_their_order() {
+        let entry = project(
+            "layer-order",
+            &[
+                (
+                    "styles.css",
+                    "@import \"./reset.css\" layer(reset);\n@import \"./theme.css\" layer(theme) print;",
+                ),
+                ("reset.css", "*{margin:0}"),
+                ("theme.css", "@layer reset{a{b:c}}body{color:red}"),
+            ],
+        );
+        let built = build(&entry, true).expect("bundles");
+        let reset = built.code.find("@layer reset{*").expect("the reset layer");
+        let theme = built
+            .code
+            .find("@layer theme;")
+            .expect("the theme declaration");
+        assert!(reset < theme, "{}", built.code);
+    }
+
+    /// A URL the build does not control is the escape hatch, condition or not.
+    #[test]
+    fn a_remote_import_in_a_layer_is_left_for_the_browser() {
+        let entry = project(
+            "layered-remote",
+            &[(
+                "styles.css",
+                "@import \"https://example.com/a.css\" layer(base);\nbody{color:red}",
+            )],
+        );
         let built = build(&entry, false).expect("bundles");
         assert!(
-            built.code.contains("@import \"./a.css\" layer(base);"),
+            built
+                .code
+                .contains("@import \"https://example.com/a.css\" layer(base);"),
             "{}",
             built.code
         );
-        assert!(!built.code.contains("color:blue"), "{}", built.code);
-        assert_eq!(built.sources, 1);
     }
 
     #[test]

@@ -9,17 +9,19 @@
 //!
 //! # What is inlined, and what is left for the browser
 //!
-//! `@import "a.css";` and `@import url(a.css);` are inlined. So is a
-//! conditional one — `@import "a.css" screen;` becomes `@media screen { … }`,
-//! which is what the condition meant.
+//! `@import "a.css";` and `@import url(a.css);` are inlined, and so is one
+//! with conditions, wrapped in the rules that mean what they meant (CSS Cascade
+//! 5 §6.1): `@import "a.css" layer(base) supports(display: grid) screen;`
+//! becomes `@media screen { @supports (display: grid) { @layer base { … } } }`
+//! — the media list outermost, then `supports()`, then the layer, as esbuild
+//! and Lightning CSS write it. A named layer is also declared where the
+//! `@import` stood, `@layer base;`, when a condition gates it: the import's
+//! position is what orders its layer, whether or not the condition holds.
 //!
 //! Left alone deliberately: an `@import` naming a URL this build does not
-//! control (`https:`, `//`, rooted), and one carrying `layer()` or
-//! `supports()`. The first is the documented escape hatch. The second is
-//! narrower than it looks — `layer()` takes part in cascade-layer ordering that
-//! depends on where the `@import` sits — and wrapping it wrongly would change
-//! which rules win. An `@import` left in place still works; it costs a request,
-//! not correctness.
+//! control (`https:`, `//`, rooted) — the documented escape hatch. Anything a
+//! build can resolve is inlined: one left in place names a path relative to
+//! the bundled stylesheet in `assets/`, where it is a 404.
 
 use std::path::{Path, PathBuf};
 
@@ -182,8 +184,7 @@ fn inline_import(
         return Ok(());
     };
 
-    let lowered = conditions.to_ascii_lowercase();
-    if !is_local(&url) || lowered.starts_with("layer") || lowered.starts_with("supports(") {
+    if !is_local(&url) {
         items.push(Item::Rule(Rule::At(at.clone())));
         return Ok(());
     }
@@ -218,34 +219,147 @@ fn inline_import(
         return Ok(());
     }
 
-    // The condition applied to the whole imported sheet, so it has to apply to
-    // the whole of what replaces it. The prelude is reused verbatim — it is
-    // already a parsed media query list, minus the URL.
-    let prelude: Vec<ComponentValue> = at
+    // The conditions applied to the whole imported sheet, so they apply to the
+    // whole of what replaces it — innermost first.
+    let conditions = import_conditions(at);
+    if let Some(Some(name)) = &conditions.layer
+        && (conditions.supports.is_some() || !conditions.media.is_empty())
+    {
+        items.push(Item::Rule(Rule::At(statement("@layer", name.clone()))));
+    }
+    let mut body: Vec<BlockItem> = inlined
+        .into_iter()
+        .map(|item| match item {
+            Item::Rule(rule) => BlockItem::Rule(rule),
+            Item::Trivia(token) => BlockItem::Trivia(token),
+            Item::Dangling(values) => BlockItem::Dangling(values),
+        })
+        .collect();
+    if let Some(layer) = conditions.layer {
+        body = wrapped("@layer", layer.unwrap_or_default(), body);
+    }
+    if let Some(supports) = conditions.supports {
+        body = wrapped("@supports", supports, body);
+    }
+    if !conditions.media.is_empty() {
+        body = wrapped("@media", conditions.media, body);
+    }
+    // One wrapping rule, since there was a condition. The sheet's own top
+    // level holds no declarations or stray semicolons to drop.
+    items.extend(body.into_iter().filter_map(|item| match item {
+        BlockItem::Rule(rule) => Some(Item::Rule(rule)),
+        BlockItem::Trivia(token) => Some(Item::Trivia(token)),
+        BlockItem::Dangling(values) => Some(Item::Dangling(values)),
+        BlockItem::Declaration(_) | BlockItem::Semicolon => None,
+    }));
+    Ok(())
+}
+
+/// What follows an `@import`'s URL, in the order the grammar allows it:
+/// `layer` or `layer(<name>)`, then `supports(<condition>)`, then a media
+/// query list.
+#[derive(Debug, Default)]
+struct ImportConditions {
+    /// `Some(None)` for an anonymous `layer`, `Some(Some(name))` for a named
+    /// one — each a prelude, leading space included.
+    layer: Option<Option<Vec<ComponentValue>>>,
+    /// The condition `@supports` is given, parenthesised.
+    supports: Option<Vec<ComponentValue>>,
+    /// The media query list, leading space included; empty when there is none.
+    media: Vec<ComponentValue>,
+}
+
+fn import_conditions(at: &AtRule) -> ImportConditions {
+    let mut rest = at
         .prelude
         .iter()
         .skip_while(|value| !is_url_value(value))
         .skip(1)
-        .cloned()
-        .collect();
+        .skip_while(|value| value.is_trivia())
+        .peekable();
+    let mut conditions = ImportConditions::default();
+    let space = || ComponentValue::Token(Token::new(Kind::Whitespace, " "));
 
-    items.push(Item::Rule(Rule::At(AtRule {
-        at: Token::new(Kind::AtKeyword, "@media"),
+    match rest.peek() {
+        Some(ComponentValue::Token(token))
+            if token.kind == Kind::Ident && token.text.eq_ignore_ascii_case("layer") =>
+        {
+            conditions.layer = Some(None);
+            rest.next();
+        }
+        Some(ComponentValue::Function(function)) if function.name() == "layer" => {
+            let name: Vec<ComponentValue> = trimmed(&function.arguments);
+            conditions.layer = Some(Some(std::iter::once(space()).chain(name).collect()));
+            rest.next();
+        }
+        _ => {}
+    }
+    while rest.peek().is_some_and(|value| value.is_trivia()) {
+        rest.next();
+    }
+    if let Some(ComponentValue::Function(function)) = rest.peek()
+        && function.name() == "supports"
+    {
+        let condition = trimmed(&function.arguments);
+        // `supports(display: grid)` is a declaration, which `@supports` takes
+        // in parentheses; `supports(not (display: grid))` and
+        // `supports(selector(a > b))` are conditions already.
+        let declaration = condition
+            .iter()
+            .filter(|value| !value.is_trivia())
+            .take(2)
+            .map(|value| value.token().map(|token| token.kind))
+            .eq([Some(Kind::Ident), Some(Kind::Colon)]);
+        let condition = if declaration {
+            vec![ComponentValue::Block(SimpleBlock {
+                open: Token::new(Kind::OpenParen, "("),
+                items: condition,
+                closed: true,
+            })]
+        } else {
+            condition
+        };
+        conditions.supports = Some(std::iter::once(space()).chain(condition).collect());
+        rest.next();
+    }
+    let media = trimmed(&rest.cloned().collect::<Vec<_>>());
+    if !media.is_empty() {
+        conditions.media = std::iter::once(space()).chain(media).collect();
+    }
+    conditions
+}
+
+/// `values` without the whitespace and comments at either end.
+fn trimmed(values: &[ComponentValue]) -> Vec<ComponentValue> {
+    let start = values.iter().position(|value| !value.is_trivia());
+    let end = values.iter().rposition(|value| !value.is_trivia());
+    match (start, end) {
+        (Some(start), Some(end)) => values[start..=end].to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// `<name> <prelude> { <items> }`, as the one item of a block.
+fn wrapped(name: &str, prelude: Vec<ComponentValue>, items: Vec<BlockItem>) -> Vec<BlockItem> {
+    vec![BlockItem::Rule(Rule::At(AtRule {
+        at: Token::new(Kind::AtKeyword, name),
         prelude,
         semicolon: false,
         block: Some(Block {
             closed: true,
-            items: inlined
-                .into_iter()
-                .map(|item| match item {
-                    Item::Rule(rule) => BlockItem::Rule(rule),
-                    Item::Trivia(token) => BlockItem::Trivia(token),
-                    Item::Dangling(values) => BlockItem::Dangling(values),
-                })
-                .collect(),
+            items,
         }),
-    })));
-    Ok(())
+    }))]
+}
+
+/// `<name> <prelude>;`.
+fn statement(name: &str, prelude: Vec<ComponentValue>) -> AtRule {
+    AtRule {
+        at: Token::new(Kind::AtKeyword, name),
+        prelude,
+        semicolon: true,
+        block: None,
+    }
 }
 
 /// The URL an `@import` names, and whatever conditions follow it.
