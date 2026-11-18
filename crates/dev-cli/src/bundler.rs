@@ -646,6 +646,19 @@ pub fn translate(
             .map(|text| rolldown_common::AddonOutputOption::String(Some(text))),
         define: (!options.define.is_empty()).then(|| options.define.iter().cloned().collect()),
         minify: options.minify.then_some(RawMinifyOptions::Bool(true)),
+        // Minified output carries no annotation comments. rolldown dropped them
+        // under minification until 1.3, when `@__PURE__` and its kin began to
+        // survive it — 30,000 of them, a quarter of the bytes, in the
+        // 10,000-component benchmark app. A minified build is the end of the
+        // line, so the annotations there have no reader left; legal comments
+        // keep rolldown's default (inline), and JSDoc goes with the whitespace
+        // as it always has. Unminified output keeps every annotation, for the
+        // bundler that may read it next.
+        comments: options.minify.then_some(rolldown_common::CommentsOptions {
+            legal: true,
+            annotation: false,
+            jsdoc: true,
+        }),
         treeshake: match options.treeshake {
             Some(false) => TreeshakeOptions::Boolean(false),
             _ => TreeshakeOptions::default(),

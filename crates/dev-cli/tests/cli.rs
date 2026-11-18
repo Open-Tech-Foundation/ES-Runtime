@@ -1887,6 +1887,36 @@ fn build_writes_where_out_says_and_minify_shrinks_it() {
     assert!(small_len < plain_len, "{small_len} !< {plain_len}");
 }
 
+/// A minified build carries no annotation comments, as before rolldown 1.3
+/// kept them through minification; a legal comment stays, and the unminified
+/// build keeps the annotation for whatever bundles it next.
+#[test]
+fn a_minified_build_drops_annotations_and_keeps_legal_comments() {
+    let dir = build_dir("b_comments");
+    write_in(
+        &dir,
+        "app.mjs",
+        "/*! Example licence, kept. */\n\
+         function make(n) {\n  return { n };\n}\n\
+         export const made = /* @__PURE__ */ make(Date.now());\n\
+         console.log(made.n > 0);\n",
+    );
+    for (out, minify) in [("out/plain.js", false), ("out/small.js", true)] {
+        let mut command = esdev_in(&dir);
+        command.args(["build", "app.mjs", &format!("--out={out}")]);
+        if minify {
+            command.arg("--minify");
+        }
+        let built = command.output().expect("spawn esdev build");
+        assert!(built.status.success(), "{}", stderr(&built));
+    }
+    let plain = std::fs::read_to_string(dir.join("out/plain.js")).unwrap();
+    let small = std::fs::read_to_string(dir.join("out/small.js")).unwrap();
+    assert!(plain.contains("@__PURE__"), "{plain}");
+    assert!(!small.contains("@__PURE__"), "{small}");
+    assert!(small.contains("Example licence, kept."), "{small}");
+}
+
 #[test]
 fn build_rejects_a_missing_entry_and_a_second_one() {
     let dir = build_dir("b_args");

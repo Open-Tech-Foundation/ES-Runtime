@@ -26,6 +26,16 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`esdev build --minify` no longer leaves `@__PURE__` comments in its
+  output.** Since 0.27.0's move to rolldown 1.3, annotation comments survived
+  minification — 30,042 of them, about 540 KB of the 2,325 KB bundle, in the
+  10,000-component benchmark app. Minified output drops them again; legal
+  comments (`/*!`,
+  `@license`) stay, and an unminified build keeps every annotation for the
+  bundler that reads it next.
+
 ## [0.28.0] - 2026-11-17
 
 ### Added
