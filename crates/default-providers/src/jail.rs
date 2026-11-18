@@ -641,6 +641,48 @@ mod plain_tests {
         Jail::new(root, root)
     }
 
+    /// esdev's development default (D233): the whole filesystem, added the way
+    /// a typed path outside the jail is (D54). Outside the project is reached;
+    /// inside it resolves exactly as the plain jail does, from the project
+    /// root first; and the roots themselves still cannot be mutated.
+    #[test]
+    fn everywhere_reaches_outside_and_leaves_inside_alone() {
+        let (base, root, outside) = scene("everywhere");
+        let open = jail(&root)
+            .with_read_allowlist(crate::PathAllowlist::everywhere())
+            .with_write_allowlist(crate::PathAllowlist::everywhere());
+        let secret = outside.join("secret.txt");
+        let secret = secret.to_str().unwrap();
+        assert!(
+            jail(&root).jailed(secret, Access::Read).is_err(),
+            "the plain jail"
+        );
+        assert!(open.jailed(secret, Access::Read).is_ok());
+        assert!(open.jailed(secret, Access::Write).is_ok());
+        assert_eq!(
+            open.roots(Access::Read)[0],
+            root,
+            "the project root stays first"
+        );
+        assert_eq!(
+            open.jailed("data/notes.txt", Access::Read).unwrap(),
+            jail(&root).jailed("data/notes.txt", Access::Read).unwrap()
+        );
+        assert!(
+            open.plain("data/notes.txt", "data/notes.txt", Access::Read, true)
+                .is_some()
+        );
+        // A root is never a mutation's target — the filesystem's no more than
+        // the project's.
+        #[cfg(unix)]
+        assert_eq!(
+            open.admit(Path::new("/"), Access::Write),
+            Err(Refusal::Root)
+        );
+        assert_eq!(open.admit(&root, Access::Write), Err(Refusal::Root));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn a_plain_path_is_pinned_without_resolution() {
         let (base, root, _) = scene("plain");

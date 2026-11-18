@@ -28,6 +28,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Changed
 
+- **The development default reaches the whole filesystem** (DECISIONS D233).
+  Under esdev's default grant and `-A`, an unscoped read or write was bound to
+  the working directory while `--deny-all --allow-write=<dir>` could write
+  anywhere — a default narrower than a grant it accepts. It is every path now.
+  `--deny-all` with a bare `--allow-write`, which rehearses production, stays
+  bound to the project as `esrun` is.
 - **Breaking: every `esdev.json` key is camelCase** (DECISIONS D232). A
   target's `outdir` is `outDir` — the spelling `dev.outDir` already had —
   `dts-bundle` is `dtsBundle` and `css-urls` is `cssUrls`. The old spellings

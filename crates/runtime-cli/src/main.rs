@@ -192,6 +192,8 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     permissive: permissions.permissive(),
+                    // A bare grant is the project; further is a typed path (D233).
+                    paths_everywhere: false,
                     options,
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
@@ -244,6 +246,8 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     permissive: permissions.permissive(),
+                    // A bare grant is the project; further is a typed path (D233).
+                    paths_everywhere: false,
                     options,
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.

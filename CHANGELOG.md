@@ -35,6 +35,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **A path outside the root jail says how the root is chosen.** The refusal
+  named only that the path escaped "the filesystem root"; it now says the root
+  is the working directory the program was started in, and that a path outside
+  it is reached by naming it (`--allow-read=<path>`, `--allow-write=<path>`).
+  It still names no path but the one the program wrote (D141).
+
 - `performance.now()`, `TextEncoder`/`TextDecoder`, `URL`, `crypto`'s random
   bytes and the HTTP server's per-request ops run on typed ops, and so do the
   per-chunk ops: request and response bodies (server and `fetch`), file reads

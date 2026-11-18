@@ -23,8 +23,16 @@ a symlink cannot escape the jail. This is on by default and is not optional.
 </Callout>
 
 The root is the working directory exactly: there is no walk up to a
-`package.json`, marker file, or flag that moves it. A path grant can add a
-specific subtree outside the root, but guest code cannot widen the grant.
+`package.json`, marker file, or flag that moves it. A bare `--allow-read` or
+`--allow-write` reaches the root; a path grant can add a specific subtree
+outside it (`--allow-write=/var/cache/app`), but guest code cannot widen the
+grant.
+
+`esdev` differs in one way. It starts from every capability (the development
+default, and `-A`), and there an unscoped read or write reaches the whole
+filesystem, so the default is never narrower than a grant it accepts. Rehearsing
+production with `esdev --deny-all --allow-write` is bound to the root, as `esrun`
+is, and so is `esrun -A`.
 
 The filesystem root and the home directory are refused as working directories,
 because either would accidentally make the jail the whole machine or a user's

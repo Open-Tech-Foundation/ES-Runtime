@@ -77,6 +77,24 @@ impl PathAllowlist {
         Ok(PathAllowlist { entries: parsed })
     }
 
+    /// Every path there is: the filesystem's root, or each drive's on Windows.
+    ///
+    /// What an unscoped read or write grant reaches in `esdev`'s development
+    /// default (D233). As an allowlist it lies outside every project root, so
+    /// it *adds* the whole filesystem to the jail (D54) while the project root
+    /// stays the first root — what resolves inside the project resolves as it
+    /// always did. A drive that appears after the run starts is not added.
+    pub fn everywhere() -> PathAllowlist {
+        #[cfg(windows)]
+        let entries = (b'A'..=b'Z')
+            .map(|drive| PathBuf::from(format!("{}:\\", drive as char)))
+            .filter(|root| root.exists())
+            .collect();
+        #[cfg(not(windows))]
+        let entries = vec![PathBuf::from("/")];
+        PathAllowlist { entries }
+    }
+
     /// Entries that lie outside `root` — the subtrees this list *adds* to the
     /// filesystem root jail rather than carving out of it (D54).
     ///

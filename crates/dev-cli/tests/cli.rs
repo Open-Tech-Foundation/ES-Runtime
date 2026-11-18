@@ -1580,6 +1580,73 @@ fn test_imports_commonjs_packages_unbundled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **esdev's default is never narrower than a grant it accepts** (D233). Under
+/// the development default and `-A` an unscoped grant is the whole filesystem;
+/// rehearsing production with `--deny-all --allow-write` is the project, as
+/// `esrun` is — and `esrun -A` is the project too, reaching further only by a
+/// path typed on its command line. The refusal says how the root was chosen.
+#[test]
+fn the_development_default_reaches_outside_the_project() {
+    let base = build_dir("b_everywhere");
+    let project = base.join("project");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&project).expect("mkdir project");
+    std::fs::create_dir_all(&outside).expect("mkdir outside");
+    let target = outside.join("x.txt");
+    write_in(
+        &project,
+        "w.js",
+        &format!(
+            "import {{ write }} from 'runtime:fs';\nawait write({:?}, 'hi');\nconsole.log('wrote');\n",
+            target.to_str().expect("utf-8")
+        ),
+    );
+    for args in [&[][..], &["-A"][..]] {
+        let _ = std::fs::remove_file(&target);
+        let out = esdev_in(&project)
+            .args(args)
+            .arg("w.js")
+            .output()
+            .expect("spawn esdev");
+        assert!(out.status.success(), "esdev {args:?}: {}", stderr(&out));
+        assert!(target.is_file(), "esdev {args:?} wrote nothing");
+    }
+    let rehearsed = esdev_in(&project)
+        .args(["--deny-all", "--allow-write", "w.js"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!rehearsed.status.success());
+    let said = stderr(&rehearsed);
+    assert!(said.contains("escapes the filesystem root"), "{said}");
+    assert!(
+        said.contains("the working directory the program was started in"),
+        "{said}"
+    );
+    assert!(said.contains("--allow-write=<path>"), "{said}");
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let _ = std::fs::remove_file(&target);
+    let refused = Command::new(&esrun)
+        .current_dir(&project)
+        .args(["-A", "w.js"])
+        .output()
+        .expect("spawn esrun");
+    assert!(
+        !refused.status.success(),
+        "esrun -A wrote outside the project"
+    );
+    let named = Command::new(&esrun)
+        .current_dir(&project)
+        .arg(format!("--allow-write={}", outside.display()))
+        .arg("w.js")
+        .output()
+        .expect("spawn esrun");
+    assert!(named.status.success(), "{}", stderr(&named));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A package's module is written only once the packages it requires are
 /// converted. Another test process takes the module's being there to mean the
 /// package is ready and follows it to the modules of what it requires; written

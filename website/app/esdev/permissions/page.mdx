@@ -9,7 +9,9 @@ import { Callout } from "@opentf/afw-docs";
 
 `esrun` grants **nothing** by default, so a deployment has to name what it may
 reach. The hard part was never the flags — it is knowing which ones you need,
-and `esdev` grants everything, so the dev loop never tells you. Run the program
+and `esdev` grants everything — every path on the filesystem included
+([the root jail](/docs/security/filesystem#the-filesystem-root-jail)) — so the
+dev loop never tells you. Run the program
 once under a trace:
 
 ```sh

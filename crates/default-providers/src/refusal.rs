@@ -39,15 +39,17 @@ impl Refusal {
             Refusal::Escape { granted: false } => (
                 ErrorCode::JailEscape,
                 format!(
-                    "path {shown} escapes the filesystem root \
-                     (access outside the root is not permitted)"
+                    "path {shown} escapes the filesystem root, which is the working \
+                     directory the program was started in. A path outside it is \
+                     reached by naming it: --allow-read=<path> or --allow-write=<path>"
                 ),
             ),
             Refusal::Escape { granted: true } => (
                 ErrorCode::JailEscape,
                 format!(
-                    "path {shown} escapes the filesystem root and every path granted \
-                     on the command line (access outside them is not permitted)"
+                    "path {shown} escapes the filesystem root (the working directory \
+                     the program was started in) and every path granted on the \
+                     command line"
                 ),
             ),
             Refusal::NotAllowed(access) => (

@@ -84,6 +84,13 @@ pub struct Config {
     /// network address but no path, and a path must be named. A run that
     /// started from everything cannot name one, so there it covers them all.
     pub permissive: bool,
+    /// Whether an **unscoped** read or write grant reaches the whole filesystem
+    /// rather than the project root (D233). `esdev` sets it when the run
+    /// started from everything — its development default, or `-A` — because a
+    /// default that refuses what `--allow-write=<dir>` grants is backwards on
+    /// the machine it is for. `esrun` never sets it: there a bare grant stays
+    /// the project, and reaching further is a path typed on its command line.
+    pub paths_everywhere: bool,
     /// The shared flags that shape the run.
     pub options: RunOptions,
     /// An optional rewrite applied to every module's source before the engine
@@ -996,6 +1003,17 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
         .unwrap_or_else(|_| base_dir.clone());
     let allow_read = path_scope(&config.scopes, Capability::FileRead, &flag_dir)?;
     let allow_write = path_scope(&config.scopes, Capability::FileWrite, &flag_dir)?;
+    // An unscoped grant under esdev's development default is the whole
+    // filesystem (D233); everywhere else it is the jail. A scoped one is what
+    // its list says, in both binaries.
+    let everywhere = |scope: Option<es_runtime_default_providers::PathAllowlist>| match scope {
+        None if config.paths_everywhere => {
+            Some(es_runtime_default_providers::PathAllowlist::everywhere())
+        }
+        scope => scope,
+    };
+    let allow_read = everywhere(allow_read);
+    let allow_write = everywhere(allow_write);
     // An entry outside the jail is not an error: it *adds* that subtree (D54).
     // The jail is still the default boundary and guest code can never move it —
     // only a path typed here can, which is the deployment operator naming a

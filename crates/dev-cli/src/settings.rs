@@ -387,6 +387,9 @@ impl Source {
             capabilities: run.capabilities,
             scopes: run.scopes,
             permissive: run.permissive,
+            // Started from everything, an unscoped path grant is every path:
+            // this is the developer's machine (D233).
+            paths_everywhere: run.permissive,
             options: run.options,
             transform: Some(transform),
             // The file being edited resolves the way the build that bundles

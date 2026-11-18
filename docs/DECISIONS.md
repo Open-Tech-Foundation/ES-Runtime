@@ -4912,3 +4912,16 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** kebab-case throughout — no JSON config this file sits beside uses it. Accepting both spellings for a release — there is no released project to migrate that a one-line error does not serve better.
 
 **Consequences:** every template, example and doc writes `outDir`. Frameworks writing `esdev.json` (AFW's `@opentf/create-afw`) change the same three keys.
+
+### D233 — esdev's development default reaches the whole filesystem · *Accepted (2026-11-19)* · *amends D54, D65*
+
+**Context:** reported by AFW. Under esdev's default grant (every capability, D65) a script could not write outside its working directory, yet `esdev --deny-all --allow-write=<dir>` could — an unscoped grant meant "the root" while a scoped one could add any subtree (D54). The default was narrower than a grant it accepts, which reads as backwards on the one machine the default exists for, and the refusal did not say how the root was chosen.
+
+**Decision:**
+- In esdev, a run that started from everything — the development default, or `-A` — gives an **unscoped** read or write grant the whole filesystem: an allowlist of the filesystem's root (each drive's on Windows), added outside the project as D54 adds a typed path. The project root stays the first root, so a path inside it resolves exactly as before, and a root is still never a mutation's target.
+- `esrun` keeps a bare grant bound to the project root, `-A` included: a production grant states where it reaches. `esdev --deny-all --allow-write` rehearses that, and is bound the same way.
+- The refusal says the root is the working directory the program was started in and how to reach further, still without naming any path but the program's own (D141).
+
+**Rejected:** Deno's reading — a bare grant is every path — in both binaries: simpler, but it widens every existing `esrun --allow-read` deployment from the project to the host. Moving esdev's root up (to `/` or the home directory) — the root also anchors module resolution and relative paths, and D79 refuses those as working directories for a reason.
+
+**Consequences:** a dev script can write a cache in `~/.cache` or read a certificate in `/etc` with no flags. Module loading is unchanged: a module outside the project is still refused (linked packages are their own change).

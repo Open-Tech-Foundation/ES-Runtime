@@ -280,8 +280,10 @@ pub(crate) async fn launch(
                 args: Vec::new(),
                 capabilities: es_runtime_common::CapabilitySet::all(),
                 scopes: std::collections::HashMap::new(),
-                // Granted everything above, so every socket path too (D140).
+                // Granted everything above, so every socket path too (D140),
+                // and every path on the filesystem (D233).
                 permissive: true,
+                paths_everywhere: true,
                 // D205: esdev's programs follow the developer's proxy.
                 options: es_runtime_cli_common::args::RunOptions {
                     proxy_from_env: true,
