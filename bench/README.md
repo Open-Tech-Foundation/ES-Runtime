@@ -959,6 +959,18 @@ need frame pointers as well: `CARGO_TARGET_DIR=target/fp RUSTFLAGS="-C
 force-frame-pointers=yes" cargo build --profile profiling -p es-runtime-cli`,
 then `perf record -g`.
 
+Without root, `perf` needs `kernel.perf_event_paranoid` at 2 or below (Debian
+ships 3, which refuses everything). At 2 only user space may be sampled, and
+plain `-g` asks for kernel call chains too, so name both:
+
+```sh
+perf record -e cpu-clock:u --call-graph fp --user-callchains -- <command>
+perf report --no-children --sort srcline   # dispatch inlines into one symbol
+```
+
+`op_crossing` takes a row-name filter, so a profile sees one row alone:
+`target/fp/profiling/examples/op_crossing "typed op: nop"`.
+
 ### HTTP/1.1 vs HTTP/2
 
 `bench/http2.sh` measures each runtime's hello-world server over HTTP/1.1 and

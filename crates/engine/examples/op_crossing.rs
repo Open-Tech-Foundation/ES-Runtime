@@ -22,6 +22,7 @@
 //!
 //! ```text
 //! cargo run --release --example op_crossing -p es-runtime-engine
+//! cargo run --release --example op_crossing -p es-runtime-engine -- "typed op: nop"
 //! ```
 //!
 //! It uses the `v8` crate directly for the floor rows; `engine` is the one
@@ -64,6 +65,14 @@ fn best(mut run: impl FnMut()) -> f64 {
             start.elapsed().as_secs_f64() * 1e9 / f64::from(CALLS)
         })
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Whether a row is wanted: all of them, or those whose name contains the
+/// first argument — one row alone is what a profile should see.
+fn wanted(name: &str) -> bool {
+    std::env::args()
+        .nth(1)
+        .is_none_or(|filter| name.contains(&filter))
 }
 
 fn row(name: &str, ns_per_call: f64) {
@@ -128,6 +137,9 @@ fn engine_rows() {
     engine.eval(SETUP).expect("setup");
 
     let mut time = |name: &str, call: &str| {
+        if !wanted(name) {
+            return;
+        }
         let source = loop_source(call);
         row(name, best(|| drop(engine.eval(&source).expect(name))));
     };
@@ -278,6 +290,9 @@ fn v8_rows() {
     };
     run(scope, SETUP);
     let mut time = |name: &str, call: &str| {
+        if !wanted(name) {
+            return;
+        }
         let source = loop_source(call);
         row(name, best(|| run(scope, &source)));
     };
