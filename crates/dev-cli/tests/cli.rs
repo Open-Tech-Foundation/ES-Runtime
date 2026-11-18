@@ -1580,6 +1580,116 @@ fn test_imports_commonjs_packages_unbundled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **A package the project links from outside it loads** (D234): `link:`,
+/// `file:` or `workspace:` in its `package.json`, installed as a symbolic link
+/// out of the project. Its own dependencies load from its own `node_modules`;
+/// a walk from inside it stops at it rather than climbing the host; and a link
+/// nobody declared is refused as before.
+#[cfg(unix)]
+#[test]
+fn a_linked_package_outside_the_project_loads() {
+    use std::os::unix::fs::symlink;
+    let base = build_dir("b_linked");
+    let app = base.join("app");
+    let lib = base.join("lib");
+    let package = |dir: &Path, name: &str, index: &str| {
+        std::fs::create_dir_all(dir).expect("mkdir");
+        write_in(
+            dir,
+            "package.json",
+            &format!(
+                r#"{{"name":"{name}","version":"1.0.0","type":"module","exports":"./index.js"}}"#
+            ),
+        );
+        write_in(dir, "index.js", index);
+    };
+    package(
+        &lib,
+        "lib",
+        "import { twice } from 'helper';\nexport const value = twice(21);\n",
+    );
+    package(
+        &lib.join("node_modules/helper"),
+        "helper",
+        "export const twice = (n) => n * 2;\n",
+    );
+    // Above the linked package, where a walk that did not stop at it would
+    // find it.
+    package(
+        &base.join("node_modules/above"),
+        "above",
+        "export default 'climbed';\n",
+    );
+    package(&base.join("stray"), "stray", "export default 'stray';\n");
+    std::fs::create_dir_all(app.join("node_modules")).expect("mkdir");
+    symlink(&lib, app.join("node_modules/lib")).expect("link lib");
+    symlink(base.join("stray"), app.join("node_modules/stray")).expect("link stray");
+    write_in(
+        &app,
+        "package.json",
+        r#"{"name":"app","type":"module","dependencies":{"lib":"link:../lib","stray":"^1.0.0"}}"#,
+    );
+    write_in(
+        &app,
+        "linked.test.js",
+        "import { test, expect } from 'runtime:test';\n\
+         import { value } from 'lib';\n\
+         test('the linked package and its own dependency', () => expect(value).toBe(42));\n",
+    );
+    let out = esdev_in(&app)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    write_in(
+        &app,
+        "stray.js",
+        "import stray from 'stray';\nconsole.log(stray);\n",
+    );
+    let stray = esdev_in(&app)
+        .arg("stray.js")
+        .output()
+        .expect("spawn esdev");
+    assert!(
+        !stray.status.success(),
+        "an undeclared link loaded: {}",
+        stdout(&stray)
+    );
+    assert!(
+        stderr(&stray).contains("resolves outside the project root"),
+        "{}",
+        stderr(&stray)
+    );
+
+    write_in(&lib, "climb.js", "export { default } from 'above';\n");
+    write_in(
+        &app,
+        "climb.js",
+        "import x from 'lib/climb.js';\nconsole.log(x);\n",
+    );
+    write_in(
+        &lib,
+        "package.json",
+        r#"{"name":"lib","version":"1.0.0","type":"module","exports":{".":"./index.js","./climb.js":"./climb.js"}}"#,
+    );
+    let climbed = esdev_in(&app)
+        .arg("climb.js")
+        .output()
+        .expect("spawn esdev");
+    assert!(
+        !climbed.status.success(),
+        "the walk climbed out: {}",
+        stdout(&climbed)
+    );
+    assert!(
+        stderr(&climbed).contains("cannot find package \"above\""),
+        "{}",
+        stderr(&climbed)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// **esdev's default is never narrower than a grant it accepts** (D233). Under
 /// the development default and `-A` an unscoped grant is the whole filesystem;
 /// rehearsing production with `--deny-all --allow-write` is the project, as
@@ -15414,6 +15524,62 @@ export default {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **An edit to a linked package rebuilds** (D234): what the project links
+/// from outside it is watched with it, so developing the package against the
+/// app is a save, not a restart.
+#[cfg(unix)]
+#[test]
+fn start_rebuilds_for_an_edit_to_a_linked_package() {
+    let base = watch_dir("s_linked");
+    let app = base.join("app");
+    let lib = base.join("lib");
+    let port = test_port("s_linked");
+    std::fs::create_dir_all(app.join("src")).expect("mkdir app");
+    std::fs::create_dir_all(app.join("node_modules")).expect("mkdir node_modules");
+    std::fs::create_dir_all(&lib).expect("mkdir lib");
+    write_in(
+        &lib,
+        "package.json",
+        r#"{"name":"lib","version":"1.0.0","type":"module","exports":"./index.js"}"#,
+    );
+    write_in(&lib, "index.js", "export const word = 'FIRST';\n");
+    std::os::unix::fs::symlink(&lib, app.join("node_modules/lib")).expect("link lib");
+    write_in(
+        &app,
+        "package.json",
+        r#"{"name":"app","type":"module","dependencies":{"lib":"link:../lib"}}"#,
+    );
+    write_in(&app, ".gitignore", "node_modules\n");
+    write_in(
+        &app,
+        "src/main.js",
+        "import { word } from 'lib';\ndocument.title = word + ' word';\n",
+    );
+    write_in(
+        &app,
+        "index.html",
+        "<!doctype html><html><head><script type=\"module\" src=\"./src/main.js\"></script></head><body></body></html>\n",
+    );
+    write_in(
+        &app,
+        "esdev.json",
+        &format!(
+            r#"{{ "build": {{ "targets": {{ "web": {{ "entry": "index.html", "outDir": "dist" }} }} }},
+                 "dev": {{ "server": {{ "port": {port} }} }} }}"#
+        ),
+    );
+    let _supervisor = start_in(&app);
+    let first = wait_for_http(port, "/assets/main.js", |body| body.contains("FIRST"));
+    assert!(first.contains("FIRST"), "{first}");
+    write_in(&lib, "index.js", "export const word = 'SECOND';\n");
+    let second = wait_for_http(port, "/assets/main.js", |body| body.contains("SECOND"));
+    assert!(
+        second.contains("SECOND"),
+        "an edit to the linked package never rebuilt: {second}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// **What the project ignores is not watched, and a new directory is.** A

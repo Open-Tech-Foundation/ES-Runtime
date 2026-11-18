@@ -1380,11 +1380,14 @@ fn is_source(path: &Path, root: &Path, outputs: &[PathBuf], gitignore: Option<&G
     if outputs.iter().any(|output| path.starts_with(output)) {
         return false;
     }
+    // A path outside the rules' own root is not theirs to judge — a linked
+    // package's, a watched path's — and asking `ignore` about one panics.
     if gitignore.is_some_and(|rules| {
-        matches!(
-            rules.matched_path_or_any_parents(path, path.is_dir()),
-            Match::Ignore(_)
-        )
+        path.starts_with(rules.path())
+            && matches!(
+                rules.matched_path_or_any_parents(path, path.is_dir()),
+                Match::Ignore(_)
+            )
     }) {
         return false;
     }
@@ -1410,6 +1413,13 @@ fn is_read_by_a_build(path: &Path) -> bool {
 /// to register.
 fn watch_roots(project: &Settings) -> Vec<PathBuf> {
     let mut roots = vec![project.source.root.clone()];
+    // What the project links from outside it builds into it, so an edit there
+    // is a rebuild (D234).
+    for linked in crate::linked::linked_packages(&project.source.root) {
+        if !roots.contains(&linked) {
+            roots.push(linked);
+        }
+    }
     for configured in &project.watch_paths {
         let paths: Vec<&str> = match configured.strip_prefix("--allow-read=") {
             Some(paths) => paths.split(',').map(str::trim).collect(),

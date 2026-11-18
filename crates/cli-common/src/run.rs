@@ -91,6 +91,11 @@ pub struct Config {
     /// the machine it is for. `esrun` never sets it: there a bare grant stays
     /// the project, and reaching further is a path typed on its command line.
     pub paths_everywhere: bool,
+    /// Package directories the project links from outside its root — its
+    /// `link:`, `file:` and `workspace:` dependencies — whose modules load as
+    /// the project's do (D234). `esdev` names them; `esrun` names none, since
+    /// what it runs is a bundle.
+    pub linked_packages: Vec<std::path::PathBuf>,
     /// The shared flags that shape the run.
     pub options: RunOptions,
     /// An optional rewrite applied to every module's source before the engine
@@ -1135,7 +1140,8 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // confined under it and the node_modules walk stops there. Held behind an
     // Arc so dynamic import() can reach it.
     let mut loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
-        .map_err(|e| format!("module loader: {e}"))?;
+        .map_err(|e| format!("module loader: {e}"))?
+        .with_linked_packages(config.linked_packages.clone());
     // Module files load; anything else only if the transform turns it into a
     // module (D209). Asked of the transform itself, so what it compiles and
     // what the loader admits cannot disagree.

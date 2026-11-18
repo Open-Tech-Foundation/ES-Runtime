@@ -172,6 +172,16 @@ cd /app   && esrun dist/server.js                      # root: /app, with or
   above it.
 </Callout>
 
+<Callout type="note" title="Linked packages, under esdev">
+  A package the project's `package.json` declares with `link:`, `file:` or
+  `workspace:`, installed as a link that leads out of the project, is a root of
+  its own under `esdev`: its modules load, its own `node_modules` resolves its
+  dependencies, the walk from inside it stops at it, and `esdev start` and
+  `--watch` rebuild when it changes. A link nobody declared is refused. `esrun`
+  admits none: what it runs is a bundle, and `esdev build` has already put the
+  linked code in it.
+</Callout>
+
 <Callout type="warning" title="Two directories esrun will not run in">
   A **filesystem root** (`/`) and your **home directory** are refused outright:
   the jail would be the whole machine, or every credential you own. These are the

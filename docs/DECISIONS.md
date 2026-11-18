@@ -4925,3 +4925,17 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** Deno's reading — a bare grant is every path — in both binaries: simpler, but it widens every existing `esrun --allow-read` deployment from the project to the host. Moving esdev's root up (to `/` or the home directory) — the root also anchors module resolution and relative paths, and D79 refuses those as working directories for a reason.
 
 **Consequences:** a dev script can write a cache in `~/.cache` or read a certificate in `/etc` with no flags. Module loading is unchanged: a module outside the project is still refused (linked packages are their own change).
+
+### D234 — A package the project links from outside it is a root of its own, under esdev · *Accepted (2026-11-19)* · *extends D25, D79*
+
+**Context:** reported by AFW. Developing a package against the app that uses it is a `link:`/`file:`/`workspace:` dependency, installed as a symbolic link out of the project. The module loader follows links before it judges a path (D25), found it outside the root, and refused it: `esdev build` bundled the app while `esdev test` could not load it.
+
+**Decision:**
+- esdev reads the project's own `package.json`; a dependency (in any of the four sections) whose spec is `link:`, `file:`, `workspace:` or `portal:`, installed in its `node_modules`, whose real directory lies outside the project, is a **linked root**. Nothing else outside the project is: a link nobody declared — or one a dependency's install made — is not the project saying "this is mine too".
+- The module loader admits a linked root's modules, and bounds each resolution by the root its referrer is in, so a bare import from inside a linked package walks that package's `node_modules` and stops at it rather than climbing the host.
+- `esdev start`, `--watch` and `test --watch` watch each linked root, skipped by its own `.gitignore`.
+- `esrun` admits none. What it runs is a bundle, and `esdev build` has already put the linked code in it.
+
+**Rejected:** admitting every symlink in `node_modules` that leads out — pnpm's store and a stray link would ride along. Widening the root to the workspace — D79's boundary is the working directory, and a member run from its own directory is that member.
+
+**Consequences:** a linked package with its own install works as an installed one does. Not covered: a workspace member whose dependencies are hoisted into the workspace's store, outside both it and the member — that is monorepo support (P2).

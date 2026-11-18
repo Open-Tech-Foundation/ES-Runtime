@@ -1292,27 +1292,26 @@ pub fn change_watcher(
     let project_file = project_file.to_path_buf();
     let edits = crate::watch::Edits::new();
     // What the project's `.gitignore` names is not watched at all (watch_tree).
-    let watch = crate::watch_tree::watch_project(
-        &[root.to_path_buf()],
-        root,
-        Vec::new(),
-        move |event, _| {
-            if !crate::watch::is_change(&event.kind) {
-                return;
-            }
-            if event
-                .paths
-                .iter()
-                .any(|path| same(path, &project_file) && edits.is_edit(&event.kind, path))
-            {
-                let _ = tx.send(Change::Project);
-            } else if event.paths.iter().any(|path| {
-                crate::watch::is_interesting(path, &scope) && edits.is_edit(&event.kind, path)
-            }) {
-                let _ = tx.send(Change::Source);
-            }
-        },
-    )?;
+    // And what it links from outside itself, which its tests import (D234).
+    let roots: Vec<std::path::PathBuf> = std::iter::once(root.to_path_buf())
+        .chain(crate::linked::linked_packages(root))
+        .collect();
+    let watch = crate::watch_tree::watch_project(&roots, root, Vec::new(), move |event, _| {
+        if !crate::watch::is_change(&event.kind) {
+            return;
+        }
+        if event
+            .paths
+            .iter()
+            .any(|path| same(path, &project_file) && edits.is_edit(&event.kind, path))
+        {
+            let _ = tx.send(Change::Project);
+        } else if event.paths.iter().any(|path| {
+            crate::watch::is_interesting(path, &scope) && edits.is_edit(&event.kind, path)
+        }) {
+            let _ = tx.send(Change::Source);
+        }
+    })?;
 
     Ok((watch, rx))
 }

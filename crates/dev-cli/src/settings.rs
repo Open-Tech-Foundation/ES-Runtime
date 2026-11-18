@@ -367,6 +367,7 @@ impl Source {
                 Some(self.root.clone()),
             )),
             converter: crate::commonjs::converter(),
+            linked: crate::linked::linked_packages(&self.root),
         }
     }
 
@@ -390,6 +391,8 @@ impl Source {
             // Started from everything, an unscoped path grant is every path:
             // this is the developer's machine (D233).
             paths_everywhere: run.permissive,
+            // Developing a package against the app that uses it (D234).
+            linked_packages: resolution.linked.clone(),
             options: run.options,
             transform: Some(transform),
             // The file being edited resolves the way the build that bundles
@@ -411,6 +414,9 @@ impl Source {
 pub struct Resolution {
     pub alias: Arc<dyn SpecifierAlias>,
     pub converter: Arc<dyn es_runtime_cli_common::run::PackageConverter>,
+    /// The packages the project links from outside it, which load as its own
+    /// modules do (D234).
+    pub linked: Vec<std::path::PathBuf>,
 }
 
 #[cfg(test)]

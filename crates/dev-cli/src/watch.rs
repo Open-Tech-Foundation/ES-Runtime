@@ -119,24 +119,23 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
     // The watcher runs on its own thread and must outlive this scope, so it is
     // held here for the duration. What the project's `.gitignore` names is not
     // watched at all (watch_tree).
-    let _watch = crate::watch_tree::watch_project(
-        std::slice::from_ref(&root),
-        &root,
-        Vec::new(),
-        move |event, _| {
-            if is_change(&event.kind)
-                && event
-                    .paths
-                    .iter()
-                    .any(|p| is_interesting(p, &watch_scope) && edits.is_edit(&event.kind, p))
-            {
-                // Unbounded and ignore-on-failure: the receiver only ever needs
-                // to learn *that* something changed, so a full or closed
-                // channel costs nothing worth reporting.
-                let _ = tx.send(());
-            }
-        },
-    )?;
+    // And what it links from outside itself, which it runs as its own (D234).
+    let roots: Vec<PathBuf> = std::iter::once(root.clone())
+        .chain(crate::linked::linked_packages(&root))
+        .collect();
+    let _watch = crate::watch_tree::watch_project(&roots, &root, Vec::new(), move |event, _| {
+        if is_change(&event.kind)
+            && event
+                .paths
+                .iter()
+                .any(|p| is_interesting(p, &watch_scope) && edits.is_edit(&event.kind, p))
+        {
+            // Unbounded and ignore-on-failure: the receiver only ever needs
+            // to learn *that* something changed, so a full or closed
+            // channel costs nothing worth reporting.
+            let _ = tx.send(());
+        }
+    })?;
     // One banner, like the dev loop's: version, and what is watched —
     // relative when it is under here (`.` for here itself), absolute when
     // it is not. Then only events: the loop's older per-event `esdev:` lines

@@ -242,6 +242,7 @@ pub(crate) async fn launch(
     let (bridge, hooks) = Bridge::new();
     let (declared, told) = tokio::sync::oneshot::channel();
     let (shutdown, ended) = tokio::sync::oneshot::channel();
+    let linked = resolution.linked.clone();
     // Where the host thread leaves the reason its run failed. A program that
     // fails *before* declaring — a plugin module with no default export — closes
     // the declaration channel by ending, and then the only thing the waiting
@@ -284,6 +285,9 @@ pub(crate) async fn launch(
                 // and every path on the filesystem (D233).
                 permissive: true,
                 paths_everywhere: true,
+                // A plugin a project links from outside it loads as an
+                // installed one would.
+                linked_packages: linked,
                 // D205: esdev's programs follow the developer's proxy.
                 options: es_runtime_cli_common::args::RunOptions {
                     proxy_from_env: true,

@@ -25,6 +25,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- `NodeModuleLoader::with_linked_packages` admits package directories a
+  project links from outside its root, each bounding the `node_modules` walk
+  from inside it (DECISIONS D234). esdev names them; esrun names none, so what
+  it loads is unchanged.
 - **Typed ops** (DECISIONS D228): `OpDecl::typed` and `OpDecl::typed_async`
   take a closure over Rust types — `|id: u64, name: String| …` — whose
   arguments are read straight off the call, with no `Value` or `Vec` in

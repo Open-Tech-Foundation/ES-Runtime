@@ -50,6 +50,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A linked package loads** (DECISIONS D234). A `link:`, `file:` or
+  `workspace:` dependency outside the project — developing a package against
+  the app that uses it — built, but `esdev test` and `esdev <file>` refused it:
+  "resolves outside the project root". A package the project's `package.json`
+  declares that way is now a root of its own: its modules load, its own
+  `node_modules` resolves its dependencies, a walk from inside it stops at it,
+  and `esdev start`, `--watch` and `test --watch` rebuild when it changes,
+  skipping what its own `.gitignore` names. A link nobody declared is still
+  refused.
 - **Messages that named what is gone.** The "nothing for `esdev start` to run or
   serve" error suggested `"start": { "run": … }`, a key the file no longer
   has; it says `"dev"` now, and a test parses each suggestion it makes.

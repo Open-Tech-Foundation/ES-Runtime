@@ -319,19 +319,41 @@ pub fn watch_project(
     on_event: impl Fn(&Event, Option<&Gitignore>) + Send + Sync + 'static,
 ) -> Result<TreeWatch, String> {
     let rules = Arc::new(IgnoreRules::load(root)?);
+    // A root outside the project — a linked package (D234), a `dev.watch.paths`
+    // directory — is skipped by its own `.gitignore`, as the project is by
+    // its: a linked package's `node_modules` is no more an edit than the
+    // project's.
+    let mut sets = vec![rules.clone()];
+    for other in roots {
+        if other.is_dir() && !other.starts_with(root) {
+            sets.push(Arc::new(IgnoreRules::load(other)?));
+        }
+    }
+    let sets = Arc::new(sets);
     let skip: Skip = {
-        let rules = rules.clone();
-        Arc::new(move |dir: &Path| skipped(dir, &outputs, rules.current().as_ref()))
+        let sets = sets.clone();
+        Arc::new(move |dir: &Path| {
+            let rules = sets
+                .iter()
+                .filter(|set| dir.starts_with(&set.root))
+                .max_by_key(|set| set.root.components().count());
+            skipped(
+                dir,
+                &outputs,
+                rules.and_then(|set| set.current().clone()).as_ref(),
+            )
+        })
     };
     let rescanner = Arc::new(std::sync::OnceLock::<Rescanner>::new());
     let callback_rescanner = rescanner.clone();
+    let callback_sets = sets.clone();
     let watch = watch_tree(roots, skip, move |event| {
         let mut changed_rules = false;
         let paths: Vec<PathBuf> = event
             .paths
             .iter()
             .filter(|path| {
-                let is_rules = rules.refresh(path);
+                let is_rules = callback_sets.iter().any(|set| set.refresh(path));
                 changed_rules |= is_rules;
                 !is_rules
             })
@@ -489,6 +511,49 @@ mod tests {
             }
         }
         false
+    }
+
+    /// A root outside the project is skipped by its own `.gitignore`: a linked
+    /// package's ignored `node_modules` is not watched, and its source is.
+    #[test]
+    fn a_root_outside_the_project_takes_its_own_gitignore() {
+        let project = tree("own-rules-app", &["src/a.ts"]);
+        let linked = tree(
+            "own-rules-lib",
+            &[".gitignore", "src/index.ts", "node_modules/dep/index.js"],
+        );
+        std::fs::write(linked.join(".gitignore"), "node_modules\n").expect("rules");
+        let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
+        let tx = Mutex::new(tx);
+        let watch = watch_project(
+            &[project.clone(), linked.clone()],
+            &project,
+            Vec::new(),
+            move |event, _| {
+                if let Ok(tx) = tx.lock() {
+                    for path in &event.paths {
+                        let _ = tx.send(path.clone());
+                    }
+                }
+            },
+        )
+        .expect("watch");
+        std::thread::sleep(Duration::from_millis(100));
+        let ignored = linked.join("node_modules/dep/index.js");
+        std::fs::write(&ignored, "y").expect("write");
+        assert!(
+            !wait_for(&rx, &ignored, Duration::from_millis(750)),
+            "the linked package's node_modules was watched"
+        );
+        let source = linked.join("src/index.ts");
+        std::fs::write(&source, "y").expect("write");
+        assert!(
+            wait_for(&rx, &source, Duration::from_secs(5)),
+            "the linked source"
+        );
+        drop(watch);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&linked);
     }
 
     /// A directory made after the watch began is watched, and a file already

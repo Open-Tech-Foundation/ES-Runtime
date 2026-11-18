@@ -252,6 +252,9 @@ fn host(compiler: &str) -> Result<Arc<PluginHost>, String> {
         alias: Arc::new(crate::alias::Aliases::new(Vec::new(), None, None)),
         // A `@plugin` from npm is very often CommonJS.
         converter: crate::commonjs::converter(),
+        // One compiler serves every project that installed it; none of their
+        // links is its own.
+        linked: Vec::new(),
     };
     let host = crate::plugins::wait(crate::plugins::launch(
         resolution,
