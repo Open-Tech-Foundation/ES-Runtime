@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@opentf/esrun-types": "{{registry:@opentf/esrun-types}}",
+    "@opentf/esdev-plugin-react": "{{registry:@opentf/esdev-plugin-react}}",
     "react-refresh": "{{registry:react-refresh}}",
     "@types/react": "{{registry:@types/react}}",
     "@types/react-dom": "{{registry:@types/react-dom}}",

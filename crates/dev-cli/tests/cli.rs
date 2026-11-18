@@ -12955,7 +12955,20 @@ fn create_writes_a_project_that_builds_and_runs() {
     assert!(!dir.join("dist").exists());
 
     // The tests it ships pass, which is the smallest end-to-end claim that
-    // does not need a package registry.
+    // does not need a package registry. The one plugin it declares is a
+    // package, so it is stood in for: Fast Refresh does nothing in a test.
+    let plugin = dir.join("node_modules/@opentf/esdev-plugin-react");
+    std::fs::create_dir_all(&plugin).expect("mkdir the plugin stand-in");
+    write_in(
+        &plugin,
+        "package.json",
+        r#"{"name":"@opentf/esdev-plugin-react","version":"1.2.3","type":"module","exports":"./index.js"}"#,
+    );
+    write_in(
+        &plugin,
+        "index.js",
+        "export default { name: 'react-refresh' };\n",
+    );
     let tested = esdev_in(&dir)
         .arg("test")
         .output()

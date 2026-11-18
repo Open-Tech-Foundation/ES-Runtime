@@ -13,6 +13,12 @@ here, without an esdev release.
 
 ### Changed
 
+- The React templates use the published `@opentf/esdev-plugin-react` for Fast
+  Refresh, a dev dependency, instead of a copy of it in `plugins/` and a
+  `refresh.ts` bootstrap their entry imported — a fix to the plugin reaches
+  every project through an update. `src/esdev-env.d.ts`, which declared types
+  only that bootstrap used, is gone with it.
+
 - Every template's `esdev.json` names its services under `dev.servers`
   (DECISIONS D235): `web` on 5173 for a frontend, `server` on 3000 for an API
   or a full-stack app, and drops `watch.targets` lists that only repeated the

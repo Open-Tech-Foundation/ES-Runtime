@@ -2766,37 +2766,44 @@ mod tests {
         assert!(checked >= 9, "only {checked} templates checked");
     }
 
+    /// Fast Refresh is the published `@opentf/esdev-plugin-react`, declared
+    /// once at the top level and installed as a dev dependency — not a copy
+    /// of it the project would have to maintain, and no bootstrap in its entry.
     #[test]
-    fn react_refresh_template_returns_a_source_map() {
-        let files = plain_written("react", Some("static"));
-        let plugin = text_of(&files, "plugins/react-refresh.mjs");
-        assert!(plugin.contains("sourcesContent: [code]"));
-        assert!(plugin.contains("const mappings ="));
-        assert!(plugin.contains("\";;;;\" +"));
-    }
-
-    /// Fast Refresh is a project plugin that installs itself in a hot build
-    /// (D148): declared at the top level, with no target naming a scheme.
-    #[test]
-    fn react_refresh_is_a_project_plugin_reading_ctx_hot() {
+    fn react_refresh_is_the_published_plugin() {
         for mode in ["static", "fullstack"] {
             let files = plain_written("react", Some(mode));
             let config: serde_json::Value =
                 serde_json::from_str(&text_of(&files, "esdev.json")).expect("valid esdev.json");
             assert_eq!(
-                config["plugins"][0], "./plugins/react-refresh.mjs",
+                config["plugins"],
+                serde_json::json!(["@opentf/esdev-plugin-react"]),
                 "{mode}"
             );
             for (name, target) in config["build"]["targets"].as_object().expect("targets") {
                 assert!(target.get("plugins").is_none(), "{mode} {name}");
-                assert!(target.get("refresh").is_none(), "{mode} {name}");
             }
+            let manifest: serde_json::Value =
+                serde_json::from_str(&text_of(&files, "package.json")).expect("valid package.json");
+            assert!(
+                manifest["devDependencies"]["@opentf/esdev-plugin-react"].is_string(),
+                "{mode}: {manifest}"
+            );
+            for (path, _) in &files {
+                assert!(
+                    !path.starts_with("plugins/"),
+                    "{mode}: a copied plugin, {path}"
+                );
+                assert!(
+                    !path.ends_with("refresh.ts"),
+                    "{mode}: a refresh bootstrap, {path}"
+                );
+            }
+            assert!(
+                !text_of(&files, "src/entry.client.tsx").contains("refresh"),
+                "{mode}"
+            );
         }
-        let plugin = text_of(
-            &plain_written("react", Some("static")),
-            "plugins/react-refresh.mjs",
-        );
-        assert!(plugin.contains("if (!ctx.hot) return null;"), "{plugin}");
     }
 
     #[test]

@@ -1,6 +1,3 @@
-// Must stay first: it installs the hook React reads as it loads.
-import "./refresh.ts";
-
 import { StrictMode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { App } from "./App.tsx";

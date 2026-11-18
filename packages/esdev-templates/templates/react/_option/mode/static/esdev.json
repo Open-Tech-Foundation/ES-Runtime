@@ -1,6 +1,6 @@
 {
   "plugins": [
-    "./plugins/react-refresh.mjs"
+    "@opentf/esdev-plugin-react"
   ],
   "jsx": {
     "importSource": "react",
