@@ -59,6 +59,12 @@ declare module "runtime:fs" {
   export interface FsFile {
     /** The path this handle points at. */
     readonly path: string;
+    /**
+     * The media type the path's extension names (`"text/css; charset=utf-8"`
+     * for `.css`), or `""` for one it does not know — as `Blob.type` reports
+     * one. Nothing is read to answer it.
+     */
+    readonly type: string;
     /** Read the whole file as text (UTF-8). */
     text(): Promise<string>;
     /** Read and `JSON.parse` the file. */

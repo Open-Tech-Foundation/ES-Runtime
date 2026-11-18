@@ -13,6 +13,12 @@ itself.
 
 ## [Unreleased]
 
+### Fixed
+
+- `FsFile.type` is declared: the media type a file's extension names, which the
+  runtime has had and the React fullstack template reads. Its absence failed a
+  freshly created project's `typecheck`.
+
 ## [0.23.0] - 2026-11-17
 
 ### Added
