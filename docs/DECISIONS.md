@@ -4955,3 +4955,10 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** the front door for every project, and dropping the proxy (above); routes on server entries (a gateway the team did not write); inferring an entry for a project with one HTML target (one way to say it, D207); several HTML entries now (no project asks for it yet).
 
 **Consequences:** each template writes one entry — `web` for a frontend, `server` for an API or a fullstack app that serves its own pages and `/api`, and a split app one per service. A server's restart still has the window production's deploy has without an orchestrator draining it; a proxied request no longer sees it.
+
+### D236 — In alpha, an old key is an unknown key · *Accepted (2026-11-19)* · *amends D148, D232, D235*
+
+**Decision (maintainer, 2026-11-19):** esdev keeps no migration path for a key it has stopped reading: no refusal naming the new spelling (D232), no printed `dev.servers` for a file using `dev.run` (D235), no note for a target's `plugins` or `refresh` (D148). Such a key is an unknown key, and the message is the one any unknown key gets — the nearest key the section has, and the list. The docs describe the current format only.
+
+**Why:** the project is in alpha; there are no projects to carry forward, and each special case is code and a test kept for a file nobody has.
+

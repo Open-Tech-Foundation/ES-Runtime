@@ -412,32 +412,7 @@ const TARGET_KEYS: &[&str] = &[
     "cssUrls",
 ];
 
-/// Target keys spelled another way before D232, and the spelling they have now.
-const RENAMED_TARGET_KEYS: &[(&str, &str)] = &[
-    ("outdir", "outDir"),
-    ("dts-bundle", "dtsBundle"),
-    ("css-urls", "cssUrls"),
-];
 
-/// Refuses a key in its pre-D232 spelling, naming the one it has now. Not an
-/// alias: two accepted spellings of a key is how a file comes to use both.
-fn renamed(
-    map: &Map<String, Value>,
-    file: &str,
-    at: &str,
-    renames: &[(&str, &str)],
-) -> Result<(), String> {
-    for (old, new) in renames {
-        if map.contains_key(*old) {
-            return Err(format!(
-                "{file}: {at} has `{old}`, which is spelled `{new}`.\n\n\
-                 Every key in {FILE_NAME} is camelCase, as package.json's and \
-                 tsconfig.json's are; rename it to \"{new}\"."
-            ));
-        }
-    }
-    Ok(())
-}
 
 /// What a library's stylesheets do with the files their `url()`s name (D158).
 ///
@@ -610,7 +585,6 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         .map(|v| object(v, name, "`dev`"))
         .transpose()?;
     if let Some(dev) = dev {
-        removed_dev_keys(dev, build.and_then(|build| build.get("targets")), name)?;
         known_keys(dev, name, "`dev`", DEV_KEYS)?;
         if let Some(watch) = dev.get("watch") {
             known_keys(
@@ -1165,8 +1139,6 @@ fn target(name: &str, value: &Value, file: &str, dir: &Path) -> Result<Target, S
         ));
     }
     let map = object(value, file, &at)?;
-    moved_to_the_project(map, file, &at)?;
-    renamed(map, file, &at, RENAMED_TARGET_KEYS)?;
     known_keys(map, file, &at, TARGET_KEYS)?;
 
     let entry = match map.get("entry") {
@@ -1404,76 +1376,7 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-/// The `dev` keys D235 replaced with `dev.servers`.
-const REMOVED_DEV_KEYS: &[&str] = &["run", "app", "server", "serve"];
 
-/// Refuses the keys `dev.servers` replaced (D235), with the `dev.servers` this
-/// file means — built from what it says, so the message is the migration.
-fn removed_dev_keys(
-    dev: &Map<String, Value>,
-    targets: Option<&Value>,
-    file: &str,
-) -> Result<(), String> {
-    let found: Vec<&str> = REMOVED_DEV_KEYS
-        .iter()
-        .copied()
-        .filter(|key| dev.contains_key(*key))
-        .collect();
-    if found.is_empty() {
-        return Ok(());
-    }
-    let mut servers = match dev.get("servers") {
-        Some(Value::Object(servers)) => servers.clone(),
-        _ => Map::new(),
-    };
-    let field = |section: &str, key: &str| dev.get(section).and_then(|s| s.get(key)).cloned();
-    if let Some(Value::String(run)) = dev.get("run") {
-        let mut entry = Map::new();
-        if let Some(port) = field("app", "port") {
-            entry.insert("port".to_string(), port);
-        }
-        servers.insert(run.clone(), Value::Object(entry));
-    }
-    // The HTML target is what esdev served: it becomes the entry that does.
-    let html = targets.and_then(Value::as_object).and_then(|targets| {
-        targets.iter().find_map(|(name, target)| {
-            target
-                .get("entry")
-                .and_then(Value::as_str)
-                .filter(|entry| is_html_entry(entry))
-                .map(|_| name.clone())
-        })
-    });
-    if let Some(html) = html.filter(|_| dev.contains_key("server") || dev.get("run").is_none()) {
-        let mut entry = Map::new();
-        if html != "web" {
-            entry.insert("target".to_string(), Value::String(html.clone()));
-        }
-        entry.insert(
-            "port".to_string(),
-            field("server", "port").unwrap_or(Value::from(5173)),
-        );
-        if let Some(proxy) = field("server", "proxy") {
-            entry.insert("proxy".to_string(), proxy);
-        }
-        servers.insert("web".to_string(), Value::Object(entry));
-    }
-    let keys = found
-        .iter()
-        .map(|key| format!("`dev.{key}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let suggestion = serde_json::to_string_pretty(&serde_json::json!({ "servers": servers }))
-        .unwrap_or_default()
-        .replace('\n', "\n  ");
-    Err(format!(
-        "{file}: {keys} {} replaced by `dev.servers` (D235): one entry per service, on its \
-         own port. An entry naming an HTML target is served by esdev, with its `proxy`; \
-         one naming a server target is run with `PORT`.\n\n\
-         For this file, `dev` becomes:\n\n  \"dev\": {suggestion}",
-        if found.len() == 1 { "is" } else { "are" }
-    ))
-}
 
 /// Reads `dev`: what `esdev start` runs and serves (`servers`), what it
 /// rebuilds (`watch.targets`) and where it writes (`outDir`) — from the keys
@@ -1903,31 +1806,6 @@ fn plugin_spec(value: &Value, file: &str, at: &str) -> Result<PluginSpec, String
     })
 }
 
-/// Refuses the two keys a target no longer carries (D148), naming where each
-/// went. They were accepted for a while, so a project written then gets the
-/// migration rather than an unknown key.
-fn moved_to_the_project(map: &Map<String, Value>, file: &str, at: &str) -> Result<(), String> {
-    if map.contains_key("plugins") {
-        return Err(format!(
-            "{file}: {at} has `plugins`. Plugins are declared once, in the top-level \
-             `plugins`, and every command loads them — build, start and test alike.\n\n\
-             Move them there:\n\n  \
-             \"plugins\": [\"./plugins/mdx.js\"],\n  \
-             \"build\": {{ \"targets\": {{ … }} }}\n\n\
-             A plugin that compiles differently per build reads `ctx.platform` \
-             (\"browser\" or \"server\") and `ctx.target` (the target's name)."
-        ));
-    }
-    if map.contains_key("refresh") {
-        return Err(format!(
-            "{file}: {at} has `refresh`, which esdev no longer reads.\n\n\
-             A refresh scheme is a plugin in the top-level `plugins`, and it reads \
-             `ctx.hot` — true for a browser build in a hot dev loop — to know when \
-             to install itself. Remove the key."
-        ));
-    }
-    Ok(())
-}
 
 /// The error for a dev setting naming a target that is not there.
 fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
@@ -2214,13 +2092,13 @@ fn nearest<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
         .iter()
         .map(|candidate| (distance(word, candidate), *candidate))
         // Two edits on a short key is the line between a typo and a different
-        // word: `outDir` reaches `outDir`, `output` does not reach `out`.
+        // word: `outdir` reaches `outDir`, `output` does not reach `out`.
         .filter(|(distance, _)| *distance <= 2)
         .min_by_key(|(distance, _)| *distance)
         .map(|(_, candidate)| candidate)
 }
 
-/// Levenshtein distance, case-insensitively — `outDir` is a typo of `outDir`
+/// Levenshtein distance, case-insensitively — `outdir` is a typo of `outDir`
 /// and the message should say so rather than list the keys and leave it there.
 fn distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.to_lowercase().chars().collect();
@@ -2439,23 +2317,6 @@ mod tests {
         );
     }
 
-    /// Plugins are declared once, at the top level (D148). A target that
-    /// still carries its own is refused with where they went, rather than an
-    /// unknown key: it was accepted for a while.
-    #[test]
-    fn a_targets_plugins_are_refused_with_where_they_went() {
-        let refused = read(
-            r#"{"plugins": ["./plugins/mdx.js"], "build": {"targets": {"web": {"entry": "src/web.ts", "out": "dist/web.js", "plugins": ["./plugins/only-web.js"]}}}}"#,
-        )
-        .expect_err("a target's plugins");
-        assert!(
-            refused.contains("target \"web\" has `plugins`"),
-            "{refused}"
-        );
-        assert!(refused.contains("top-level"), "{refused}");
-        assert!(refused.contains("ctx.platform"), "{refused}");
-    }
-
     /// A buildless project — one that only tests — still has plugins to
     /// compile with.
     #[test]
@@ -2505,19 +2366,6 @@ mod tests {
         )
         .expect_err("not a list");
         assert!(refused.contains("list of plugins"), "{refused}");
-    }
-
-    /// `refresh` is gone: a refresh scheme is a plugin, and the plugin reads
-    /// `ctx.hot` (D148). A target that still names one is told so.
-    #[test]
-    fn a_targets_refresh_is_refused_with_what_replaced_it() {
-        let refused = read(
-            r#"{ "plugins": ["./plugins/afw.js"],
-                 "build": { "targets": { "web": { "entry": "index.html", "refresh": "afw" } } } }"#,
-        )
-        .expect_err("refresh");
-        assert!(refused.contains("`refresh`"), "{refused}");
-        assert!(refused.contains("ctx.hot"), "{refused}");
     }
 
     /// The same default the command line has: a config that omits `out` and a
@@ -2698,39 +2546,6 @@ mod tests {
         assert_eq!(start.pinned_port, None);
     }
 
-    /// The keys `dev.servers` replaced are refused, and the message is the
-    /// migration: the `dev.servers` this file means, built from what it said.
-    #[test]
-    fn the_keys_dev_servers_replaced_name_the_entries_they_become() {
-        let err = read(
-            r#"{"build": {"targets": {"server": {"entry": "s.ts"}}}, "dev": {"run": "server", "app": {"port": 3000}}}"#,
-        )
-        .expect_err("dev.run");
-        assert!(
-            err.contains("`dev.run`, `dev.app` are replaced by `dev.servers`"),
-            "{err}"
-        );
-        assert!(err.contains("\"server\": {"), "{err}");
-        assert!(err.contains("\"port\": 3000"), "{err}");
-
-        let err = read(
-            r#"{"build": {"targets": {"site": {"entry": "index.html"}, "api": {"entry": "a.ts"}}}, "dev": {"servers": {"api": {}}, "server": {"port": 5174, "proxy": {"/api": "api"}}}}"#,
-        )
-        .expect_err("dev.server");
-        assert!(err.contains("`dev.server` is replaced"), "{err}");
-        assert!(err.contains("\"target\": \"site\""), "{err}");
-        assert!(err.contains("\"port\": 5174"), "{err}");
-        assert!(err.contains("\"/api\": \"api\""), "{err}");
-        let start = err.find("\"dev\": ").expect("a suggestion") + "\"dev\": ".len();
-        let suggested: Value = serde_json::from_str(&err[start..]).expect("the suggestion is JSON");
-        assert!(suggested["servers"]["web"].is_object(), "{suggested}");
-        assert!(suggested["servers"]["api"].is_object(), "{suggested}");
-
-        let serve = read(r#"{"build": {"targets": {"web": {"entry": "index.html"}}}, "dev": {"serve": "public"}}"#)
-            .expect_err("dev.serve");
-        assert!(serve.contains("`dev.serve` is replaced"), "{serve}");
-    }
-
     /// What an entry is follows from its target: an HTML target is served by
     /// esdev and carries the proxy; a server target is run and carries a
     /// process's settings; anything else is not an entry (D235).
@@ -2787,35 +2602,6 @@ mod tests {
         );
     }
 
-    /// A key in its pre-D232 spelling is refused by name, with the one it has
-    /// now — not accepted beside it, and not left to a "did you mean".
-    #[test]
-    fn a_renamed_target_key_names_its_new_spelling() {
-        for (old, new, rest) in [
-            ("outdir", "outDir", r#""entry": "index.html""#),
-            (
-                "dts-bundle",
-                "dtsBundle",
-                r#""entry": "src", "lib": true, "outDir": "dist""#,
-            ),
-            (
-                "css-urls",
-                "cssUrls",
-                r#""entry": "src", "lib": true, "outDir": "dist""#,
-            ),
-        ] {
-            let value = if old == "outdir" { r#""dist""# } else { "true" };
-            let err = read(&format!(
-                r#"{{"build": {{"targets": {{"t": {{{rest}, "{old}": {value}}}}}}}}}"#
-            ))
-            .expect_err("the old spelling");
-            assert!(
-                err.contains(&format!("has `{old}`, which is spelled `{new}`")),
-                "{err}"
-            );
-        }
-    }
-
     /// Every message about `dev` names a key the file has: the section is read
     /// as written, not translated into another vocabulary first (D232).
     #[test]
@@ -2833,8 +2619,7 @@ mod tests {
                 r#"{"servers": {"server": {"target": 3}}}"#,
                 "`dev.servers.server`'s `target`",
             ),
-            (r#"{"run": "server"}"#, "`dev.run`"),
-            (r#"{"serve": "public"}"#, "`dev.serve`"),
+            (r#"{"run": "server"}"#, "unknown key `run` in `dev`"),
             (r#"{"watch": {"targets": ["nope"]}}"#, "`dev.watch.targets`"),
             (r#"{"outDir": ""}"#, "`dev.outDir`"),
         ] {
@@ -3091,15 +2876,6 @@ mod tests {
 
         let empty = read(r#"{"build": {"targets": {}}}"#).expect_err("refused");
         assert!(empty.contains("no targets"), "{empty}");
-    }
-
-    #[test]
-    fn old_root_level_settings_are_rejected_with_their_new_homes() {
-        for (key, new_home) in [("targets", "build"), ("alias", "resolve"), ("start", "dev")] {
-            let err = read(&format!(r#"{{ "{key}": {{}} }}"#)).expect_err("old key refused");
-            assert!(err.contains(&format!("unknown key `{key}`")), "{err}");
-            assert!(err.contains(new_home), "{err}");
-        }
     }
 
     #[test]

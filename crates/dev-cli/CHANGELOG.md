@@ -34,9 +34,11 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   its `proxy` — the production gateway's routes, `"/api": "api"` or a URL. An
   entry naming a server target is run with `PORT` and restarted when it
   changes. Every project that starts has the key, a frontend too.
-  `dev.run`, `dev.app`, `dev.server` and `dev.serve` are refused, each with the
-  `dev.servers` the file means printed as the fix. `esdev init` and the bare
-  scaffolds write it.
+  `dev.run`, `dev.app`, `dev.server` and `dev.serve` are gone. `esdev init` and
+  the bare scaffolds write `dev.servers`.
+- **No old key is special-cased.** `outdir`, `dts-bundle`, `css-urls`, the
+  removed `dev` keys and a target's `plugins` or `refresh` are unknown keys like
+  any other, answered with the nearest key the file can have.
 - **A proxied request waits for a server that is restarting.** A save used to
   answer a request for the restarting server with `502`; it now waits for the
   server to listen again, and a `GET`, `HEAD` or `OPTIONS` the old process
