@@ -11,6 +11,8 @@ here, without an esdev release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-19
+
 ### Changed
 
 - Every template's `esdev.json` names its schema (`"$schema"`), so an editor
