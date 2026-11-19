@@ -13,7 +13,7 @@ esdev test --dom --file=src/button.test.ts
 ```
 
 To give the DOM to some files and not others, name them in `esdev.json` — a
-folder, or a naming convention:
+folder, or a naming convention (`test.dom`, added in esdev 0.28.0):
 
 ```json
 { "test": { "dom": ["src/components/**", "**/*.dom.test.ts"] } }
