@@ -26,6 +26,8 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-19
+
 ### Added
 
 - **A JSON Schema for `esdev.json`**, at

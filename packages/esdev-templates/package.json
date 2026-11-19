@@ -1,6 +1,6 @@
 {
   "name": "@opentf/esdev-templates",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The project templates `esdev create` writes — data, fetched and verified by esdev, released on their own.",
   "_engines": "engines.esdev is the range of esdev versions that read this package's template format (DECISIONS D220). esdev takes the newest stable release whose range includes itself.",
   "engines": {
