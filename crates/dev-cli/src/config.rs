@@ -412,8 +412,6 @@ const TARGET_KEYS: &[&str] = &[
     "cssUrls",
 ];
 
-
-
 /// What a library's stylesheets do with the files their `url()`s name (D158).
 ///
 /// A library's CSS is copied beside its modules, and a relative `url()` in it
@@ -437,6 +435,25 @@ impl CssUrls {
             _ => None,
         }
     }
+}
+
+/// The keys each section accepts, as the parser reads them — what
+/// [`crate::config_schema`] builds the published schema from, so the two
+/// cannot disagree. Read only where the schema is built and checked: its test.
+#[cfg(test)]
+pub mod keys {
+    pub const TOP_LEVEL: &[&str] = super::TOP_LEVEL_KEYS;
+    pub const BUILD: &[&str] = super::BUILD_KEYS;
+    pub const TARGET: &[&str] = super::TARGET_KEYS;
+    pub const RESOLVE: &[&str] = super::RESOLVE_KEYS;
+    pub const DEV: &[&str] = super::DEV_KEYS;
+    pub const DEV_WATCH: &[&str] = super::DEV_WATCH_KEYS;
+    pub const SERVER: &[&str] = super::SERVER_KEYS;
+    pub const TEST: &[&str] = super::TEST_KEYS;
+    pub const TAG: &[&str] = super::TAG_KEYS;
+    pub const COVERAGE: &[&str] = super::COVERAGE_KEYS;
+    pub const THRESHOLD: &[&str] = super::THRESHOLD_KEYS;
+    pub const JSX: &[&str] = super::JSX_KEYS;
 }
 
 /// The keys the file may carry at the top level.
@@ -1376,8 +1393,6 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-
-
 /// Reads `dev`: what `esdev start` runs and serves (`servers`), what it
 /// rebuilds (`watch.targets`) and where it writes (`outDir`) — from the keys
 /// the file has, so every message names one of them (D232, D235).
@@ -1805,7 +1820,6 @@ fn plugin_spec(value: &Value, file: &str, at: &str) -> Result<PluginSpec, String
         options: map.get("options").cloned(),
     })
 }
-
 
 /// The error for a dev setting naming a target that is not there.
 fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {

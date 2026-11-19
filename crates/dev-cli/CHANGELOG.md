@@ -26,6 +26,15 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Added
+
+- **A JSON Schema for `esdev.json`**, at
+  `https://esrun.opentechf.org/esdev.schema.json`: an editor completes keys,
+  shows what each one takes, and marks a misspelled one. It is generated from
+  the keys the parser reads — a key added without a schema entry fails a test,
+  and the published copy is checked against what the code builds — so the two
+  cannot drift. `esdev init` and the bare scaffolds write `"$schema"`.
+
 ### Changed
 
 - **Breaking: `dev.servers` is what `esdev start` runs and serves** (DECISIONS

@@ -452,9 +452,10 @@ fn detect_entry(target: &Path) -> Option<String> {
 
 /// An `esdev.json` for one entry: a served document, or a run server.
 fn manifest_for(entry: &str) -> String {
+    let schema = crate::config_schema::SCHEMA_URL;
     if crate::config::is_html_entry(entry) {
         return format!(
-            "{{\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outDir\": \"dist\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"web\": {{\n        \"port\": 5173\n      }}\n    }}\n  }}\n}}\n"
+            "{{\n  \"$schema\": \"{schema}\",\n  \"build\": {{\n    \"targets\": {{\n      \"web\": {{\n        \"entry\": \"{entry}\",\n        \"outDir\": \"dist\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"web\": {{\n        \"port\": 5173\n      }}\n    }}\n  }}\n}}\n"
         );
     }
     let stem = Path::new(entry)
@@ -462,7 +463,7 @@ fn manifest_for(entry: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("index");
     format!(
-        "{{\n  \"build\": {{\n    \"targets\": {{\n      \"server\": {{\n        \"entry\": \"{entry}\",\n        \"out\": \"dist/{stem}.js\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"server\": {{\n        \"port\": 3000\n      }}\n    }}\n  }}\n}}\n"
+        "{{\n  \"$schema\": \"{schema}\",\n  \"build\": {{\n    \"targets\": {{\n      \"server\": {{\n        \"entry\": \"{entry}\",\n        \"out\": \"dist/{stem}.js\"\n      }}\n    }}\n  }},\n  \"dev\": {{\n    \"servers\": {{\n      \"server\": {{\n        \"port\": 3000\n      }}\n    }}\n  }}\n}}\n"
     )
 }
 
@@ -609,7 +610,12 @@ mod tests {
         let web = manifest_for("index.html");
         assert!(web.contains("\"entry\": \"index.html\""), "{web}");
         assert!(web.contains("\"outDir\": \"dist\""), "{web}");
-        assert!(!web.contains("run"), "{web}");
+        assert!(!web.contains("\"run\""), "{web}");
+        assert!(web.contains("\"web\": {"), "{web}");
+        assert!(
+            web.contains(crate::config_schema::SCHEMA_URL),
+            "an editor checks it against the schema: {web}"
+        );
 
         let server = manifest_for("src/server.ts");
         assert!(server.contains("\"entry\": \"src/server.ts\""), "{server}");

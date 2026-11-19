@@ -13,6 +13,9 @@ here, without an esdev release.
 
 ### Changed
 
+- Every template's `esdev.json` names its schema (`"$schema"`), so an editor
+  completes and checks its keys.
+
 - The React templates use the published `@opentf/esdev-plugin-react` for Fast
   Refresh, a dev dependency, instead of a copy of it in `plugins/` and a
   `refresh.ts` bootstrap their entry imported — a fix to the plugin reaches

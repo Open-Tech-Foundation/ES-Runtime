@@ -1,0 +1,695 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://esrun.opentechf.org/esdev.schema.json",
+  "title": "esdev.json",
+  "description": "What an esdev project builds, how it is tested, and what its dev loop runs. Read as data: no comments, nothing executed.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "The schema this file is written against."
+    },
+    "build": {
+      "type": "object",
+      "description": "What `esdev build` writes.",
+      "properties": {
+        "targets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "description": "One thing the project builds.",
+            "properties": {
+              "entry": {
+                "type": "string",
+                "description": "The module the bundle is rooted at, or an `.html` document."
+              },
+              "out": {
+                "type": "string",
+                "description": "One output file. A target writes `out` or `outDir`, not both."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "The directory the target writes into."
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "server",
+                  "browser"
+                ],
+                "description": "Where the output runs. Default: server."
+              },
+              "assets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Copied into the output: a file by name, a directory by its contents."
+              },
+              "minify": {
+                "type": "boolean",
+                "description": "Minify the output."
+              },
+              "sourcemap": {
+                "description": "Source maps: true or \"external\", \"inline\", \"hidden\", false or \"none\".",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "external",
+                      "inline",
+                      "hidden",
+                      "none"
+                    ]
+                  }
+                ]
+              },
+              "define": {
+                "type": "object",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "description": "Build-time replacements: a name to the value it becomes."
+              },
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra `exports` conditions."
+              },
+              "then": {
+                "type": "string",
+                "enum": [
+                  "run"
+                ],
+                "description": "Run the output once every target is built — a build step, not deployed."
+              },
+              "lib": {
+                "type": "boolean",
+                "description": "Build a library: module structure kept, dependencies external, `.d.ts` emitted."
+              },
+              "format": {
+                "description": "A library's module systems.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "esm",
+                      "cjs"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "esm",
+                        "cjs"
+                      ]
+                    },
+                    "uniqueItems": true
+                  }
+                ]
+              },
+              "types": {
+                "type": "boolean",
+                "description": "A library's declarations. Default: true."
+              },
+              "dtsBundle": {
+                "description": "Link every declaration into one `.d.ts`: true for `<entry>/index.ts`, or the entry to start from.",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "cssUrls": {
+                "type": "string",
+                "enum": [
+                  "copy",
+                  "inline"
+                ],
+                "description": "What a library's stylesheet `url()`s become."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Named outputs; `esdev build --target=<name>` builds one."
+        },
+        "importPolicy": {
+          "type": "string",
+          "description": "The dependency policy file every build is held to (D193)."
+        },
+        "subresourceIntegrity": {
+          "type": "boolean",
+          "description": "Add `integrity` to the tags a release HTML build writes."
+        }
+      },
+      "additionalProperties": false
+    },
+    "dev": {
+      "type": "object",
+      "description": "What `esdev start` runs, serves and watches.",
+      "properties": {
+        "servers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "description": "One service: an HTML target esdev serves, or a server target it runs.",
+            "properties": {
+              "target": {
+                "type": "string",
+                "description": "The build target it serves or runs. Default: the entry's name."
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "Its port. A busy one moves, unless --port pinned it."
+              },
+              "proxy": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "description": "A server entry's name, or an http(s) URL."
+                },
+                "description": "An HTML entry's gateway: a path prefix to where it goes."
+              },
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Servers that must be listening before this one starts."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment for this server only."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the program."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Each service on its own port, as in production (D235)."
+        },
+        "watch": {
+          "type": "object",
+          "description": "What the loop rebuilds and watches.",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The targets to rebuild. Default: every target but `then` steps."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "More paths to watch, relative to esdev.json."
+            }
+          },
+          "additionalProperties": false
+        },
+        "outDir": {
+          "type": "string",
+          "description": "Where the dev loop writes its builds, inside the project. Default: .dev"
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "description": "A target only the dev loop builds.",
+            "properties": {
+              "entry": {
+                "type": "string",
+                "description": "The module the bundle is rooted at, or an `.html` document."
+              },
+              "out": {
+                "type": "string",
+                "description": "One output file. A target writes `out` or `outDir`, not both."
+              },
+              "outDir": {
+                "type": "string",
+                "description": "The directory the target writes into."
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "server",
+                  "browser"
+                ],
+                "description": "Where the output runs. Default: server."
+              },
+              "assets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Copied into the output: a file by name, a directory by its contents."
+              },
+              "minify": {
+                "type": "boolean",
+                "description": "Minify the output."
+              },
+              "sourcemap": {
+                "description": "Source maps: true or \"external\", \"inline\", \"hidden\", false or \"none\".",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "external",
+                      "inline",
+                      "hidden",
+                      "none"
+                    ]
+                  }
+                ]
+              },
+              "define": {
+                "type": "object",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "description": "Build-time replacements: a name to the value it becomes."
+              },
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra `exports` conditions."
+              },
+              "then": {
+                "type": "string",
+                "enum": [
+                  "run"
+                ],
+                "description": "Run the output once every target is built — a build step, not deployed."
+              },
+              "lib": {
+                "type": "boolean",
+                "description": "Build a library: module structure kept, dependencies external, `.d.ts` emitted."
+              },
+              "format": {
+                "description": "A library's module systems.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "esm",
+                      "cjs"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "esm",
+                        "cjs"
+                      ]
+                    },
+                    "uniqueItems": true
+                  }
+                ]
+              },
+              "types": {
+                "type": "boolean",
+                "description": "A library's declarations. Default: true."
+              },
+              "dtsBundle": {
+                "description": "Link every declaration into one `.d.ts`: true for `<entry>/index.ts`, or the entry to start from.",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "cssUrls": {
+                "type": "string",
+                "enum": [
+                  "copy",
+                  "inline"
+                ],
+                "description": "What a library's stylesheet `url()`s become."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Targets `esdev start` builds and `esdev build` never does (D224)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resolve": {
+      "type": "object",
+      "description": "How specifiers resolve, for every command.",
+      "properties": {
+        "alias": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The start of a specifier to what it is rewritten to."
+        }
+      },
+      "additionalProperties": false
+    },
+    "permissions": {
+      "not": {},
+      "description": "Not an esdev setting: pass production grants to esrun."
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Plugin modules, loaded once for every command — build, start and test.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A module path or package name."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "module": {
+                "type": "string",
+                "description": "A module path or package name."
+              },
+              "export": {
+                "type": "string",
+                "description": "The named export to use instead of the default."
+              },
+              "options": {
+                "description": "Passed to a factory export."
+              }
+            },
+            "required": [
+              "module"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "test": {
+      "type": "object",
+      "description": "How `esdev test` runs. A flag beats the file.",
+      "properties": {
+        "setup": {
+          "description": "Imported before each test file.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "globalSetup": {
+          "description": "Modules whose setup runs once before the files, teardown after.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Fail a file that takes longer, in milliseconds."
+        },
+        "jobs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many files run at once."
+        },
+        "isolation": {
+          "type": "string",
+          "enum": [
+            "process",
+            "none"
+          ],
+          "description": "A process per file (default), or all in one."
+        },
+        "reporter": {
+          "type": "string",
+          "enum": [
+            "human",
+            "json",
+            "junit",
+            "tap",
+            "dots"
+          ],
+          "description": "How results are reported."
+        },
+        "browser": {
+          "description": "Run the files in a real browser: auto, chrome, chromium, firefox, edge or safari.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "description": "Which statements, branches, functions and lines the tests ran.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Collect coverage on every run."
+            },
+            "include": {
+              "description": "Files measured, as globs.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "exclude": {
+              "description": "Files left out, as globs.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "reporter": {
+              "description": "The reports written.",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "reportsDirectory": {
+              "type": "string",
+              "description": "Where reports are written."
+            },
+            "thresholds": {
+              "type": "object",
+              "description": "The percentages a run must reach.",
+              "properties": {
+                "lines": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Covered lines, in percent."
+                },
+                "functions": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Covered functions, in percent."
+                },
+                "branches": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Covered branches, in percent."
+                },
+                "statements": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Covered statements, in percent."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "tags": {
+          "type": "array",
+          "description": "The tags tests may carry, with what each implies.",
+          "items": {
+            "type": "object",
+            "description": "One tag.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The tag."
+              },
+              "description": {
+                "type": "string",
+                "description": "What it means."
+              },
+              "timeout": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "A test with it gets this timeout, in milliseconds."
+              },
+              "retry": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Retries for a test with it."
+              },
+              "repeats": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Extra runs for a test with it."
+              },
+              "priority": {
+                "type": "number",
+                "description": "Which tag's settings win when a test has several."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "strictTags": {
+          "type": "boolean",
+          "description": "Refuse a tag the file does not define."
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many `test.concurrent` cases in a file run at once."
+        },
+        "dom": {
+          "description": "The files that get esdev's test DOM, as globs (D225).",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "jsx": {
+      "type": "object",
+      "description": "How JSX compiles.",
+      "properties": {
+        "importSource": {
+          "type": "string",
+          "description": "The package the compiler imports the JSX runtime from."
+        },
+        "factory": {
+          "type": "string",
+          "description": "The function JSX calls, which the module imports itself."
+        },
+        "fragment": {
+          "type": "string",
+          "description": "The fragment, with `factory`."
+        },
+        "development": {
+          "type": "boolean",
+          "description": "The development JSX runtime."
+        },
+        "reactCompiler": {
+          "type": "boolean",
+          "description": "Compile with the React Compiler."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

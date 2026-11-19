@@ -49,6 +49,7 @@ mod bundler;
 mod check;
 mod commonjs;
 mod config;
+mod config_schema;
 mod contract;
 mod coverage;
 mod create;

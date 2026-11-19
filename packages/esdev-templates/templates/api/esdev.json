@@ -1,4 +1,5 @@
 {
+  "$schema": "https://esrun.opentechf.org/esdev.schema.json",
   "build": {
     "targets": {
       "server": {
