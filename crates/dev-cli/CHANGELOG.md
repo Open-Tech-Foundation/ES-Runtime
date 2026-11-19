@@ -71,6 +71,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **An idle `esdev start` no longer holds a core and grows without bound.**
+  Since 0.29.0 the watcher re-read `.gitignore` on any event about it — and
+  reading it is an open, which inotify reports too, so every read caused the
+  next: thousands a second, one core busy and memory climbing by about a
+  megabyte a second (10 GB in under three hours on this repository's site).
+  The file is read again on a change to it, and not otherwise.
 - **A release build hashes every name one way, and `esdev preview` caches
   them.** Chunks were named with the bundler's base64 hash
   (`entry.client-BdxvPHKD.js`) and stylesheets and copied files with esdev's

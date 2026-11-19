@@ -45,6 +45,9 @@ pub type Skip = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
 /// The watch over a tree. Dropping it stops the watching.
 pub struct TreeWatch {
     _watcher: Arc<Mutex<notify::RecommendedWatcher>>,
+    /// The rules a project watch reads, for a test to count the reads.
+    #[cfg(test)]
+    rules: Vec<Arc<IgnoreRules>>,
     adds: std::sync::mpsc::Sender<Add>,
     roots: Vec<PathBuf>,
 }
@@ -183,6 +186,8 @@ pub fn watch_tree(
 
     Ok(TreeWatch {
         _watcher: watcher,
+        #[cfg(test)]
+        rules: Vec::new(),
         adds,
         roots: roots.to_vec(),
     })
@@ -270,6 +275,8 @@ pub struct IgnoreRules {
     root: PathBuf,
     file: PathBuf,
     rules: std::sync::RwLock<Option<Gitignore>>,
+    /// How many times the file has been read since it was loaded.
+    reloads: std::sync::atomic::AtomicUsize,
 }
 
 impl IgnoreRules {
@@ -278,7 +285,19 @@ impl IgnoreRules {
             root: root.to_path_buf(),
             file: root.join(".gitignore"),
             rules: std::sync::RwLock::new(load_gitignore(root)?),
+            reloads: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    /// Whether `path` is the `.gitignore` these rules come from.
+    pub fn is_file(&self, path: &Path) -> bool {
+        path == self.file
+    }
+
+    /// How many times the rules have been read again.
+    #[cfg(test)]
+    pub fn reloads(&self) -> usize {
+        self.reloads.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether `path` is the `.gitignore` itself, re-reading it if so. The
@@ -289,6 +308,8 @@ impl IgnoreRules {
         if path != self.file {
             return false;
         }
+        self.reloads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Ok(rules) = load_gitignore(&self.root)
             && let Ok(mut held) = self.rules.write()
         {
@@ -349,13 +370,23 @@ pub fn watch_project(
     let callback_sets = sets.clone();
     let watch = watch_tree(roots, skip, move |event| {
         let mut changed_rules = false;
+        // Read again on a change to the file, and only then. Reading it is an
+        // open, and an open is an event too (inotify's `IN_OPEN`): re-read on
+        // any event about it, each read caused the next — thousands a second,
+        // a core held and memory climbing, for as long as the loop ran.
+        let changed = crate::watch::is_change(&event.kind);
         let paths: Vec<PathBuf> = event
             .paths
             .iter()
             .filter(|path| {
-                let is_rules = callback_sets.iter().any(|set| set.refresh(path));
-                changed_rules |= is_rules;
-                !is_rules
+                let Some(set) = callback_sets.iter().find(|set| set.is_file(path)) else {
+                    return true;
+                };
+                if changed {
+                    set.refresh(path);
+                    changed_rules = true;
+                }
+                false
             })
             .cloned()
             .collect();
@@ -370,6 +401,11 @@ pub fn watch_project(
         on_event(&kept, rules.current().as_ref());
     })?;
     let _ = rescanner.set(watch.rescanner());
+    #[cfg(test)]
+    let watch = TreeWatch {
+        rules: sets.to_vec(),
+        ..watch
+    };
     Ok(watch)
 }
 
@@ -511,6 +547,51 @@ mod tests {
             }
         }
         false
+    }
+
+    /// Reading the rules is not a reason to read them again. An open of the
+    /// file is an event too, and re-reading on any event about it made every
+    /// read the cause of the next: an idle `esdev start` held a core and grew
+    /// without bound (10 GB in under three hours on this repository's site).
+    /// Read on a change, an edit reads it a few times at most, and an idle
+    /// watch never.
+    #[test]
+    fn an_idle_project_watch_reads_nothing() {
+        let root = tree("idle-watch", &[".gitignore", "src/a.ts"]);
+        std::fs::write(root.join(".gitignore"), "node_modules\n").expect("rules");
+        let watch = watch_project(
+            std::slice::from_ref(&root),
+            &root,
+            Vec::new(),
+            |_, rules| {
+                // What a loop does with each event: consult the rules.
+                let _ = rules.is_some();
+            },
+        )
+        .expect("watch");
+        let reloads = || {
+            watch
+                .rules
+                .iter()
+                .map(|rules| rules.reloads())
+                .sum::<usize>()
+        };
+        // Read by something else, which is an open the watch sees.
+        let _ = std::fs::read_to_string(root.join(".gitignore")).expect("read");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(reloads(), 0, "a read of the file made the watch read it");
+
+        std::fs::write(root.join(".gitignore"), "node_modules\ndist\n").expect("edit");
+        std::thread::sleep(Duration::from_millis(500));
+        let after_edit = reloads();
+        assert!(
+            (1..=3).contains(&after_edit),
+            "one edit, {after_edit} reloads"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(reloads(), after_edit, "the reloads fed themselves");
+        drop(watch);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A root outside the project is skipped by its own `.gitignore`: a linked
