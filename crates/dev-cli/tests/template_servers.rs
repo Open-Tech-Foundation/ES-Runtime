@@ -83,7 +83,22 @@ fn create(label: &str, args: &[&str]) -> PathBuf {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    parent.join("app")
+    let app = parent.join("app");
+    // The one package a React project's build needs here: its Fast Refresh
+    // plugin, which does nothing outside a hot browser build.
+    let plugin = app.join("node_modules/@opentf/esdev-plugin-react");
+    std::fs::create_dir_all(&plugin).expect("mkdir the plugin stand-in");
+    write(
+        &plugin,
+        "package.json",
+        r#"{"name":"@opentf/esdev-plugin-react","version":"1.2.3","type":"module","exports":"./index.js"}"#,
+    );
+    write(
+        &plugin,
+        "index.js",
+        "export default { name: 'react-refresh' };\n",
+    );
+    app
 }
 
 fn write(dir: &Path, name: &str, contents: &str) {

@@ -12905,6 +12905,24 @@ fn create_help_points_at_the_list_rather_than_naming_templates() {
 // cannot damage a directory somebody already had something in.
 // ---------------------------------------------------------------------------
 
+/// A React project declares `@opentf/esdev-plugin-react`, a package, which a
+/// test with no registry cannot install. Fast Refresh does nothing in a test,
+/// so a plugin that does nothing stands in for it.
+fn stand_in_for_the_react_plugin(dir: &Path) {
+    let plugin = dir.join("node_modules/@opentf/esdev-plugin-react");
+    std::fs::create_dir_all(&plugin).expect("mkdir the plugin stand-in");
+    write_in(
+        &plugin,
+        "package.json",
+        r#"{"name":"@opentf/esdev-plugin-react","version":"1.2.3","type":"module","exports":"./index.js"}"#,
+    );
+    write_in(
+        &plugin,
+        "index.js",
+        "export default { name: 'react-refresh' };\n",
+    );
+}
+
 #[test]
 fn create_writes_a_project_that_builds_and_runs() {
     let parent = watch_dir("c_project");
@@ -12957,18 +12975,7 @@ fn create_writes_a_project_that_builds_and_runs() {
     // The tests it ships pass, which is the smallest end-to-end claim that
     // does not need a package registry. The one plugin it declares is a
     // package, so it is stood in for: Fast Refresh does nothing in a test.
-    let plugin = dir.join("node_modules/@opentf/esdev-plugin-react");
-    std::fs::create_dir_all(&plugin).expect("mkdir the plugin stand-in");
-    write_in(
-        &plugin,
-        "package.json",
-        r#"{"name":"@opentf/esdev-plugin-react","version":"1.2.3","type":"module","exports":"./index.js"}"#,
-    );
-    write_in(
-        &plugin,
-        "index.js",
-        "export default { name: 'react-refresh' };\n",
-    );
+    stand_in_for_the_react_plugin(&dir);
     let tested = esdev_in(&dir)
         .arg("test")
         .output()
@@ -13287,7 +13294,9 @@ fn each_mode_writes_its_own_project_and_none_of_the_other() {
         assert!(dir.join("src/App.tsx").is_file(), "{mode} has no App");
 
         // And the tests it ships pass — the react template's own suite needs no
-        // node_modules, which is what makes this checkable here at all.
+        // node_modules but its one plugin, which is what makes this checkable
+        // here at all.
+        stand_in_for_the_react_plugin(&dir);
         let tested = esdev_in(&dir)
             .arg("test")
             .output()
