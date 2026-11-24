@@ -148,7 +148,7 @@ own (and at least 8 MB, the least an isolate starts in), and caps its
 `ArrayBuffer` storage at the same size — buffers live outside
 the heap, so a heap limit alone would not hold them. Buffers that are garbage
 don't count once they are collected; until then, an isolate may briefly hold up
-to twice its `memory` in buffers. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use —
+to twice its `memory` in buffers. `cpuTime` caps how much CPU time, in milliseconds, one **turn** may use (1000 by default) —
 one stretch of the isolate's code, from when it gets its thread until it next
 waits:
 
@@ -211,9 +211,9 @@ while it idles.
 
 - An isolate is not a hard security boundary. It keeps code apart from your
   program's data and permissions, not from attacks on the CPU itself.
-- Isolates on one pool thread take turns. Without `cpuTime`, a call that loops
-  forever holds up the others on its thread until you `terminate()` it. Give
-  isolates running code you don't control a `cpuTime`.
+- Isolates on one pool thread take turns, so every turn is bounded: without
+  `cpuTime`, a turn may use 1000 ms of CPU. Raise it for heavier work in one
+  turn; code that needs unbounded CPU belongs on a `Worker`.
 - From inside an isolate, `cwd()` is refused, so `resolve()` of a relative path
   is too. `join()` and the rest of `runtime:path` work.
 

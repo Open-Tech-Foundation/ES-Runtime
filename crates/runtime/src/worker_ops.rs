@@ -444,9 +444,18 @@ pub(crate) fn install_isolates(
     install_channel(engine, &ISOLATE_OPS, isolates, children)
 }
 
+/// The CPU budget a turn of an isolate gets when it asks for none (D237).
+///
+/// An isolate shares its pool thread, so a turn that never ends stalls every
+/// isolate pinned beside it and, once each thread holds one, every isolate
+/// started after. There is therefore no unbounded turn: a program may raise
+/// this, and code that needs unbounded CPU belongs on a `Worker`.
+const DEFAULT_ISOLATE_CPU_TIME_MS: u64 = 1000;
+
 /// What every isolate is started with: no capability, no environment, a
 /// thread it must not block, the parent's memory ceiling or a lower one, and a
-/// CPU budget a turn when one was asked for (`0` is none).
+/// CPU budget a turn — the one asked for, else [`DEFAULT_ISOLATE_CPU_TIME_MS`]
+/// (`0` is "not asked", never "unbounded").
 fn isolate_spec(
     specifier: String,
     source: String,
@@ -466,7 +475,11 @@ fn isolate_spec(
         // `Atomics.wait` throws there, as on the agent driving the loop.
         limits: isolate_limits(parent_limits, memory_mb)?,
         isolate: true,
-        cpu_time_ms: (cpu_time_ms > 0).then_some(cpu_time_ms),
+        cpu_time_ms: Some(if cpu_time_ms > 0 {
+            cpu_time_ms
+        } else {
+            DEFAULT_ISOLATE_CPU_TIME_MS
+        }),
     })
 }
 
@@ -992,6 +1005,36 @@ mod tests {
     use es_runtime_common::Limits;
 
     const MB: usize = 1024 * 1024;
+
+    fn spec_with_cpu(cpu_time_ms: u64) -> WorkerSpec {
+        isolate_spec(
+            "isolate:test".into(),
+            String::new(),
+            String::new(),
+            Limits::default(),
+            0,
+            cpu_time_ms,
+        )
+        .expect("a spec with no memory request")
+    }
+
+    /// D237: an isolate that asks for no budget still gets one, because its
+    /// pool thread is shared and an unbounded turn would starve the others.
+    #[test]
+    fn an_isolate_with_no_cpu_time_gets_the_default_budget() {
+        assert_eq!(
+            spec_with_cpu(0).cpu_time_ms,
+            Some(DEFAULT_ISOLATE_CPU_TIME_MS)
+        );
+    }
+
+    /// A budget asked for is kept as asked — above the default too, since a
+    /// program may raise the bound, only never remove it.
+    #[test]
+    fn an_isolate_keeps_the_cpu_time_it_asks_for() {
+        assert_eq!(spec_with_cpu(50).cpu_time_ms, Some(50));
+        assert_eq!(spec_with_cpu(60_000).cpu_time_ms, Some(60_000));
+    }
 
     /// The bug this replaced: a worker took a fresh `Limits::default()`, so an
     /// embedder that had tightened its own runtime handed out 256 MiB agents to

@@ -4962,3 +4962,21 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 
 **Why:** the project is in alpha; there are no projects to carry forward, and each special case is code and a test kept for a file nobody has.
 
+
+### D237 — Every turn on the isolate pool is bounded: `cpuTime` defaults to 1000 ms, and has no off · *Accepted (2026-11-24)* · *amends D227*
+
+**Context:** reported, and reproduced on the release build (12 cores, so 12 pool threads). D227 pins each isolate to a shared pool thread and argued that "a long-running isolate cannot hog a thread it is pinned to, because `cpuTime` ends it" — but `cpuTime` was optional and its default was no limit. An isolate without one that spins holds its thread for ever. Twelve such spinners left a thirteenth `new Isolate()` waiting with no error and no signal until it was terminated; one spinner stalled 2 of 24 *budgeted* isolates, the ones placed on its thread. A tenant that set a budget paid for a neighbour that did not.
+
+**Decision (maintainer, 2026-11-24):**
+- **An isolate's turn is always bounded.** With no `cpuTime`, a turn may use 1000 ms of CPU — generous for what isolates are for (rules, plugins, generated code, parsing a file passed in), which take milliseconds a turn. Past it the isolate ends with `ERR_ISOLATE_CPU_LIMIT`, as with an explicit budget.
+- **There is no unbounded value.** `cpuTime` takes any positive whole number of milliseconds, so a program can raise the bound; `Infinity`, `0` and `null`-as-off are refused. Code that needs unbounded CPU is parallel work, and D227 already gives that to `Worker`, which has a thread of its own.
+- **The default lives in `isolate_spec`** — what every isolate is started with — so every `WorkerSpec` the pool receives for an isolate carries a budget, prepared isolates included (their budget is applied at the claim, as before).
+
+**Measured** (`bench/isolate-turns.js` against builds from before this change — release `esrun` 0.48.0 and `esdev` 0.30.0 — where no `cpuTime` meant no budget; 12 cores, best of 3): a budget adds ~0.6–1.5 µs to a ~25–27 µs call round-trip on one isolate, and nothing measurable across 24 isolates under load (~103 k calls/s either way). The watchdog therefore stays as it is.
+
+**Rejected:**
+- **Admission control on a busy pool** (a queue limit, a timeout on `new Isolate()`). With every turn bounded, a new isolate waits at most a budget per turn ahead of it on its thread — a delay, never a hang; a refusal would add a failure mode for a state that now resolves itself.
+- **Placing isolates by how busy a thread is** rather than how many isolates it holds. It would route around a spinner but not stop it stalling the isolates already pinned beside it; bounding the turn does both.
+- **An explicit opt-out** (`cpuTime: Infinity`): it brings the starvation back for whoever opts out and for their neighbours, which is the property the pool exists to have.
+
+**Consequences:** an isolate that legitimately spends more than a second of CPU in one turn now ends where it used to run — the one behaviour change, and the reason the default is a second rather than less; it raises `cpuTime`, splits its work across turns, or moves to a `Worker`. Work split across turns is still not bounded in total (D227): that is `terminate()` with a timer.

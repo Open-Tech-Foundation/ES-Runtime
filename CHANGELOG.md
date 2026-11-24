@@ -21,6 +21,14 @@ namespace) is unstable and may change between minor releases until the API freez
   there is a `TypeError` naming the options argument, `permissions` gets the
   isolate's computation-only message, any other key is an unknown key, and a
   `name` given in both places is refused rather than one silently winning.
+- **An isolate can no longer starve the pool.** `cpuTime` was optional and
+  defaulted to no limit, so an isolate that spun held its shared pool thread for
+  ever: one such isolate stalled the isolates pinned beside it, budgeted ones
+  included, and one on every thread left each later `new Isolate()` waiting with
+  no error or signal. Every turn is now bounded — 1000 ms of CPU when no
+  `cpuTime` is given — and there is no unbounded value: raise `cpuTime`, or use a
+  `Worker` for unbounded CPU work (D237). An isolate that spent more than a
+  second of CPU in one turn now ends with `ERR_ISOLATE_CPU_LIMIT`.
 
 ### Documentation
 

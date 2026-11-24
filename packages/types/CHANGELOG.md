@@ -13,6 +13,11 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- `IsolateOptions.cpuTime` documents its default, `1000`, and that there is no
+  unbounded value (runtime D237).
+
 ## [0.24.0] - 2026-11-18
 
 ### Fixed

@@ -1994,8 +1994,9 @@ pub struct WorkerSpec {
     pub isolate: bool,
     /// The most CPU time, in milliseconds, one turn of an `Isolate` may take —
     /// from when it is given its pool thread until it next waits — before it
-    /// is terminated (D227). `None` for no limit; a `Worker` has its own thread
-    /// and is never given one.
+    /// is terminated (D227). The runtime gives every isolate one, a default
+    /// when none was asked for (D237), so a shared pool thread is never held
+    /// by an unbounded turn. `None` for a `Worker`, which has its own thread.
     pub cpu_time_ms: Option<u64>,
 }
 

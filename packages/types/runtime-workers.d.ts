@@ -370,7 +370,8 @@ declare module "runtime:workers" {
     /**
      * Most CPU milliseconds one turn may use — from when the isolate gets its
      * thread until it next waits. Past it the isolate is terminated with
-     * `ERR_ISOLATE_CPU_LIMIT`. Default: no limit.
+     * `ERR_ISOLATE_CPU_LIMIT`. Default `1000`. There is no unbounded value —
+     * the pool thread is shared — so use a `Worker` for unbounded CPU work.
      */
     cpuTime?: number;
     /**

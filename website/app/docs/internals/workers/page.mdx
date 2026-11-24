@@ -370,7 +370,7 @@ code is never given a way to reach a module it was not handed.
 code from when its thread enters it until it next waits — not a call: calls
 interleave inside one isolate, and CPU cannot be charged to one of them without
 guessing. Only the thread running the isolate can read its own CPU clock, so the
-check runs there. The pool's watchdog, one thread parked unless a budgeted turn
+check runs there. The pool's watchdog, one thread parked unless a turn
 is running, asks V8 to interrupt a turn once its wall time passes the budget;
 the interrupt runs on the isolate's thread, compares that thread's CPU time with
 the turn's start, and terminates the isolate if it is over. CPU time cannot be
@@ -410,6 +410,8 @@ From `esrun --allow-workers bench/isolate-start.js`, which
 the pool's threads.
 
 **Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
-throws, and no synchronous op is reachable. Without `cpuTime`, a call that loops
-forever holds up the other isolates on its thread until `terminate()` stops it. A pool holds up
+throws, and no synchronous op is reachable. Every turn has a CPU budget — 1000
+ms when the program names none — because a turn that never ended would hold up
+every isolate pinned to its thread, and once each thread had one, every isolate
+started after; there is no unbounded value (D237). A pool holds up
 to 10,000 live isolates.

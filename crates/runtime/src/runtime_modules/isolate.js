@@ -120,13 +120,17 @@ function isolateHost(value) {
   return host;
 }
 
+// `0` asks the host for its default budget, 1000 ms a turn (D237). There is
+// no unbounded value: an isolate shares its thread, and a turn that never ends
+// stalls every isolate beside it.
 function isolateCpuTime(value) {
   if (value === undefined || value === null) return 0;
   const ms = Number(value);
   if (!Number.isInteger(ms) || ms <= 0) {
     throw new TypeError(
       'Isolate option "cpuTime" must be a positive whole number of milliseconds, ' +
-        `not ${JSON.stringify(value)}`,
+        `not ${JSON.stringify(value)} — a turn is always bounded (1000 ms by ` +
+        "default); for unbounded CPU work, use a Worker",
     );
   }
   return ms;

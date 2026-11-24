@@ -468,6 +468,62 @@ fn a_spinning_isolate_does_not_hold_the_pool_past_its_budget() {
     assert_eq!(lines(&out), ["40 ERR_ISOLATE_CPU_LIMIT"]);
 }
 
+/// D237: with no `cpuTime`, a turn is still bounded — by the default, 1000 ms.
+/// It used to run for ever.
+#[test]
+fn an_isolate_with_no_cpu_time_is_bounded_by_the_default() {
+    let out = run(
+        "cpu-default",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const spinner = new Isolate({ source: "export const spin = () => { for (;;) {} };" });
+        spinner.onerror = (e) => e.preventDefault();
+        const start = performance.now();
+        const code = await (await spinner.exports).spin().catch((e) => e.code);
+        const ms = performance.now() - start;
+        console.log(code, ms >= 900, ms < 10000);
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["ERR_ISOLATE_CPU_LIMIT true true"]);
+}
+
+/// D237, the reported starvation: one unbudgeted spinner on every pool thread
+/// used to leave a new isolate waiting for ever, and a spinner stalled the
+/// budgeted isolates pinned beside it. Every turn is bounded now, so both
+/// answer once the spinners' default budget runs out.
+#[test]
+fn unbudgeted_spinners_cannot_starve_the_pool() {
+    let out = run(
+        "cpu-starve",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const threads = navigator.hardwareConcurrency;
+        const spinners = Array.from({ length: threads }, () =>
+          new Isolate({ source: "export const spin = () => { for (;;) {} };" }));
+        const spun = [];
+        for (const s of spinners) {
+          s.onerror = (e) => e.preventDefault();
+          spun.push((await s.exports).spin().catch((e) => e.code));
+        }
+        const late = new Isolate({ source: "export const hi = () => 'hi';" });
+        const beside = Array.from({ length: 24 }, (_, k) =>
+          new Isolate({ source: `export const id = () => ${k};` }, { cpuTime: 100 }));
+        const answered = await Promise.all(beside.map(async (b) => (await b.exports).id()));
+        console.log(await (await late.exports).hi(), answered.length);
+        console.log(new Set(await Promise.all(spun)).size, (await spun[0]));
+        late.terminate();
+        for (const b of beside) b.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["hi 24", "1 ERR_ISOLATE_CPU_LIMIT"]);
+}
+
 /// The code argument takes `source` and `name` and nothing else. A limit put
 /// there instead of in the options used to be dropped, and the code ran
 /// uncapped; now it is refused, naming where it belongs — and the spin below
@@ -521,7 +577,7 @@ fn cpu_time_must_be_a_positive_whole_number() {
         "",
         r#"
         import { Isolate } from "runtime:workers";
-        for (const cpuTime of [0, -5, 1.5, "fast"]) {
+        for (const cpuTime of [0, -5, 1.5, "fast", Infinity]) {
           try { new Isolate({ source: "" }, { cpuTime }); console.log("accepted", cpuTime); }
           catch (e) { console.log(e.name); }
         }
@@ -531,7 +587,13 @@ fn cpu_time_must_be_a_positive_whole_number() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         lines(&out),
-        ["TypeError", "TypeError", "TypeError", "TypeError"]
+        [
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError"
+        ]
     );
 }
 
