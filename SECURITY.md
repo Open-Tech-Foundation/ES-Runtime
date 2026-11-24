@@ -122,7 +122,8 @@ esrun --allow-imports --allow-env=PORT,DATABASE_URL \
   one is *absent*, so a guest can neither read it nor learn its name.
 - `--allow-run=<programs>` refuses to spawn anything else.
 - `--allow-read=<paths>` / `--allow-write=<paths>` refuse every other path.
-  Entries are resolved against the working directory and cover their subtree,
+  Entries are resolved against the working directory and cover their subtree
+  (an entry naming a file covers that file alone),
   and the check runs **after canonicalization**, so a symlink inside an allowed
   directory cannot name a file outside it. The two are separate lists, and both
   govern `runtime:fs` and `runtime:wasi` alike.

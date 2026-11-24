@@ -164,18 +164,46 @@ pub fn anchor(real: &Path, roots: &[PathBuf], shown: &str) -> Result<Anchored, P
         return Err(swapped(shown));
     };
 
+    let inside = real.strip_prefix(root).map_err(|_| swapped(shown))?;
+
     // The root is configuration, not guest input: it is canonicalized once when
     // the provider is built, and following a symlink *to* it is how `/tmp`
     // works on macOS. Everything below it is walked with `NOFOLLOW`.
-    let mut dir = openat(
+    let opened = openat(
         CWD,
         root,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
-    )
-    .map_err(|e| failed(shown, e.into()))?;
-
-    let inside = real.strip_prefix(root).map_err(|_| swapped(shown))?;
+    );
+    let mut dir = match opened {
+        Ok(dir) => dir,
+        // A root that is a file the command line granted — or one not created
+        // yet — has no directory to pin (D243). Asked for itself, it is pinned
+        // the way any file is: by the directory it is named in, which is
+        // configuration too. Its own name is then acted on with `NOFOLLOW`,
+        // like every final name here.
+        Err(rustix::io::Errno::NOTDIR | rustix::io::Errno::NOENT)
+            if inside.as_os_str().is_empty() =>
+        {
+            let (Some(parent), Some(name)) = (root.parent(), root.file_name()) else {
+                return Err(swapped(shown));
+            };
+            let parent = openat(
+                CWD,
+                parent,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| failed(shown, e.into()))?;
+            return Ok(Anchored {
+                parent,
+                name: name.to_os_string(),
+                path: real.to_path_buf(),
+                shown: shown.to_string(),
+            });
+        }
+        Err(e) => return Err(failed(shown, e.into())),
+    };
     let mut components = inside.components().peekable();
     // The root itself: nothing to walk, and nothing to name inside it. Callers
     // that mutate have already refused this case; a read of it is `.`.

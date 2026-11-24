@@ -5057,3 +5057,16 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Rejected:** `405` for `CONNECT` — it needs an `Allow` listing the methods the server supports, which the handler, not the runtime, decides. `400` for `OPTIONS *` — it refuses a request HTTP allows, and load-balancer probes send it. A guest opt-in to tunnelling — no use case yet; a proxy written on `runtime:net` sees raw bytes already.
 
 **Consequences:** neither request reaches a handler. Verified by three provider tests over real sockets: an HTTP/1.1 `CONNECT` with a request behind it (one `501`, nothing reaching the guest, the connection closed), an HTTP/2 `CONNECT` followed by an ordinary request on the same connection, and `OPTIONS *` followed by a request the guest serves. HTTP/2 `OPTIONS *` is not covered by a test: hyper's client, which the h2 tests use, builds absolute request URIs and cannot send a bare `*`.
+
+### D243 — A path entry that names a file grants that file · *Accepted (2026-11-24)* · *amends D54*
+
+**Context:** reported, and reproduced. `esrun --allow-read=/etc/hostname` was accepted, then every read of `/etc/hostname` failed with `ENOTDIR`; `--allow-write=/var/log/app.log` refused to create it as escaping the jail, and once it existed refused to write it as mutating a root. Inside the project a file entry already worked — the allowlist matches by path prefix, and a path is a prefix of itself. Outside it, D54 makes an entry an extra *root* of the jail, and three places assumed every root is a directory: `anchor` pinned each root by opening it `O_DIRECTORY`; `confine` judged a path that does not exist yet by its existing parent, which for a one-file root lies outside it; and the root-mutation guard refused every write that targets a root.
+
+**Decision (maintainer, 2026-11-24):** a file entry grants that file, and nothing beside it — what an operator types for one certificate or one log, narrower than granting its directory, and how Deno reads `--allow-read=<file>`.
+- `anchor` pins a root asked for itself by the directory it is named in when the root is not a directory (or not there yet), and acts on its name with `NOFOLLOW`, like every final name. Directory roots are unchanged.
+- `confine` judges the whole path — the canonical part that exists plus the literal part that does not, whose names can be neither links (they are not there) nor `..` (refused).
+- The root-mutation guard applies to directory roots only: writing a granted file is the point of granting it.
+
+**Rejected:** refusing a file entry at parse time — it makes the operator grant a whole directory to reach one file, the wider grant. 
+
+**Consequences:** a sibling, the containing directory and a path under the file are still `ERR_JAIL_ESCAPE` (or `ERR_NOT_DIRECTORY`); a symlink put where a not-yet-created granted file will be is not followed — it resolves outside every root. Verified by three provider tests and by hand on both grants; Windows anchors by path already, so only the `confine` and guard changes reach it there.

@@ -218,7 +218,9 @@ reaching out and being reachable are separate capabilities.
 A **path** is absolute or relative to the working directory — `./data` means
 what it means in the shell you typed it in, not what it means to the script — and
 covers its subtree, matched by component, so `./app` never admits
-`./app-secrets`. `read` and `write` are separate lists, and both govern
+`./app-secrets`. A path that names a file covers that file alone:
+`--allow-read=/etc/ssl/private/site.key` reads the key and nothing beside it, and
+`--allow-write=/var/log/app.log` may create it. `read` and `write` are separate lists, and both govern
 `runtime:fs` and `runtime:wasi` alike.
 
 `--allow-run=git` matches the real path the name resolves to, so `git`,

@@ -518,7 +518,15 @@ pub(crate) fn reject_root_mutation(
     // Every root, not just the jail: a directory the command line granted is a
     // boundary of this run in exactly the same way, and removing it out from
     // under the grant is the same self-destruction one level along.
-    if access == Access::Write && roots.contains(&resolved) {
+    //
+    // A *directory*, though. A file the command line granted (D243) is the
+    // thing the grant is for: writing it is the point, and removing or
+    // renaming it destroys no sandbox, just as for any file inside one. The
+    // stat runs only when the target is a root at all, which is rare.
+    if access == Access::Write
+        && roots.contains(&resolved)
+        && std::fs::metadata(&resolved).is_ok_and(|m| m.is_dir())
+    {
         return Err(Refusal::Root);
     }
     Ok(resolved)
@@ -538,20 +546,22 @@ pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, Refusal>
     let mut tail: Vec<OsString> = Vec::new();
     loop {
         if let Ok(real) = path::canonicalize(&existing) {
-            // Any of them: `roots[0]` is the project jail and the rest are
-            // subtrees the command line added (D54). One `within_root` per root
-            // rather than a cleverer structure — the list is the jail plus a
-            // handful of explicitly typed paths, never more.
-            let Some(root) = roots.iter().find(|root| path::within_root(&real, root)) else {
-                return Err(escape(roots));
-            };
             let mut out = real;
             for seg in tail.iter().rev() {
                 out.push(seg);
             }
-            // Belt and braces: the reattached path must still be under the root
-            // that admitted it.
-            if !out.starts_with(root) {
+            // Judged whole: the canonical part that exists plus the literal
+            // tail that does not, whose names cannot be links (they are not
+            // there) or `..` (refused below). Judging only the existing part
+            // refused a file the command line granted before it was created —
+            // `--allow-write=/var/log/app.log`, whose existing part is
+            // `/var/log`, outside the one-file root (D243).
+            //
+            // Any of the roots: `roots[0]` is the project jail and the rest are
+            // what the command line added (D54). One `within_root` per root
+            // rather than a cleverer structure — the list is the jail plus a
+            // handful of explicitly typed paths, never more.
+            if !roots.iter().any(|root| path::within_root(&out, root)) {
                 return Err(escape(roots));
             }
             return Ok(out);

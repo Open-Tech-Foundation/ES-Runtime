@@ -13,6 +13,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`--allow-read`/`--allow-write` with a file outside the project grant that
+  file.** `--allow-read=/etc/ssl/private/site.key` was accepted and then every
+  read failed with `ERR_NOT_DIRECTORY`; `--allow-write=/var/log/app.log` refused
+  to create the file, and then to write it. A file entry now covers that file
+  alone — not its siblings or its directory — and a write entry may name one not
+  created yet (D243).
+
 - **`runtime:http` answers `CONNECT` with `501` and `OPTIONS *` with `204`
   itself.** A `CONNECT` reached the handler, was usually answered `200` — which
   tells a proxy a tunnel is open — and the bytes after it were served as the

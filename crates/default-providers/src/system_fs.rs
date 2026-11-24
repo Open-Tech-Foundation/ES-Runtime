@@ -972,6 +972,91 @@ mod tests {
         assert_eq!(read, b"PEM");
     }
 
+    /// A granted file outside the jail and the directory it sits in, for the
+    /// D243 tests: `(root, dir, file)`, the file holding `PEM` and a sibling
+    /// beside it.
+    fn granted_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let (root, _) = jail(name);
+        let dir = root.parent().unwrap().join(format!("{name}-outside"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("key.pem"), b"PEM").unwrap();
+        std::fs::write(dir.join("sibling.pem"), b"nope").unwrap();
+        let dir = crate::path::canonicalize(&dir).unwrap();
+        (root, dir.clone(), dir.join("key.pem"))
+    }
+
+    fn path_str(p: &std::path::Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_granted_file_outside_the_jail_is_readable_and_nothing_beside_it() {
+        // D243: it was accepted, then every read failed with ENOTDIR — the jail
+        // pinned each root as a directory.
+        let (root, dir, file) = granted_file("file-grant-read");
+        let fs = SystemFileSystem::with_jail(Arc::new(
+            Jail::new(&root, &root)
+                .with_read_allowlist(PathAllowlist::parse([path_str(&file)], &root).unwrap()),
+        ));
+        assert_eq!(fs.read(path_str(&file)).await.unwrap(), b"PEM");
+        for refused in [dir.join("sibling.pem"), dir.clone()] {
+            let err = fs.read(path_str(&refused)).await.unwrap_err();
+            assert_eq!(
+                err.code(),
+                Some(ErrorCode::JailEscape),
+                "{refused:?}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_granted_file_outside_the_jail_is_writable_and_creatable() {
+        // D243: writing it was refused as mutating a root, and creating it as
+        // escaping the jail, since only its existing parent was judged.
+        let (root, dir, file) = granted_file("file-grant-write");
+        let new = dir.join("app.log");
+        let fs =
+            SystemFileSystem::with_jail(Arc::new(Jail::new(&root, &root).with_write_allowlist(
+                PathAllowlist::parse([path_str(&file), path_str(&new)], &root).unwrap(),
+            )));
+        fs.write(path_str(&file), b"rotated".to_vec(), false)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"rotated");
+        fs.write(path_str(&new), b"first".to_vec(), false)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&new).unwrap(), b"first");
+        let err = fs
+            .write(path_str(&dir.join("sibling.pem")), b"x".to_vec(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        assert_eq!(std::fs::read(dir.join("sibling.pem")).unwrap(), b"nope");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_put_where_a_granted_file_will_be_is_not_followed() {
+        // A file granted before it exists is a literal path; whoever creates a
+        // symlink there must not be able to aim the write somewhere else.
+        let (root, dir, _) = granted_file("file-grant-link");
+        let target = dir.join("sibling.pem");
+        let late = dir.join("late.log");
+        let fs = SystemFileSystem::with_jail(Arc::new(
+            Jail::new(&root, &root)
+                .with_write_allowlist(PathAllowlist::parse([path_str(&late)], &root).unwrap()),
+        ));
+        std::os::unix::fs::symlink(&target, &late).unwrap();
+        assert!(
+            fs.write(path_str(&late), b"pwned".to_vec(), false)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"nope");
+    }
+
     #[tokio::test]
     async fn only_the_named_path_is_added_and_only_for_its_own_access() {
         // The boundary is still a boundary: a sibling of the granted directory

@@ -1149,7 +1149,9 @@ The value grammar, one rule set for every capability that takes a list:
 **A path** is absolute or relative to the **working directory** — `./data` on a
 command line means what it means in the shell you typed it in, not what it means
 to the script. An entry covers its subtree, matched by path component, so
-`--allow-read=./app` never admits `./app-secrets`. The check runs **after
+`--allow-read=./app` never admits `./app-secrets`; an entry naming a file covers
+that file alone, and a write entry may name one not created yet
+(`--allow-write=/var/log/app.log`). The check runs **after
 canonicalization**: `./data/link-to-etc/passwd` is refused however the link is
 arranged. Inside the [root jail](#the-root-jail) a path list **narrows**: only
 the named subtrees are reachable. An entry *outside* the jail **adds** that

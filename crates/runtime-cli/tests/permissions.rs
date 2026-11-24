@@ -1186,6 +1186,52 @@ fn a_path_outside_the_jail_is_reachable_only_when_the_command_line_names_it() {
 }
 
 #[test]
+fn a_file_named_on_the_command_line_is_granted_alone() {
+    // D243: `--allow-read=<file>` outside the project was accepted and then
+    // every read of it failed with ERR_NOT_DIRECTORY, and `--allow-write=<file>`
+    // could neither create the file nor write it.
+    let root = scoped_tree("file_grant");
+    let outside = temp("file_grant_outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("site.key"), "KEY").expect("write");
+    std::fs::write(outside.join("other.key"), "OTHER").expect("write");
+    let dir = real(&outside);
+    let key = format!("{dir}/site.key");
+    let log = format!("{dir}/app.log");
+    let in_js = js_path(&dir);
+
+    let code = format!(
+        "import fs from 'runtime:fs'; \
+         console.log((await fs.file('{in_js}/site.key').text()).trim()); \
+         try {{ await fs.file('{in_js}/other.key').text(); console.log('NO THROW'); }} \
+         catch (e) {{ console.log('sibling', e.code); }} \
+         await fs.write('{in_js}/app.log', 'line'); console.log('created'); \
+         try {{ await fs.write('{in_js}/other.log', 'x'); console.log('NO THROW'); }} \
+         catch (e) {{ console.log('sibling', e.code); }}"
+    );
+    let out = run_in(
+        &root,
+        &[
+            "--deny-all",
+            &format!("--allow-read={key}"),
+            &format!("--allow-write={log}"),
+        ],
+        &code,
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "KEY\nsibling ERR_JAIL_ESCAPE\ncreated\nsibling ERR_JAIL_ESCAPE\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join("app.log")).unwrap(),
+        "line"
+    );
+    assert!(!outside.join("other.log").exists());
+}
+
+#[test]
 fn a_granted_read_path_does_not_become_writable() {
     // Two flags, two grants: reading a certificate must never imply the power
     // to replace it.
