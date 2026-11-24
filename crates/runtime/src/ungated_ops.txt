@@ -225,6 +225,7 @@ subtle_hmac_sign
 subtle_hmac_verify
 subtle_pbkdf2
 sync_fs_close
+sync_fs_seek                      # positions a descriptor the agent owns; reads nothing (D251)
 system_close
 system_kill
 system_read

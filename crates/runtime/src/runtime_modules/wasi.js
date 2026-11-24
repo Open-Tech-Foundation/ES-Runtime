@@ -72,10 +72,21 @@ const OFLAGS_TRUNC = 1 << 3;
 /// `fdflags`.
 const FDFLAGS_APPEND = 1 << 0;
 
-/// The rights a write needs. WASI encodes rights as a 64-bit mask; these are the
-/// two bits that decide whether an open is a writing one.
+/// Rights, WASI's 64-bit mask of what a descriptor may do (D251). A descriptor
+/// may do what it was opened with — `fs_rights_base` at `path_open` — and the
+/// host's permissions bound that from outside; neither stands in for the other,
+/// which is how Node's WASI reads them too.
+const RIGHT_FD_READ = 1n << 1n;
+const RIGHT_FD_SEEK = 1n << 2n;
+const RIGHT_FD_TELL = 1n << 5n;
 const RIGHT_FD_WRITE = 1n << 6n;
 const RIGHT_FD_ALLOCATE = 1n << 8n;
+/// Every right preview 1 defines (bits 0–28): what a preopen directory reports,
+/// and so what a guest's libc may ask for beneath it.
+const RIGHTS_ALL = (1n << 29n) - 1n;
+
+/// Whether `entry` was opened with `right`.
+const holds = (entry, right) => (entry.rights & right) !== 0n;
 
 /// The first fd handed to a preopen. 0/1/2 are stdio, so preopens start at 3 —
 /// which is the convention every WASI program's libc assumes.
@@ -204,6 +215,9 @@ export class WASI {
         // A preopened directory has no host handle: it is only ever an anchor
         // for resolving paths, so nothing needs opening until a file is.
         handle: null,
+        // Every right, so a guest's libc may ask beneath it for whatever its
+        // own open asks; the host's permissions bound the result (D251).
+        rights: RIGHTS_ALL,
       });
     }
   }
@@ -472,6 +486,7 @@ export class WASI {
         else {
           const entry = this.#fds.get(fd);
           if (!entry || entry.kind !== "file") return ERRNO.BADF;
+          if (!holds(entry, RIGHT_FD_WRITE)) return ERRNO.NOTCAPABLE;
           try {
             const written = __ops.sync_fs_write(entry.handle, bytes);
             this.#view().setUint32(nwrittenPtr, written, true);
@@ -492,6 +507,7 @@ export class WASI {
         }
         const entry = this.#fds.get(fd);
         if (!entry || entry.kind !== "file") return ERRNO.BADF;
+        if (!holds(entry, RIGHT_FD_READ)) return ERRNO.NOTCAPABLE;
         try {
           // Fill each iovec in turn, stopping at end of file.
           const view = this.#view();
@@ -519,10 +535,15 @@ export class WASI {
         for (let i = 0; i < FDSTAT_SIZE; i++) view.setUint8(statPtr + i, 0);
         if (fd <= 2) {
           view.setUint8(statPtr, FILETYPE_CHARACTER_DEVICE);
+          view.setBigUint64(statPtr + 8, fd === 0 ? RIGHT_FD_READ : RIGHT_FD_WRITE, true);
           return ERRNO.SUCCESS;
         }
         const entry = this.#fds.get(fd);
         if (!entry) return ERRNO.BADF;
+        // What the descriptor may do, as a guest's libc reads it to decide what
+        // to ask for when it opens beneath a directory (D251).
+        view.setBigUint64(statPtr + 8, entry.rights, true);
+        view.setBigUint64(statPtr + 16, entry.kind === "dir" ? RIGHTS_ALL : 0n, true);
         if (entry.kind === "dir") {
           view.setUint8(statPtr, FILETYPE_DIRECTORY);
           return ERRNO.SUCCESS;
@@ -552,9 +573,19 @@ export class WASI {
         if (fd <= 2) return ERRNO.SPIPE;
         const entry = this.#fds.get(fd);
         if (!entry || entry.kind !== "file") return ERRNO.BADF;
+        // WASI's whence: 0 set, 1 cur, 2 end. Anything else is EINVAL.
+        if (whence !== 0 && whence !== 1 && whence !== 2) return ERRNO.INVAL;
+        // A seek needs `fd_seek`; reading the position without moving it —
+        // zero from the current one — is a tell, and `fd_tell` is enough.
+        const tellOnly = whence === 1 && BigInt(offset) === 0n;
+        if (!holds(entry, RIGHT_FD_SEEK) && !(tellOnly && holds(entry, RIGHT_FD_TELL))) {
+          return ERRNO.NOTCAPABLE;
+        }
         try {
-          const pos = __ops.sync_fs_seek(entry.handle, Number(offset), whence);
-          this.#view().setBigUint64(newOffsetPtr, BigInt(pos), true);
+          // A 64-bit `filedelta` arrives as a BigInt and crosses as one: a
+          // Number is exact only to 2^53 (D251).
+          const pos = __ops.sync_fs_seek(entry.handle, BigInt(offset), whence);
+          this.#view().setBigUint64(newOffsetPtr, pos, true);
           return ERRNO.SUCCESS;
         } catch (e) {
           return errnoFor(e);
@@ -564,10 +595,11 @@ export class WASI {
         if (fd <= 2) return ERRNO.SPIPE;
         const entry = this.#fds.get(fd);
         if (!entry || entry.kind !== "file") return ERRNO.BADF;
+        if (!holds(entry, RIGHT_FD_TELL)) return ERRNO.NOTCAPABLE;
         try {
           // Whence 1 (current) with a zero offset reports the position.
-          const pos = __ops.sync_fs_seek(entry.handle, 0, 1);
-          this.#view().setBigUint64(offsetPtr, BigInt(pos), true);
+          const pos = __ops.sync_fs_seek(entry.handle, 0n, 1);
+          this.#view().setBigUint64(offsetPtr, pos, true);
           return ERRNO.SUCCESS;
         } catch (e) {
           return errnoFor(e);
@@ -617,12 +649,16 @@ export class WASI {
         const host = this.#resolve(dirFd, this.#string(pathPtr, pathLen));
         if (host === null) return ERRNO.NOTCAPABLE;
 
+        const rights = BigInt(rightsBase) & RIGHTS_ALL;
         const wantsWrite =
-          (BigInt(rightsBase) & (RIGHT_FD_WRITE | RIGHT_FD_ALLOCATE)) !== 0n ||
+          (rights & (RIGHT_FD_WRITE | RIGHT_FD_ALLOCATE)) !== 0n ||
           (oflags & (OFLAGS_CREAT | OFLAGS_TRUNC)) !== 0;
         const directory = (oflags & OFLAGS_DIRECTORY) !== 0;
         const options = {
-          read: true,
+          // The host file is opened for what the rights ask (D251): a
+          // write-only descriptor is not readable underneath. One asking for
+          // neither still needs a handle, so it is a read-only one.
+          read: (rights & RIGHT_FD_READ) !== 0n || !wantsWrite,
           write: wantsWrite,
           create: (oflags & OFLAGS_CREAT) !== 0,
           createNew: (oflags & OFLAGS_EXCL) !== 0,
@@ -638,7 +674,7 @@ export class WASI {
             const stat = __ops.sync_fs_stat(host);
             if (!stat.isDir) return ERRNO.NOTDIR;
             const fd = this.#nextFd++;
-            this.#fds.set(fd, { kind: "dir", host, handle: null });
+            this.#fds.set(fd, { kind: "dir", host, handle: null, rights: RIGHTS_ALL });
             this.#view().setUint32(openedFdPtr, fd, true);
             return ERRNO.SUCCESS;
           }
@@ -648,7 +684,7 @@ export class WASI {
             ? __ops.sync_fs_open_write(host, options)
             : __ops.sync_fs_open(host, options);
           const fd = this.#nextFd++;
-          this.#fds.set(fd, { kind: "file", host, handle });
+          this.#fds.set(fd, { kind: "file", host, handle, rights });
           this.#view().setUint32(openedFdPtr, fd, true);
           return ERRNO.SUCCESS;
         } catch (e) {

@@ -4104,12 +4104,13 @@ const wasi = new WASI({
 });
 ```
 
-Reaching a file passes **three** independent checks:
+Reaching a file passes **four** independent checks:
 
 | Check | Enforced by | Failure |
 | --- | --- | --- |
 | The preopen maps the path, and it does not climb out of it | `runtime:wasi` | `ENOTCAPABLE` |
-| `FileRead` / `FileWrite` is granted | the host op (D7) | `ENOTCAPABLE` |
+| The descriptor was opened with the right (`fs_rights_base`: `fd_read`, `fd_write`, `fd_seek`, `fd_tell`) | `runtime:wasi` (D251) | `ENOTCAPABLE` |
+| `FileRead` / `FileWrite` is granted — to read or write contents; `fd_seek`/`fd_tell` need neither | the host op (D7) | `ENOTCAPABLE` |
 | The resolved path is inside the root jail | the provider (D25) | `ENOTCAPABLE` |
 
 Preopens are also isolated from each other: `../` out of `/a` cannot reach `/b`,

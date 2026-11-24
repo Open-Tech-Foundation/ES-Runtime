@@ -20,6 +20,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **WASI descriptors do what they were opened with, and seek without a read
+  grant.** `fd_seek` and `fd_tell` required `--allow-read`, so a file opened for
+  writing could not be positioned; offsets past 2^53 were rounded; and a
+  descriptor's rights were ignored — a write-only file could still be read. Now
+  positioning needs no grant, offsets stay 64-bit, an unknown `whence` is
+  `EINVAL`, and `fd_read`/`fd_write`/`fd_seek`/`fd_tell` check the rights given
+  at `path_open` (`ENOTCAPABLE` without), as Node's WASI does. A guest that
+  opened with no rights and then read now gets `ENOTCAPABLE` (D251).
+
 - **`Isolate.prepare(n)` builds exactly `n`, and refuses a count that could
   never fit.** It clamped silently at 10,000 — about 31 GiB, since a prepared
   isolate holds about 3.1 MiB, not the 1.7 MiB documented — so a large count ran

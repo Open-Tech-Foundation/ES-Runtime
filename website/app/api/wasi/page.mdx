@@ -88,13 +88,14 @@ new WASI({ env: { PATH: env.PATH } });
 ## Filesystem
 
 A guest sees only what `preopens` maps in — WASI's own model, and the reason its
-file calls are all relative to a directory fd. Reaching a file passes **three**
+file calls are all relative to a directory fd. Reaching a file passes **four**
 independent checks:
 
 | Check | Enforced by | Failure |
 | --- | --- | --- |
 | The preopen maps the path, and it does not climb out of it | `runtime:wasi` | `ENOTCAPABLE` |
-| `FileRead` / `FileWrite` is granted | the host op | `ENOTCAPABLE` |
+| The descriptor was opened with the right — `fd_read`, `fd_write`, `fd_seek`, `fd_tell` in `path_open`'s `fs_rights_base` — as in Node's WASI | `runtime:wasi` | `ENOTCAPABLE` |
+| `FileRead` / `FileWrite` is granted — to read or write contents; positioning a descriptor (`fd_seek`, `fd_tell`) needs neither | the host op | `ENOTCAPABLE` |
 | The resolved path is inside the [root jail](/docs/internals/filesystem) | the provider | `ENOTCAPABLE` |
 
 Preopens are isolated from each other: `../` out of `/a` cannot reach `/b`, even

@@ -107,23 +107,35 @@ pub(crate) fn install(
         .requires(Capability::FileWrite),
     )?;
 
+    // Seeking moves a descriptor the guest already holds and reports where it
+    // is: it reads nothing and touches no path, so like `close` it carries no
+    // capability, only the ownership check (D251). It was gated on `FileRead`,
+    // so a write-only descriptor could be written but not positioned —
+    // WASI's `fd_seek` and `fd_tell` failed on every file opened for writing.
+    //
+    // The offset and the position are 64-bit (WASI's `filedelta` and
+    // `filesize`), so both cross as BigInt: a JS number is exact only to
+    // 2^53, and a seek past that landed somewhere else.
     let f = fs.clone();
     let owned = fds.clone();
-    engine.register_op(
-        OpDecl::sync("sync_fs_seek", move |args| {
-            let fs = require(&f)?;
-            let fd = owned_fd(&owned, &args)?;
-            let offset = args.get(1).and_then(Value::as_number).unwrap_or(0.0) as i64;
-            let whence = match args.get(2).and_then(Value::as_number).unwrap_or(0.0) as u32 {
-                1 => SyncWhence::Current,
-                2 => SyncWhence::End,
-                _ => SyncWhence::Start,
-            };
-            let pos = fs.seek(fd, offset, whence).map_err(map_err)?;
-            Ok(Value::Number(pos as f64))
-        })
-        .requires(Capability::FileRead),
-    )?;
+    engine.register_op(OpDecl::sync("sync_fs_seek", move |args| {
+        let fs = require(&f)?;
+        let fd = owned_fd(&owned, &args)?;
+        let offset = match args.get(1) {
+            Some(Value::BigInt(n)) => i64::try_from(*n)
+                .map_err(|_| OpError::range_error("sync_fs_seek offset is outside 64 bits"))?,
+            _ => return Err(OpError::type_error("sync_fs_seek expects a BigInt offset")),
+        };
+        let whence = match args.get(2).and_then(Value::as_number) {
+            Some(0.0) => SyncWhence::Start,
+            Some(1.0) => SyncWhence::Current,
+            Some(2.0) => SyncWhence::End,
+            // Not "from the start", as an unknown whence used to mean.
+            _ => return Err(OpError::type_error("sync_fs_seek whence is 0, 1 or 2")),
+        };
+        let pos = fs.seek(fd, offset, whence).map_err(map_err)?;
+        Ok(Value::BigInt(i128::from(pos)))
+    }))?;
 
     // Closing releases a handle the guest already holds; it grants nothing and
     // touches no path, so it carries no capability of its own — only the

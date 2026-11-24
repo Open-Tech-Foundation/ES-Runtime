@@ -344,7 +344,8 @@ assert(w.fd_prestat_get(4, 0) === 8, "one past the last preopen is EBADF");
 
 // Read an existing file.
 const [p, l] = put("greet.txt", 200);
-assert(w.path_open(3, 0, p, l, 0, 0n, 0n, 0, 300) === 0, "path_open for read");
+// A descriptor may do what it is opened with (D251), so each open asks.
+assert(w.path_open(3, 0, p, l, 0, 1n << 1n, 0n, 0, 300) === 0, "path_open for read");
 const fd = dv().getUint32(300, true);
 dv().setUint32(400, 500, true); dv().setUint32(404, 64, true);
 assert(w.fd_read(fd, 400, 1, 408) === 0, "fd_read");
@@ -364,7 +365,7 @@ assert(dv().getUint32(908, true) === wl, "bytes written");
 w.fd_close(wfd);
 
 // Seek and tell agree on the position.
-assert(w.path_open(3, 0, p2, l2, 0, 0n, 0n, 0, 1000) === 0, "reopen");
+assert(w.path_open(3, 0, p2, l2, 0, (1n << 2n) | (1n << 5n), 0n, 0, 1000) === 0, "reopen");
 const sfd = dv().getUint32(1000, true);
 assert(w.fd_seek(sfd, 8, 0, 1008) === 0, "fd_seek");
 assert(dv().getBigUint64(1008, true) === 8n, "seek position");
@@ -412,6 +413,96 @@ console.log("FS OK");
     assert!(stdout(&out).contains("FS OK"), "{}", stdout(&out));
     // The write really landed on disk, not just in the guest's view of it.
     assert!(!dir.join("data/out.txt").exists(), "renamed then unlinked");
+}
+
+/// D251: a descriptor may do what it was opened with, and the host's grants
+/// bound that from outside. Before, `fd_seek`/`fd_tell` demanded the *read*
+/// grant, so a write-only file could not be positioned; a write-only
+/// descriptor could still be read underneath; and a 64-bit offset was rounded
+/// through a JS number. The same program runs under each grant.
+#[test]
+fn descriptor_rights_and_host_grants_each_bound_what_an_fd_may_do() {
+    let dir = workdir("rights");
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    write(&dir, "data/in.txt", b"hello from disk");
+    write(
+        &dir,
+        "main.js",
+        br#"import { WASI } from "runtime:wasi";
+const memory = new WebAssembly.Memory({ initial: 2 });
+const wasi = new WASI({ preopens: { "/s": "./data" } });
+wasi.start({ exports: { memory, _start() {} } });
+const w = wasi.getImportObject().wasi_snapshot_preview1;
+const dv = () => new DataView(memory.buffer), u8 = () => new Uint8Array(memory.buffer);
+const put = (s, at) => { const b = new TextEncoder().encode(s); u8().set(b, at); return [at, b.length]; };
+const READ = 1n << 1n, SEEK = 1n << 2n, TELL = 1n << 5n, WRITE = 1n << 6n, CREAT = 1, TRUNC = 8;
+const out = [];
+const iov = (at, buf, len) => { dv().setUint32(at, buf, true); dv().setUint32(at + 4, len, true); };
+
+const [ip, il] = put("in.txt", 100);
+const r = w.path_open(3, 0, ip, il, 0, READ | SEEK | TELL, 0n, 0, 200);
+out.push("open-r " + r);
+if (r === 0) {
+  const fd = dv().getUint32(200, true);
+  iov(300, 400, 32);
+  const [xp, xl] = put("x", 500); iov(600, xp, xl);
+  out.push("read " + w.fd_read(fd, 300, 1, 308), "seek " + w.fd_seek(fd, 6n, 0, 312),
+    "tell " + w.fd_tell(fd, 320) + ":" + dv().getBigUint64(320, true),
+    "write-on-r " + w.fd_write(fd, 600, 1, 608));
+  w.fd_close(fd);
+}
+
+const [op, ol] = put("out.txt", 700);
+const o = w.path_open(3, 0, op, ol, CREAT | TRUNC, WRITE | SEEK | TELL, 0n, 0, 800);
+out.push("open-w " + o);
+if (o === 0) {
+  const fd = dv().getUint32(800, true);
+  const [wp, wl] = put("written", 900); iov(1000, wp, wl); iov(1100, 1200, 8);
+  out.push("write " + w.fd_write(fd, 1000, 1, 1008), "seek " + w.fd_seek(fd, 2n, 0, 1016),
+    "tell " + w.fd_tell(fd, 1024) + ":" + dv().getBigUint64(1024, true),
+    "big " + w.fd_seek(fd, (1n << 53n) + 1n, 0, 1032) + ":" + dv().getBigUint64(1032, true),
+    "whence " + w.fd_seek(fd, 0n, 7, 1040), "read-on-w " + w.fd_read(fd, 1100, 1, 1108));
+  w.fd_close(fd);
+}
+
+// Opened for writing alone: no seek right, but a tell (seek 0 from current)
+// is still one.
+const t = w.path_open(3, 0, op, ol, 0, WRITE | TELL, 0n, 0, 1300);
+if (t === 0) {
+  const fd = dv().getUint32(1300, true);
+  out.push("seek-no-right " + w.fd_seek(fd, 1n, 0, 1308), "seek-as-tell " + w.fd_seek(fd, 0n, 1, 1316));
+  w.fd_close(fd);
+}
+console.log(out.join(" | "));
+"#,
+    );
+    let run_with = |grants: &[&str]| {
+        let out = Command::new(common::esrun_bin())
+            .args(grants)
+            .current_dir(&dir)
+            .arg("main.js")
+            .output()
+            .expect("spawn esrun");
+        let _ = std::fs::remove_file(dir.join("data/out.txt"));
+        assert!(out.status.success(), "{grants:?}: {}", stderr(&out));
+        stdout(&out).trim().to_string()
+    };
+    // EBADF 8, EINVAL 28, ENOTCAPABLE 76.
+    assert_eq!(
+        run_with(&["--allow-write"]),
+        "open-r 76 | open-w 0 | write 0 | seek 0 | tell 0:2 | big 0:9007199254740993 | \
+         whence 28 | read-on-w 76 | seek-no-right 76 | seek-as-tell 0"
+    );
+    assert_eq!(
+        run_with(&["--allow-read"]),
+        "open-r 0 | read 0 | seek 0 | tell 0:6 | write-on-r 76 | open-w 76"
+    );
+    assert_eq!(
+        run_with(&["--allow-read", "--allow-write"]),
+        "open-r 0 | read 0 | seek 0 | tell 0:6 | write-on-r 76 | open-w 0 | write 0 | seek 0 | \
+         tell 0:2 | big 0:9007199254740993 | whence 28 | read-on-w 76 | seek-no-right 76 | \
+         seek-as-tell 0"
+    );
 }
 
 /// Without preopens a guest has no filesystem at all, however the host is
@@ -538,7 +629,8 @@ while (Date.now() < deadline) {
   // burst sees one state and the swap lands between bursts.
   for (let i = 0; i < 10000; i++) {
     const l = put("dir/target", 1000);
-    if (w.path_open(3, 0, 1000, l, 0, 0n, 0n, 0, 2000) !== 0) { denied++; continue; }
+    // Opened for reading, which a descriptor may do only when it asks (D251).
+    if (w.path_open(3, 0, 1000, l, 0, 1n << 1n, 0n, 0, 2000) !== 0) { denied++; continue; }
     const fd = dv().getUint32(2000, true);
     dv().setUint32(2100, 2200, true);
     dv().setUint32(2104, 64, true);
