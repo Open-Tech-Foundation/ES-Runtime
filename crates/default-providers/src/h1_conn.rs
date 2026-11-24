@@ -104,6 +104,45 @@ where
             }
         };
 
+        // ---- CONNECT: answered here, and the connection closed (D242) -------
+        // A 2xx to CONNECT says a tunnel is open (RFC 9110 §9.3.6), and this
+        // server opens none, so the guest never sees one to answer. Closing
+        // matters as much as the status: what a client sends after CONNECT is
+        // tunnel bytes, and parsing them as the next request is how a request
+        // gets smuggled past a proxy that took the CONNECT at its word.
+        // Authority form is the only form CONNECT may take, and only CONNECT
+        // may take it (the parser enforces both).
+        if head.target_form == TargetForm::Authority {
+            let _ = write_error(&mut wr, 501).await;
+            let _ = wr.shutdown().await;
+            return;
+        }
+        // ---- `OPTIONS *`: about the server, answered by it (D242) ----------
+        // Asterisk form asks about the server as a whole, not a resource (RFC
+        // 9110 §9.3.7), and `*` is no URL path, so a handler could only be
+        // handed one the client never sent. The server answers 204, and keeps
+        // the connection when nothing follows the head; a body it would have
+        // to read past is not worth reading for a no-op, so then it closes.
+        if head.target_form == TargetForm::Asterisk {
+            let keep = head.body == Body::Empty && head.keep_alive;
+            let mut out = Vec::with_capacity(96);
+            encode_response_head(
+                &mut out,
+                204,
+                std::iter::empty(),
+                Framing::NoBody,
+                &date(),
+                keep,
+            )
+            .expect("a fixed head is valid");
+            if wr.write_all(&out).await.is_err() || wr.flush().await.is_err() || !keep {
+                let _ = wr.shutdown().await;
+                return;
+            }
+            buf.drain(..head.len);
+            continue;
+        }
+
         // ---- the request, to the guest ------------------------------------
         let method = String::from_utf8_lossy(head.method.of(&buf)).into_owned();
         let is_head = method == "HEAD";

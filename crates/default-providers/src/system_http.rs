@@ -1040,6 +1040,19 @@ mod tests {
                 .unwrap();
             send.send_request(request).await.map(Reply)
         }
+
+        /// A `CONNECT` for `authority` — the one request with no `:scheme` or
+        /// `:path`.
+        pub(super) async fn tunnel(&self, authority: &str) -> Result<Reply, hyper::Error> {
+            let mut send = self.send.clone();
+            send.ready().await?;
+            let request = hyper::Request::builder()
+                .method("CONNECT")
+                .uri(authority)
+                .body(http_body_util::Full::new(bytes::Bytes::new()))
+                .unwrap();
+            send.send_request(request).await.map(Reply)
+        }
     }
 
     /// A response from [`H2c`].
@@ -1669,6 +1682,28 @@ mod http2_tests {
     /// A cleartext port serves an HTTP/2 client that opens with the connection
     /// preface (prior knowledge, h2c) — the version detection is the accepted
     /// stream's own bytes, with no ALPN to consult and no upgrade dance.
+    /// D242, on HTTP/2: CONNECT is answered 501 on its own stream before the
+    /// guest, and the connection serves the next request as usual.
+    #[tokio::test]
+    async fn an_h2_connect_is_501_and_the_connection_carries_on() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = H2c::connect(port).await;
+        let refused = client.tunnel("evil.example:443").await.expect("answered");
+        assert_eq!(refused.status(), hyper::StatusCode::NOT_IMPLEMENTED);
+        let none = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            http.next_requests(id, 8),
+        )
+        .await;
+        assert!(none.is_err(), "CONNECT must not reach the guest");
+
+        let next = tokio::spawn(async move { client.get("/after").await.unwrap().text().await });
+        let (rid, req) = http.next_requests(id, 8).await.unwrap().remove(0);
+        assert!(req.url.ends_with("/after"), "{}", req.url);
+        ok(&http, rid, "still serving").await;
+        assert_eq!(next.await.unwrap().unwrap(), "still serving");
+    }
+
     #[tokio::test]
     async fn serves_h2c_on_a_cleartext_port_by_prior_knowledge() {
         let (http, id, port) = super::tests::bound_with(None).await;
@@ -2683,6 +2718,61 @@ mod h1_tests {
             "{got}"
         );
         assert!(got.contains("connection: close\r\n"), "{got}");
+        http.close(id).await.unwrap();
+    }
+
+    /// D242: CONNECT asks for a tunnel this server never opens, so it is
+    /// answered 501 before the guest and the connection is closed — the bytes
+    /// after it are the client's tunnel, and serving them as a second request
+    /// is the smuggling shape. It was handed to the guest, answered 200, and
+    /// the `GET /admin` behind it was served too.
+    #[tokio::test]
+    async fn connect_is_501_closed_and_never_reaches_the_guest() {
+        let (http, id, port) = bound().await;
+        let got = raw(
+            port,
+            b"CONNECT evil.example:443 HTTP/1.1\r\nHost: evil.example:443\r\n\r\n\
+              GET /admin HTTP/1.1\r\nHost: a\r\n\r\n",
+        )
+        .await;
+        assert!(got.starts_with("HTTP/1.1 501 Not Implemented\r\n"), "{got}");
+        assert_eq!(
+            got.matches("HTTP/1.1 ").count(),
+            1,
+            "one answer only: {got}"
+        );
+        let none =
+            tokio::time::timeout(Duration::from_millis(100), http.next_requests(id, 8)).await;
+        assert!(none.is_err(), "neither request may reach the guest");
+        http.close(id).await.unwrap();
+    }
+
+    /// D242: `OPTIONS *` is about the server, and `*` is no URL path; the
+    /// server answers it 204 with no framing field, keeps the connection, and
+    /// the request after it reaches the guest as usual. It was handed to the
+    /// guest as `http://a*`.
+    #[tokio::test]
+    async fn options_asterisk_is_answered_204_by_the_server() {
+        let (http, id, port) = bound().await;
+        let client = tokio::spawn(raw(
+            port,
+            b"OPTIONS * HTTP/1.1\r\nHost: a\r\n\r\nGET /next HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n",
+        ));
+        let (rid, req) = http.next_requests(id, 8).await.unwrap().remove(0);
+        assert!(
+            req.url.ends_with("/next"),
+            "only the second reaches the guest: {}",
+            req.url
+        );
+        http.respond(rid, text(200, "next")).await.unwrap();
+        let got = client.await.unwrap();
+        assert!(got.starts_with("HTTP/1.1 204 No Content\r\n"), "{got}");
+        let first = &got[..got.find("\r\n\r\n").unwrap()];
+        assert!(
+            !first.to_ascii_lowercase().contains("content-length"),
+            "{first}"
+        );
+        assert!(got.ends_with("next"), "{got}");
         http.close(id).await.unwrap();
     }
 

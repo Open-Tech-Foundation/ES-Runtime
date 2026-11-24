@@ -2529,8 +2529,12 @@ closed; the handler never sees it.
 | `414` | A request-target longer than 65,534 bytes. |
 | `417` | An `Expect` other than `100-continue`. |
 | `431` | More than 100 header lines, or a head larger than the server's buffer. |
-| `501` | A transfer coding under `chunked` other than `chunked` itself (`gzip, chunked`). |
+| `501` | A transfer coding under `chunked` other than `chunked` itself (`gzip, chunked`); `CONNECT`, on HTTP/2 too, since the server opens no tunnel. |
 | `505` | Any version but HTTP/1.1 (and HTTP/2, chosen as above). |
+
+`OPTIONS *` asks about the server rather than a resource, and `*` is no URL
+path, so the server answers it `204` itself, on either version, and the
+connection carries on.
 
 Behind nginx before 1.29.7, set `proxy_http_version 1.1;` — older releases
 speak HTTP/1.0 to upstreams by default.

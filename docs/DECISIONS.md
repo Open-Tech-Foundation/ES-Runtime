@@ -5045,3 +5045,15 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 - **Capping PBKDF2 iterations** — WebCrypto sets no cap, and the cost of a legitimate derive is the caller's choice.
 
 **Consequences:** a timeout or a signal stops a program during any of these promptly, and heavy asymmetric operations run in parallel across the pool (ECDSA verify 4k → 34k a second with 64 in flight). **Not covered:** a single synchronous native call — `hash()` of a large buffer, one compression chunk, `archive` building — still runs to its end before a stop lands; the CLI page says so. ECDSA verify itself is 3–4× slower than Node's and Bun's — RustCrypto's P-256, unchanged here.
+
+### D242 — The server answers `CONNECT` (501) and `OPTIONS *` (204) itself · *Accepted (2026-11-24)*
+
+**Context:** reported, and reproduced against `runtime:http`. `CONNECT evil.example:443` reached the handler as `CONNECT http://evil.example:443/` and was answered `200 OK`; a `GET /admin` sent after it on the same connection was then parsed and served as a second request. RFC 9110 §9.3.6 forbids a 2xx to `CONNECT` unless a tunnel is open, and this server opens none: a front proxy that reads the 200 as "tunnel established" forwards the client's raw bytes, which this server then parsed as requests — the request-smuggling shape. Separately, `OPTIONS * HTTP/1.1` (asterisk form, RFC 9112 §3.2.4) reached the handler as `http://x*`: `*` is no URL path, so the handler could only be handed a URL the client never sent.
+
+**Decision (maintainer, 2026-11-24):**
+- **`CONNECT` is answered `501 Not Implemented` before the guest,** and on HTTP/1.1 the connection is closed: what follows a `CONNECT` is tunnel data, never the next request. On HTTP/2 the stream is refused alone and the connection carries on. Extended `CONNECT` (RFC 8441) is not involved — the HTTP/2 decoder refuses a `CONNECT` with `:scheme` or `:path`, so the plain form is the only one that arrives.
+- **`OPTIONS *` is answered `204 No Content` by the server,** with no framing field (RFC 9110 §8.6), as the no-op RFC 9110 §9.3.7 describes. On HTTP/1.1 the connection is kept when nothing follows the head, and closed when a body would have to be read past. HTTP/2's `:path` of `*` gets the same answer.
+
+**Rejected:** `405` for `CONNECT` — it needs an `Allow` listing the methods the server supports, which the handler, not the runtime, decides. `400` for `OPTIONS *` — it refuses a request HTTP allows, and load-balancer probes send it. A guest opt-in to tunnelling — no use case yet; a proxy written on `runtime:net` sees raw bytes already.
+
+**Consequences:** neither request reaches a handler. Verified by three provider tests over real sockets: an HTTP/1.1 `CONNECT` with a request behind it (one `501`, nothing reaching the guest, the connection closed), an HTTP/2 `CONNECT` followed by an ordinary request on the same connection, and `OPTIONS *` followed by a request the guest serves. HTTP/2 `OPTIONS *` is not covered by a test: hyper's client, which the h2 tests use, builds absolute request URIs and cannot send a bare `*`.

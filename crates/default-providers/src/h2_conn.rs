@@ -386,6 +386,19 @@ impl Driver {
         end_stream: bool,
         ctx: &mut ConnContext,
     ) {
+        // CONNECT asks for a tunnel this server does not open (D242), so it is
+        // answered here and never reaches the guest. On HTTP/2 the stream is
+        // its own frame of reference: refusing it ends that stream alone.
+        if pseudo.method.as_deref() == Some(b"CONNECT") {
+            self.refuse(stream, b"501", end_stream);
+            return;
+        }
+        // `OPTIONS *` (`:path` of `*`, RFC 9113 §8.3.1) asks about the server,
+        // and `*` is no URL path: the server answers it, as on HTTP/1.1.
+        if pseudo.method.as_deref() == Some(b"OPTIONS") && pseudo.path.as_deref() == Some(b"*") {
+            self.refuse(stream, b"204", end_stream);
+            return;
+        }
         let host = fields
             .iter()
             .find(|(n, _)| n == b"host")

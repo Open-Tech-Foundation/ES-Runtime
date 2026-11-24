@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`runtime:http` answers `CONNECT` with `501` and `OPTIONS *` with `204`
+  itself.** A `CONNECT` reached the handler, was usually answered `200` — which
+  tells a proxy a tunnel is open — and the bytes after it were served as the
+  next request: the request-smuggling shape. It is now refused before the
+  handler, and an HTTP/1.1 connection is closed after it. `OPTIONS *` reached
+  the handler as `http://host*`; the server now answers it and keeps the
+  connection (D242).
+
 - **`--timeout` and a signal stop a program during a long `crypto.subtle` or
   password-hashing call.** PBKDF2, RSA key generation, bcrypt and the rest ran
   on the thread that sees the watchdog and `SIGTERM`, so a 300 ms timeout landed
