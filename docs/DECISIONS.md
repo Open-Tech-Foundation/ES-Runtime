@@ -5091,3 +5091,9 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Decision (maintainer, 2026-11-25):** `exit()` inside an isolate throws a `TypeError` — "exit() is process control, and an isolate is computation only: return from the exported function, or throw" — like every other refusal there. The isolate keeps running; a top-level `exit()` fails the module with that error, which `exports` rejects with and `onerror` reports. The docs now also say what was always true of `env` inside an isolate: it is empty, not refused (D227's "no environment").
 
 **Rejected:** a distinct `ERR_ISOLATE_EXITED` outcome carrying the code — it gives an isolate a way to end itself that D227 decided it should not have.
+
+### D246 — Starting a worker names `workers` first, and no flag inside an isolate · *Accepted (2026-11-25)*
+
+**Context:** reported. `new Worker(url)` inside an `Isolate` failed with "reading its module needs the "imports" permission — add --allow-imports", followed by the isolate's own note. Inside an isolate no flag can help, and the missing grant that matters is `workers`, not the read: `worker_spawn` checked `imports` before `workers`, so with neither held the read was named.
+
+**Decision:** `workers` is checked first — it is the act being refused — so a run holding neither grant (`--deny-all`, or any isolate) is told about it first; the imports requirement is unchanged and reported when `workers` is held. Inside an isolate the refusal carries the isolate's note ("an isolate is computation only; pass it what it needs through a host function") and no `--allow-*` suggestion.

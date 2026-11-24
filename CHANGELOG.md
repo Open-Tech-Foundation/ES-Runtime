@@ -13,6 +13,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Starting a `Worker` without the grants names `workers` first, and inside
+  an `Isolate` names no flag.** With neither `workers` nor `imports` the refusal
+  said to add `--allow-imports`; inside an isolate, where no flag applies, it
+  said the same. It now names `workers`, the act being refused, and inside an
+  isolate gives the isolate's own note (D246).
+
 - **An `Isolate` asked for more memory than its parent says "an isolate".** The
   check is shared with `Worker`, and its `TypeError` named "a worker".
 

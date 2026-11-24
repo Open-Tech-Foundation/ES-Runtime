@@ -524,6 +524,34 @@ fn unbudgeted_spinners_cannot_starve_the_pool() {
     assert_eq!(lines(&out), ["hi 24", "1 ERR_ISOLATE_CPU_LIMIT"]);
 }
 
+/// D246: a `Worker` started inside an isolate is refused with the isolate's
+/// own note. It said "add --allow-imports", a flag that can do nothing there,
+/// naming the read before the start.
+#[test]
+fn a_worker_started_in_an_isolate_names_no_flag() {
+    let out = run(
+        "isolate-worker",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const iso = new Isolate({ source: `
+          export function start() {
+            return new Promise((resolve) => {
+              const w = new Worker("data:text/javascript,1");
+              w.onerror = (e) => { e.preventDefault(); resolve(e.message); };
+            });
+          }
+        ` });
+        const message = await (await iso.exports).start();
+        console.log(/computation only/.test(message), /--allow-/.test(message), /"workers"|workers/.test(message));
+        iso.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["true false true"]);
+}
+
 /// D245: process control is not an isolate's. `exit()` used to end the
 /// isolate silently, the code dropped and the parent told only that it "has
 /// ended"; now it throws, inside the isolate, like every other refusal there.

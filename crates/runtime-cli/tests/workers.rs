@@ -682,6 +682,27 @@ fn a_bad_memory_option_throws_from_the_constructor() {
     );
 }
 
+/// D246: with neither grant, the refusal names `workers` — the act being
+/// refused — rather than the read that comes with it.
+#[test]
+fn granting_neither_names_workers_first() {
+    let out = run(
+        "neither",
+        r#"postMessage("should never run");"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onerror = (e) => { console.log("refused:", e.message); e.preventDefault(); };
+        "#,
+        &["--deny-all"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains(r#"starting it needs the "workers" permission — add --allow-workers"#),
+        "stdout: {out}"
+    );
+}
+
 #[test]
 fn granting_only_imports_says_workers_is_what_starting_one_needs() {
     // The other half of the pair below: the entry reads, and starting it is

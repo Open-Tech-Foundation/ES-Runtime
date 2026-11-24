@@ -181,10 +181,12 @@ fn install_parent(
             })
         })
         // Both: reading the entry is an import, on the parent's authority,
-        // and starting it is the `workers` grant. In that order, which is the
-        // order the two refusals were reported in when they were two ops.
-        .requires(Capability::FileSystem)
-        .requires(Capability::Worker),
+        // and starting it is the `workers` grant. `workers` first: it is the
+        // act being refused, so with neither grant it is the one named — and
+        // inside an isolate, which can hold neither, the other order sent the
+        // reader to `--allow-imports` (D246).
+        .requires(Capability::Worker)
+        .requires(Capability::FileSystem),
     )?;
 
     // `worker_ref(delta)`: Node's handle ref-counting. A referenced `Worker` is

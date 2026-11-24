@@ -100,6 +100,11 @@
     // start it. Each is said as what it is for.
     const needs =
       permission === "workers" ? "starting it needs" : "reading its module needs";
+    // Inside an isolate no grant exists to add: the refusal's own note says
+    // what to do instead, and a flag would point at nothing (D246).
+    if (scope?.isolate === true) {
+      return { ...failure, message: `cannot start a worker from ${url}: ${denial}` };
+    }
     return {
       ...failure,
       message:
