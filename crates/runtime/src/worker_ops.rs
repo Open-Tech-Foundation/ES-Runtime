@@ -172,7 +172,7 @@ fn install_parent(
                     // the parent had, and used, to read the entry source above),
                     // then narrowed before a line of the worker runs.
                     load_capabilities: load_capabilities(parent),
-                    limits: worker_limits(parent_limits, memory_mb)?,
+                    limits: worker_limits(parent_limits, memory_mb, "a worker")?,
                     isolate: false,
                     cpu_time_ms: None,
                 };
@@ -491,7 +491,7 @@ fn isolate_limits(
     parent: es_runtime_common::Limits,
     memory_mb: u64,
 ) -> std::result::Result<es_runtime_common::Limits, OpError> {
-    let limits = worker_limits(parent, memory_mb)?.with_can_block(false);
+    let limits = worker_limits(parent, memory_mb, "an isolate")?.with_can_block(false);
     Ok(match limits.heap_limit_bytes {
         Some(bytes) if memory_mb > 0 => limits.with_buffer_limit_bytes(bytes),
         _ => limits,
@@ -587,9 +587,12 @@ fn load_capabilities(parent: CapabilitySet) -> CapabilitySet {
 /// `permissions` cannot widen either, and a limit a child could raise is not a
 /// limit. A parent sized from the host has no fixed number to compare against,
 /// so any request there is honoured — it is a narrowing by construction.
+/// `agent` names what is being started — "a worker" or "an isolate" — for the
+/// one message a caller can get from here.
 fn worker_limits(
     parent: es_runtime_common::Limits,
     memory_mb: u64,
+    agent: &str,
 ) -> std::result::Result<es_runtime_common::Limits, OpError> {
     // A worker owns its thread, so parking it in `Atomics.wait` is what the call
     // is for — unlike on the agent driving the loop, where it is a hang. This is
@@ -606,7 +609,7 @@ fn worker_limits(
         return Err(OpError::new(
             ExceptionClass::TypeError,
             format!(
-                "a worker cannot be given more memory than the agent starting it: \
+                "{agent} cannot be given more memory than the agent starting it: \
                  asked for {memory_mb}MB, this agent's own limit is {}MB",
                 ceiling / (1024 * 1024)
             ),
@@ -1018,6 +1021,17 @@ mod tests {
         .expect("a spec with no memory request")
     }
 
+    /// An isolate asked for more than its parent's ceiling is told it is an
+    /// isolate: the check is shared with `Worker`, and named it "a worker".
+    #[test]
+    fn an_isolate_over_its_parents_ceiling_is_named_an_isolate() {
+        let parent = Limits::default().with_heap_limit_bytes(32 * MB);
+        let err = isolate_limits(parent, 64).expect_err("64MB is over 32MB");
+        assert!(err.to_string().starts_with("an isolate cannot"), "{err}");
+        let err = worker_limits(parent, 64, "a worker").expect_err("64MB is over 32MB");
+        assert!(err.to_string().starts_with("a worker cannot"), "{err}");
+    }
+
     /// D237: an isolate that asks for no budget still gets one, because its
     /// pool thread is shared and an unbounded turn would starve the others.
     #[test]
@@ -1042,7 +1056,7 @@ mod tests {
     #[test]
     fn a_worker_inherits_its_parents_ceiling() {
         let parent = Limits::default().with_heap_limit_bytes(32 * MB);
-        let child = worker_limits(parent, 0).expect("no request to refuse");
+        let child = worker_limits(parent, 0, "a worker").expect("no request to refuse");
         assert_eq!(child.heap_limit_bytes, Some(32 * MB));
     }
 
@@ -1052,13 +1066,17 @@ mod tests {
     fn a_worker_may_block_even_though_its_parent_may_not() {
         let parent = Limits::default();
         assert!(!parent.can_block);
-        assert!(worker_limits(parent, 0).expect("no request").can_block);
+        assert!(
+            worker_limits(parent, 0, "a worker")
+                .expect("no request")
+                .can_block
+        );
     }
 
     #[test]
     fn a_smaller_request_is_honoured() {
         let parent = Limits::default().with_heap_limit_bytes(256 * MB);
-        let child = worker_limits(parent, 64).expect("64MB is under 256MB");
+        let child = worker_limits(parent, 64, "a worker").expect("64MB is under 256MB");
         assert_eq!(child.heap_limit_bytes, Some(64 * MB));
     }
 
@@ -1066,7 +1084,7 @@ mod tests {
     #[test]
     fn a_larger_request_is_refused() {
         let parent = Limits::default().with_heap_limit_bytes(64 * MB);
-        let err = worker_limits(parent, 256).expect_err("256MB is over 64MB");
+        let err = worker_limits(parent, 256, "a worker").expect_err("256MB is over 64MB");
         assert!(err.to_string().contains("asked for 256MB"), "{err}");
         assert!(err.to_string().contains("is 64MB"), "{err}");
     }
@@ -1076,7 +1094,7 @@ mod tests {
     #[test]
     fn any_request_narrows_a_host_sized_parent() {
         let parent = Limits::default().with_system_heap_limit();
-        let child = worker_limits(parent, 512).expect("nothing to exceed");
+        let child = worker_limits(parent, 512, "a worker").expect("nothing to exceed");
         assert_eq!(child.heap_limit_bytes, Some(512 * MB));
     }
 }

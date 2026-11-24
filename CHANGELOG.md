@@ -13,6 +13,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An `Isolate` asked for more memory than its parent says "an isolate".** The
+  check is shared with `Worker`, and its `TypeError` named "a worker".
+
 - **`exit()` inside an `Isolate` throws instead of ending it silently.** The
   exit code was dropped and the parent saw only "the isolate has ended", so a
   plugin that finished with `exit(0)` looked like a crash. It is now a
