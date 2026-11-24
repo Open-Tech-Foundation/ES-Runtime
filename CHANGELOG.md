@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Flags in the wrong place are refused, and hints name flags that exist.**
+  `esrun app.js --otel=<url>` ran with telemetry off and passed the URL to the
+  program; `--otel`, `--otel-service`, `--otel-min-duration` and
+  `--otel-sample` after the script are now refused like every other esrun flag.
+  `esrun --allow-all missing.js` no longer suggests `--allow-all=missing.js`,
+  and `--deny-imports=x` no longer suggests `--allow-imports=<list>` — both
+  flags are refused. `esrun --` says what `--` is for, and `--help` lists all
+  eleven permission names (D244).
+
 - **`--allow-read`/`--allow-write` with a file outside the project grant that
   file.** `--allow-read=/etc/ssl/private/site.key` was accepted and then every
   read failed with `ERR_NOT_DIRECTORY`; `--allow-write=/var/log/app.log` refused

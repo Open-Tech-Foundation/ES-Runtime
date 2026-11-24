@@ -58,10 +58,11 @@ USAGE:
     esrun -v, -V, --version     Show the version
 
 PERMISSIONS:
-    --allow-<name>[=<list>]     Grant one capability, optionally narrowed to a
-                                comma-separated list; repeatable. <name> is one
+    --allow-<name>              Grant one capability; repeatable. <name> is one
                                 of: read, write, imports, net, listen, env, run,
-                                signals, workers
+                                signals, workers, diagnostics, diagnostics-detail
+    --allow-<name>=<list>       ...narrowed to a comma-separated list, for read,
+                                write, net, listen, env, run and signals
     -A, --allow-all             Grant every capability (unsandboxed)
     --deny-<name>               Take one back; requires --allow-all; repeatable
     --deny-all                  Grant nothing — the default, said outright
@@ -133,7 +134,9 @@ fn parse_args() -> Result<Config, String> {
         // One grammar for every flag: `--flag` or `--flag=value`. Splitting here,
         // once, is what makes that true — no arm reaches for the next argument.
         let (flag, value) = split_flag_value(&arg);
-        if flag.starts_with('-') && flag.len() > 1 {
+        // Only a flag written bare: `--allow-net=db:5432 app.js` already has
+        // its value, so the word after it is not a misplaced one.
+        if flag.starts_with('-') && flag.len() > 1 && value.is_none() {
             previous_flag = Some(flag.to_string());
         }
         // Shared first, so esrun can never disagree with esdev about what a
@@ -220,6 +223,16 @@ fn parse_args() -> Result<Config, String> {
                     on_start: None,
                 });
             }
+            // `--` before any script: it separates a script's own arguments
+            // from esrun's flags, so there is nothing yet for it to separate.
+            "--" => {
+                return Err(
+                    "`--` comes after the script, to pass the script arguments that \
+                     look like esrun flags: `esrun app.js -- --timeout=5`. There is no script \
+                     before it here."
+                        .to_string(),
+                );
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
             }
@@ -229,7 +242,10 @@ fn parse_args() -> Result<Config, String> {
                 // a value to whoever typed it, and would otherwise run
                 // `example.com` as the script with `app.js` as its argument — a
                 // "cannot read" three steps from the cause. Say what happened.
+                // Only for a flag that takes a value at all: suggesting
+                // `--allow-all=app.js` names a flag this parser refuses (D244).
                 if let Some(flag) = preceding_flag
+                    && takes_value(&flag)
                     && !std::path::Path::new(path).exists()
                 {
                     return Err(format!(
@@ -278,6 +294,15 @@ fn parse_args() -> Result<Config, String> {
         }
     }
     Err(format!("missing script argument\n\n{USAGE}"))
+}
+
+/// Whether `flag` takes a value, so that a bare word after it may have been
+/// meant as one. Asked of the parsers that own each flag rather than listed.
+fn takes_value(flag: &str) -> bool {
+    if RunOptions::is_shared_flag(flag) {
+        return RunOptions::accepts_value(flag);
+    }
+    matches!(flag, "-e" | "--eval") || Permissions::accepts_value(flag)
 }
 
 /// Whether `flag` is one esrun itself understands.
@@ -368,6 +393,76 @@ async fn run() -> ExitCode {
             print_error(err.message());
             // `1` for a failure, `124` for a run `--timeout` stopped.
             ExitCode::from(err.exit_code())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D244: the "attach it with '='" hint is for a flag that takes a value.
+    /// It was offered after any flag, so `esrun --allow-all app.js` with a
+    /// missing file suggested `--allow-all=app.js`, which is refused.
+    #[test]
+    fn only_a_flag_with_a_value_form_takes_a_value() {
+        for flag in [
+            "--timeout",
+            "--max-heap",
+            "--env-file",
+            "--otel",
+            "--allow-net",
+            "--allow-read",
+            "--allow-signals",
+            "-e",
+        ] {
+            assert!(takes_value(flag), "{flag}");
+        }
+        for flag in [
+            "--allow-all",
+            "-A",
+            "--deny-all",
+            "--deny-net",
+            "--allow-imports",
+            "--allow-workers",
+            "--allow-diagnostics",
+            "--env-override",
+            "--help",
+        ] {
+            assert!(!takes_value(flag), "{flag}");
+        }
+    }
+
+    /// D244: an `--otel*` flag after the script is refused like every other
+    /// esrun flag there, instead of becoming the program's argument.
+    #[test]
+    fn an_otel_flag_after_the_script_is_refused() {
+        for flag in [
+            "--otel=http://x:4318",
+            "--otel-service=api",
+            "--otel-sample=0.5",
+        ] {
+            let err = reject_esrun_flags_after_source(&[flag.to_string()], "app.js").unwrap_err();
+            assert!(err.contains("appears after app.js"), "{flag}: {err}");
+        }
+        let after_separator = ["--".to_string(), "--otel=http://x:4318".to_string()];
+        assert!(reject_esrun_flags_after_source(&after_separator, "app.js").is_ok());
+    }
+
+    /// The help names every permission, from the vocabulary it is part of.
+    #[test]
+    fn the_usage_names_every_permission() {
+        let usage = USAGE.split_whitespace().collect::<Vec<_>>().join(" ");
+        for name in es_runtime_common::Capability::HOST_FACING
+            .into_iter()
+            .filter_map(es_runtime_common::Capability::flag_name)
+        {
+            assert!(
+                usage.contains(&format!(" {name},"))
+                    || usage.contains(&format!(" {name}\n"))
+                    || usage.contains(&format!(" {name} ")),
+                "--help does not name {name}"
+            );
         }
     }
 }

@@ -28,6 +28,10 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **An `--otel*` flag after the program is refused,** as every other run flag
+  there is, instead of being passed to the program; `esdev start --otel` says
+  it shapes a single run rather than "unknown option" (D244).
+
 - **`--timeout` and `^C` stop a program during a long `crypto.subtle` or
   password-hashing call** — they now run on the blocking pool (runtime D241).
 

@@ -746,7 +746,9 @@ fn parse_args() -> Result<Command, String> {
     while let Some(arg) = args.next() {
         let preceding_flag = previous_flag.take();
         let (flag, value) = split_flag_value(&arg);
-        if flag.starts_with('-') && flag.len() > 1 {
+        // Only a flag written bare: one that has its value already is not
+        // waiting for the next word (D244).
+        if flag.starts_with('-') && flag.len() > 1 && value.is_none() {
             previous_flag = Some(flag.to_string());
         }
         if options.try_flag(flag, value)? || try_permission_flag(&mut permissions, flag, value)? {
@@ -829,6 +831,7 @@ fn parse_args() -> Result<Command, String> {
                 // otherwise run `example.com` as the script — a "cannot read"
                 // three steps from the cause. Say what happened.
                 if let Some(flag) = preceding_flag
+                    && takes_value(&flag)
                     && !std::path::Path::new(path).exists()
                 {
                     return Err(format!(
@@ -885,6 +888,19 @@ fn permission_trace(tracing: bool, entry: &str) -> Option<es_runtime_cli_common:
         std::sync::Arc::new(PermissionTrace::new(entry.to_string()))
             as es_runtime_cli_common::SharedObserver
     })
+}
+
+/// Whether `flag` takes a value, so that a bare word after it may have been
+/// meant as one (D244). The shared and permission flags are asked of their own
+/// parsers; esdev's own are the ones its parser above reads a value for.
+fn takes_value(flag: &str) -> bool {
+    if RunOptions::is_shared_flag(flag) {
+        return RunOptions::accepts_value(flag);
+    }
+    matches!(
+        flag,
+        "-e" | "--eval" | "--config" | "--inspect" | "--inspect-brk"
+    ) || Permissions::accepts_value(flag)
 }
 
 /// Whether `flag` is one esdev itself understands.
@@ -1636,9 +1652,9 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
             }
             flag if RunOptions::is_shared_flag(flag) => {
                 return Err(format!(
-                    "{flag} shapes a restricted run; `esdev start` runs its server child with \
-                     esdev's normal development permissions. Put production grants on the \
-                     `esrun` command that deploys the built program.\n\n\
+                    "{flag} shapes a single program run; `esdev start` runs its server child with \
+                     esdev's normal development permissions and settings. Put a deployment's \
+                     flags on the `esrun` command that runs the built program.\n\n\
                      `esdev <file> {flag}=…` takes this flag."
                 ));
             }

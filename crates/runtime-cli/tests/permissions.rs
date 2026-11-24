@@ -526,6 +526,70 @@ fn a_space_separated_value_names_the_real_problem() {
     assert!(s.contains("--flag=value"), "{s}");
 }
 
+/// D244: the "attach it with '='" hint is for a flag that takes a value.
+/// After `--allow-all` it suggested `--allow-all=missing.js`, which is refused.
+#[test]
+fn a_flag_with_no_value_form_gets_no_attach_hint() {
+    let out = esrun()
+        .arg("--allow-all")
+        .arg("missing_d244.mjs")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(!s.contains("attach it with"), "{s}");
+    assert!(!s.contains("--allow-all="), "{s}");
+}
+
+/// D244: a denial with a value pointed at `--allow-<name>=<list>` even for a
+/// capability no list can narrow.
+#[test]
+fn a_denial_with_a_value_names_a_list_only_where_one_exists() {
+    let out = esrun()
+        .args(["--allow-all", "--deny-imports=x", "-e=1"])
+        .output()
+        .unwrap();
+    let s = stderr(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(!s.contains("--allow-imports=<list>"), "{s}");
+    assert!(s.contains("imports takes no list"), "{s}");
+
+    let out = esrun()
+        .args(["--allow-all", "--deny-net=x", "-e=1"])
+        .output()
+        .unwrap();
+    assert!(
+        stderr(&out).contains("--allow-net=<list>"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// D244: `--otel` after the script became the program's argument, and the run
+/// went untraced.
+#[test]
+fn an_otel_flag_after_the_script_is_rejected() {
+    let app = write("after_script_otel.mjs", "console.log('ran');");
+    let out = esrun()
+        .arg(&app)
+        .arg("--otel=http://127.0.0.1:9")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("appears after"), "{s}");
+    assert!(!stdout(&out).contains("ran"), "the program ran");
+}
+
+#[test]
+fn a_separator_with_no_script_says_what_it_is_for() {
+    let out = esrun().arg("--").output().unwrap();
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("`--` comes after the script"), "{s}");
+    assert!(!s.contains("unknown option"), "{s}");
+}
+
 #[test]
 fn a_permission_flag_after_the_script_is_rejected() {
     // Silently passing it to the script would leave the user believing the run

@@ -197,19 +197,22 @@ impl RunOptions {
     /// Whether `flag` is one [`RunOptions::try_flag`] would consume. Used to
     /// reject a shared flag written *after* the script, where it would silently
     /// be the script's own argument.
+    ///
+    /// Asked of `try_flag` itself rather than kept as a second list: the list
+    /// this replaced had fallen behind it, so `esrun app.js --otel=<url>` handed
+    /// the collector URL to the program and ran with telemetry off (D244). A
+    /// flag `try_flag` owns answers `Ok(true)` or a value error, never
+    /// `Ok(false)`, whatever the value; it parses and stores, touching nothing
+    /// outside the throwaway options.
     pub fn is_shared_flag(flag: &str) -> bool {
-        matches!(
-            flag,
-            "-t" | "--timeout"
-                | "--env-file"
-                | "--env-override"
-                | "--max-heap"
-                | "--shutdown-grace"
-                | "--tls-ca"
-                | "--tls-crl"
-                | "--proxy"
-                | "--no-proxy"
-        )
+        !matches!(RunOptions::default().try_flag(flag, Some("0")), Ok(false))
+    }
+
+    /// Whether the shared flag `flag` takes a value — everything but
+    /// `--env-override`, asked of the parser for the reason above: a flag that
+    /// refuses a value refuses this one, and every other accepts a `1`.
+    pub fn accepts_value(flag: &str) -> bool {
+        matches!(RunOptions::default().try_flag(flag, Some("1")), Ok(true))
     }
 }
 
@@ -324,5 +327,33 @@ mod tests {
     #[test]
     fn tls_ca_is_a_shared_flag() {
         assert!(RunOptions::is_shared_flag("--tls-ca"));
+    }
+
+    /// D244: the check is the parser, so no shared flag can be missing from it.
+    /// The four `--otel*` flags were — written after the script, they became
+    /// the program's arguments and telemetry stayed off.
+    #[test]
+    fn every_flag_try_flag_takes_is_a_shared_flag() {
+        for flag in [
+            "-t",
+            "--timeout",
+            "--env-file",
+            "--env-override",
+            "--max-heap",
+            "--shutdown-grace",
+            "--tls-ca",
+            "--tls-crl",
+            "--proxy",
+            "--no-proxy",
+            "--otel",
+            "--otel-service",
+            "--otel-min-duration",
+            "--otel-sample",
+        ] {
+            assert!(RunOptions::is_shared_flag(flag), "{flag}");
+        }
+        for not_shared in ["--allow-net", "--inspect", "-e", "--otels", "--", "app.js"] {
+            assert!(!RunOptions::is_shared_flag(not_shared), "{not_shared}");
+        }
     }
 }

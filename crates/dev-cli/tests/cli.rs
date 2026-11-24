@@ -752,7 +752,14 @@ fn upgrade_dry_run_takes_no_value() {
 fn start_refuses_the_run_flags_it_cannot_apply() {
     let dir = build_dir("s_run_flags");
 
-    for flag in ["--timeout=500", "--max-heap=64", "--env-override"] {
+    // `--otel` among them since D244 made the shared-flag check ask the parser
+    // itself: before, `esdev start` called it an unknown option.
+    for flag in [
+        "--timeout=500",
+        "--max-heap=64",
+        "--env-override",
+        "--otel=http://127.0.0.1:4318",
+    ] {
         let out = esdev_in(&dir)
             .args(["start", flag])
             .output()

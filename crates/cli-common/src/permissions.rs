@@ -171,6 +171,15 @@ impl Permissions {
         }
     }
 
+    /// Whether the permission flag `flag` takes a value: an `--allow-<name>`
+    /// whose capability a list can narrow. `--deny-<name>`, `--allow-all` and
+    /// `--deny-all` never do.
+    pub fn accepts_value(flag: &str) -> bool {
+        flag.strip_prefix("--allow-")
+            .and_then(Capability::from_flag_name)
+            .is_some_and(|cap| scope_hint(cap).is_some())
+    }
+
     /// Whether `flag` is a `--deny-<name>` / `--allow-<name>` this grammar owns,
     /// so a caller's parse loop can route it here without knowing the
     /// names itself.
@@ -210,10 +219,17 @@ impl Permissions {
                 // Scoping has one direction, like everything else in D38: it
                 // narrows a grant. A `--deny-net=host` would be the other one —
                 // "everything except" — and rule 3 says a mode has exactly one.
+                // The way out is named only where there is one: a capability no
+                // list can narrow must not be pointed at a list it refuses (D244).
+                let instead = if scope_hint(cap).is_some() {
+                    format!("so it is written as --allow-{name}=<list>")
+                } else {
+                    format!("and {name} takes no list at all: grant it with --allow-{name} or not")
+                };
                 return Err(format!(
                     "{flag} takes no value (got {flag}={value}).\n\n\
-                     A denial is all-or-nothing: scoping narrows a grant, so it is written \
-                     as --allow-{name}=<list>, never as a denial of specific values."
+                     A denial is all-or-nothing: scoping narrows a grant, {instead}, never \
+                     a denial of specific values."
                 ));
             }
             self.denied.push((flag.to_string(), cap));

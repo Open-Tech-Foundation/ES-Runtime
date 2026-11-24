@@ -5070,3 +5070,16 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Rejected:** refusing a file entry at parse time — it makes the operator grant a whole directory to reach one file, the wider grant. 
 
 **Consequences:** a sibling, the containing directory and a path under the file are still `ERR_JAIL_ESCAPE` (or `ERR_NOT_DIRECTORY`); a symlink put where a not-yet-created granted file will be is not followed — it resolves outside every root. Verified by three provider tests and by hand on both grants; Windows anchors by path already, so only the `confine` and guard changes reach it there.
+
+### D244 — A flag's grammar is asked of the parser that owns it, never kept as a second list · *Accepted (2026-11-24)*
+
+**Context:** three reported diagnostics, one cause. `esrun app.js --otel=<url>` ran with telemetry off and handed the URL to the program as an argument: the check that refuses an esrun flag after the script (`RunOptions::is_shared_flag`) was a hand-kept copy of the names `try_flag` parses, and the four `--otel*` flags had been added to one and not the other. `esrun --allow-all missing.js` suggested `--allow-all=missing.js`, a flag this parser refuses: the "attach it with `=`" hint followed any flag. `esrun --deny-imports=x` suggested `--allow-imports=<list>`, also refused: the message built the suggestion from the name without asking whether that capability takes a list.
+
+**Decision:** each question goes to the code that answers it, so a flag added in one place is right everywhere.
+- **Whether a flag is shared** is whether `try_flag` claims it — any answer but "not mine".
+- **Whether it takes a value** is whether `try_flag` accepts one (shared flags), or whether its capability has a scope list (`--allow-<name>`); `--deny-*` and the `--all` flags never do. The hint is offered only for such a flag, and only when it was written bare.
+- **A denial with a value** names `--allow-<name>=<list>` only for a capability a list can narrow; for the others it says the capability takes no list.
+
+**Also here, from the same review:** `esrun --` before any script says what `--` is for, instead of "unknown option: --" and the whole usage; `--help` lists all eleven permission names and which of them take a list; the CLI page no longer says everything after `-e=<code>` is passed to the script, since an esrun flag there is refused as after a file. `esdev start` refuses `--otel*` with the message it gives every run-shaping flag, where it said "unknown option".
+
+**Consequences:** the first unit tests in `runtime-cli` — the value grammar, `--otel` after the script, and `--help` against `Capability::HOST_FACING` — plus one in `cli-common` that every flag `try_flag` takes is shared.
