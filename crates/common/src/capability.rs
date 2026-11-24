@@ -175,7 +175,7 @@ impl Capability {
     }
 
     /// The capability a denial name refers to, or `None` if the name is not one
-    /// of the eight. The inverse of [`flag_name`](Self::flag_name).
+    /// of the permission names. The inverse of [`flag_name`](Self::flag_name).
     pub fn from_flag_name(name: &str) -> Option<Capability> {
         Capability::HOST_FACING
             .into_iter()

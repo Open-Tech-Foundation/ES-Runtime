@@ -1055,13 +1055,15 @@ Each name takes both prefixes: `--allow-net` and `--deny-net`.
 
 #### Scoped grants
 
-**Seven of the nine** can be granted narrowed to a list rather than whole. The
-two exceptions are all-or-nothing: `imports`, because it decides whether
-modules beyond the entry load at all — which packages a program is made of is
-decided when it is built (D193, D194) — and `workers`, because
-a worker's own grant is set at the spawn (`new Worker(url, { permissions })`)
-rather than on the command line. `--allow-workers=<list>` is **rejected** rather
-than ignored, so a run is never narrower on the command line than in reality:
+`read`, `write`, `net`, `listen`, `env`, `run` and `signals` can be granted
+narrowed to a list rather than whole. The rest are all-or-nothing: `imports`,
+because it decides whether modules beyond the entry load at all — which
+packages a program is made of is decided when it is built (D193, D194);
+`workers`, because a worker's own grant is set at the spawn
+(`new Worker(url, { permissions })`) rather than on the command line; and
+`diagnostics` / `diagnostics-detail`. A list on any of them —
+`--allow-workers=<list>` — is **rejected** rather than ignored, so a run is
+never narrower on the command line than in reality:
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
@@ -1200,7 +1202,7 @@ the script opts a script's own argument out of rule 2.
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
-| `--allow-ffi` | Not one of the nine |
+| `--allow-ffi` | Not a permission name |
 
 ---
 

@@ -83,9 +83,11 @@ HMAC verify, AEAD tag checks, no hand-rolled primitives. All asymmetric
 randomness (RSA/EC key gen, PSS salt, PKCS#1 blinding, OAEP padding, ECDSA
 nonces) is routed through the injected `Entropy` provider — never ambient
 `OsRng` — preserving reproducibility under seeded providers and capability
-control. **Carried risk:** the `rsa` crate's Marvin timing sidechannel
-(RUSTSEC-2023-0071, no fix available); accepted because RSA private-key ops are
-host-side. See `SECURITY.md`.
+control. RSA runs on `rsa` 0.10, whose constant-time private-key arithmetic,
+blinding and implicit rejection close the Marvin timing sidechannel
+(RUSTSEC-2023-0071; DECISIONS D203). The advisory still lists every version, so
+the exception stays in `deny.toml` and `.cargo/audit.toml` until RustSec records
+a patched range. See `SECURITY.md`.
 
 ## 5. Determinism & observability
 
@@ -102,8 +104,10 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    source with `-fsanitize=address` (SPEC §5) and is outstanding, as is an
    external review. **This is the single biggest reason not to run untrusted
    code in production yet.**
-2. **`rsa` Marvin timing sidechannel** (RUSTSEC-2023-0071) — accepted, no fix
-   available (SECURITY.md / DECISIONS D9).
+2. **`rsa` on a release candidate** — the Marvin fixes (RUSTSEC-2023-0071) ship
+   only in `rsa` 0.10, pinned at a release candidate until it is final, and the
+   advisory exception stays until RustSec records the patched range
+   (SECURITY.md / DECISIONS D203).
 3. **SES-style primordial hardening deferred.** A guest can pollute `Object`/
    `Array.prototype` and break the *prelude's own* JS behaviour for itself; it
    **cannot** escalate privilege past the Rust boundary. Full primordial
@@ -119,10 +123,11 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    separately addressed at this layer.
 7. **`esrun` grants nothing unless the command line says so** (D65), and module
    resolution **and** the filesystem capability are **root-jailed by default**
-   (DECISIONS D25). `esrun` loads modules through `NodeModuleLoader` and serves
+   (DECISIONS D25, D79). `esrun` loads modules through `NodeModuleLoader` and serves
    `runtime:fs` from `SystemFileSystem`; both confine every *real* (canonicalized)
-   path to the detected **project root** — the nearest ancestor of the entry
-   containing `node_modules`/`package.json`, else the entry's directory — and
+   path to the **project root** — the working directory the program was started
+   in, exactly, with no walk and no marker file; a filesystem root or the home
+   directory is refused as one at startup, as is an entry outside it — and
    reject a path that escapes it via `..` or a symlink whose realpath leaves the
    root (enforced by `path::within_root`; covered by jail tests in
    `default-providers` and a `../escape.txt` rejection test in `runtime-cli`).

@@ -79,7 +79,8 @@ denied too, that is a single-file run; add `--allow-imports` for dependencies.
 `esdev --trace-permissions app.js` runs the program with development grants and
 prints the `esrun` line it actually needs.
 
-**Seven of the nine** can be narrowed to a list. `imports` and `workers` are
+`read`, `write`, `net`, `listen`, `env`, `run` and `signals` can be narrowed to
+a list. `imports`, `workers`, `diagnostics` and `diagnostics-detail` are
 all-or-nothing at the command line:
 
 ```sh

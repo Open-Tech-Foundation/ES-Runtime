@@ -65,9 +65,11 @@ deploy line: a reader should not have to know which way a binary defaults to
 know what a service was granted. (`esdev`, the development binary, defaults the
 other way — everything granted — and there `--allow-all` is the no-op.)
 
-The nine names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
-`signals`, `workers` — the same words the `runtime:process` `permissions` API and
-the denial message use. A denied operation throws `NotAllowedError`
+The names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
+`signals`, `workers`, `diagnostics` and `diagnostics-detail` — the same words the
+`runtime:process` `permissions` API and the denial message use.
+`diagnostics-detail` implies `diagnostics` and adds span attributes — paths,
+URLs, SQL text — so it is a grant over the program's data, not only its timings. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
 The parser is strict on purpose: a space-separated value, a permission
@@ -96,8 +98,10 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Seven of the nine can be scoped to a list.** (`imports` is the exception —
-what may be *loaded* has its own mechanism, below.)
+**`read`, `write`, `net`, `listen`, `env`, `run` and `signals` can be scoped to
+a list.** The rest are all-or-nothing: `imports`, because what may be *loaded*
+has its own mechanism (below); `workers`, because a worker's grant is set at the
+spawn; and the two diagnostics grants.
 
 ```sh
 esrun --allow-imports --allow-env=PORT,DATABASE_URL \
@@ -332,8 +336,8 @@ revisited rather than forgotten.
 - **What.** `crypto.subtle` RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP) is backed
   by the RustCrypto `rsa` crate (`docs/DECISIONS.md` D9). That crate carries
   RUSTSEC-2023-0071, a medium-severity (5.9) timing sidechannel in RSA
-  private-key operations. **No fixed upgrade exists** — the issue is
-  architectural in RustCrypto's RSA and has been open since 2023.
+  private-key operations. At the time no fixed upgrade existed — the issue was
+  architectural in RustCrypto's RSA and had been open since 2023.
 - **Why accepted (maintainer, 2026-06-12).** RSA private-key operations run
   **host-side**; a sandboxed guest does not get a high-resolution local timing
   oracle against them, which lowers practical exploitability. The alternatives
@@ -347,8 +351,8 @@ revisited rather than forgotten.
 - **Mitigations in place.** All RSA randomness (key generation, PSS salt,
   PKCS#1 v1.5 blinding, OAEP padding) is routed through the injected `Entropy`
   provider — never ambient `OsRng` — preserving determinism under seeded
-  providers and capability control. RSA is capability-gated like all of
-  `crypto.subtle`.
+  providers. Like the rest of `crypto.subtle`, RSA needs no capability: it
+  computes over keys the program already holds and reaches nothing.
 - **Revisit when.** RustCrypto ships a constant-time RSA, or the
   `elliptic-curve` 0.14 / `digest` 0.11 generation reshapes the stack such that
   a vetted, constant-time, provider-routable backend becomes available.

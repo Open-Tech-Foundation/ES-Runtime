@@ -11,6 +11,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Documentation
+
+- **The security pages say what the runtime does.** The permission vocabulary
+  is eleven names, not nine: README, SECURITY.md, API.md and ARCHITECTURE.md now
+  list `diagnostics` and `diagnostics-detail`, and name the seven that take a
+  list. The internal security review no longer calls the RSA timing advisory
+  (RUSTSEC-2023-0071) unfixed — `rsa` 0.10 closes it (D203) — and describes the
+  sandbox root as the working directory (D79), not the old nearest-`package.json`
+  walk. SPEC no longer says `esrun` starts from everything, or that the
+  hardening gates (deny, audit, MSRV, fuzz) run on every pull request; SECURITY.md
+  no longer calls `crypto.subtle` capability-gated. A test now holds every page
+  that lists the permission names to `Capability::HOST_FACING`, so the next
+  capability cannot be added without them.
+
 ## [0.49.0] - 2026-11-18
 
 ### Fixed

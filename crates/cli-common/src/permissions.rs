@@ -14,7 +14,7 @@ pub type Scopes = HashMap<Capability, Vec<String>>;
 /// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if that
 /// capability cannot enforce a list.
 ///
-/// Seven of the eight take a list. `imports` deliberately does **not**: it
+/// Seven of the names take a list. `imports` deliberately does **not**: it
 /// decides whether modules beyond the entry load at all, and which packages a
 /// program is made of is decided when it is built (D193, D194). The
 /// `None` arm is the rule, not a placeholder: a capability rejects a value until
@@ -172,7 +172,7 @@ impl Permissions {
     }
 
     /// Whether `flag` is a `--deny-<name>` / `--allow-<name>` this grammar owns,
-    /// so a caller's parse loop can route it here without knowing the eight
+    /// so a caller's parse loop can route it here without knowing the
     /// names itself.
     pub fn is_permission_flag(flag: &str) -> bool {
         ["--deny-", "--allow-"].iter().any(|prefix| {
@@ -185,7 +185,7 @@ impl Permissions {
     /// carried (if any).
     ///
     /// `name` has already been split off the `--deny-`/`--allow-` prefix and is
-    /// rejected here if it is not one of the eight — never ignored, since an
+    /// rejected here if it is not a permission name — never ignored, since an
     /// unrecognised permission flag would otherwise read as a sandbox that is
     /// not actually on.
     pub fn record(

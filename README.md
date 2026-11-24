@@ -89,9 +89,10 @@ esrun --allow-all --deny-run app.mjs              # everything, minus these
 ```
 
 Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`,
-`workers`. `--deny-<name>` requires `--allow-all`, and seven of them also take a
-comma-separated list that narrows the grant — paths, addresses, program names,
-variable names, signal names. A denied operation throws `NotAllowedError`;
+`workers`, `diagnostics`, `diagnostics-detail`. `--deny-<name>` requires
+`--allow-all`. `read`, `write`, `net`, `listen`, `env`, `run` and `signals` also
+take a comma-separated list that narrows the grant — paths, addresses, program
+names, variable names, signal names. A denied operation throws `NotAllowedError`;
 importing a `runtime:` module always works.
 
 `esdev`, the development binary, is the opposite: it grants everything, so the
