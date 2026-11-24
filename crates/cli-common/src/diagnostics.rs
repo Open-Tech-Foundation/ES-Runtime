@@ -70,10 +70,81 @@ pub fn flush_failures(
     }
 }
 
+/// The exit status of a run the `--timeout` watchdog stopped: `timeout(1)`'s,
+/// so a supervisor or CI step reads it as "timed out", not as a program error.
+pub const TIMEOUT_EXIT_CODE: u8 = 124;
+
+/// Why a run failed, and the exit status that says so.
+///
+/// Every failure is printed the same way ([`print_error`]); what differs is the
+/// status a caller exits with. A timeout is [`TIMEOUT_EXIT_CODE`], anything else
+/// is `1` — the one distinction an orchestrator acts on without parsing text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunError {
+    message: String,
+    exit_code: u8,
+}
+
+impl RunError {
+    /// A run the watchdog stopped after `timeout`.
+    pub fn timed_out(timeout: Option<Duration>) -> Self {
+        RunError {
+            message: timeout_message(timeout),
+            exit_code: TIMEOUT_EXIT_CODE,
+        }
+    }
+
+    /// The text to print, without the `error:` headline [`print_error`] adds.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The status the process should exit with.
+    pub fn exit_code(&self) -> u8 {
+        self.exit_code
+    }
+}
+
+impl From<String> for RunError {
+    /// An ordinary failure: exit status `1`.
+    fn from(message: String) -> Self {
+        RunError {
+            message,
+            exit_code: 1,
+        }
+    }
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// The message for a run the watchdog stopped.
 pub fn timeout_message(timeout: Option<Duration>) -> String {
     match timeout {
         Some(d) => format!("execution timed out after {} ms", d.as_millis()),
         None => "execution timed out".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_timeout_exits_124_and_names_the_deadline() {
+        let err = RunError::timed_out(Some(Duration::from_millis(250)));
+        assert_eq!(err.exit_code(), TIMEOUT_EXIT_CODE);
+        assert_eq!(err.exit_code(), 124);
+        assert_eq!(err.message(), "execution timed out after 250 ms");
+    }
+
+    #[test]
+    fn any_other_failure_exits_1_with_its_message() {
+        let err = RunError::from("uncaught exception in app.js".to_string());
+        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.to_string(), "uncaught exception in app.js");
     }
 }

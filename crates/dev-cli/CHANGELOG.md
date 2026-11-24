@@ -26,6 +26,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A program run that `--timeout` stopped exits `124`, and never `0`.** The
+  run is esrun's (D238): an await that never settled could end in success, and
+  running out of heap inside a timer did, silently. `esdev <file>` now exits
+  `124` for a timeout and `1`, with the error, for the heap ceiling.
+
 ## [0.30.0] - 2026-11-19
 
 ### Added

@@ -187,8 +187,8 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
     match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            es_runtime_cli_common::diagnostics::print_error(&err);
-            ExitCode::FAILURE
+            es_runtime_cli_common::diagnostics::print_error(err.message());
+            ExitCode::from(err.exit_code())
         }
     }
 }

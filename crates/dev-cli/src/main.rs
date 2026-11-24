@@ -33,7 +33,7 @@ use std::process::ExitCode;
 use es_runtime_cli_common::args::{
     RunOptions, reject_value, require_value, split_flag_value, try_permission_flag,
 };
-use es_runtime_cli_common::diagnostics::print_error;
+use es_runtime_cli_common::diagnostics::{RunError, print_error};
 use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 use es_runtime_default_providers::TrustSource;
@@ -186,7 +186,7 @@ RUN OPTIONS (esrun's, with one deliberate difference):
     --allow-<name>[=<list>]     Grant one back, optionally narrowed; requires
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
-    -t, --timeout=<ms>          Stop execution after <ms>
+    -t, --timeout=<ms>          Stop execution after <ms> and exit 124
     --max-heap=<mb>             Heap ceiling in megabytes
     --env-file=<path>           Load env vars from a .env file
     --env-override              ...and let them override the OS environment
@@ -2164,7 +2164,7 @@ async fn run_module(
     run: settings::Run,
     inspect: Option<&InspectConfig>,
     config: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), RunError> {
     let settings = settings::Settings::load(config)?;
     let mut config = settings.source.run_config(run).await?;
     attach_debugger(&mut config, inspect)?;
@@ -2184,7 +2184,7 @@ async fn run_module(
     }));
     let result = es_runtime_cli_common::run("esdev", config).await;
     if let Err(e) = &result {
-        child.crash(e);
+        child.crash(e.message());
     }
     result
 }
@@ -3062,7 +3062,7 @@ async fn run_test_file(config: &TestConfig, file: String) -> ExitCode {
     let code = match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => finish_test_file(config, &file),
         Err(err) => {
-            print_error(&err);
+            print_error(err.message());
             // The run died, but the cases that already finished are still
             // results. Losing a hundred of them to one stray promise is
             // precisely the report a suite most needs to see, so it is
@@ -3286,7 +3286,7 @@ pub(crate) async fn run_tests_unisolated(
     match es_runtime_cli_common::run("esdev", run).await {
         Ok(()) => guest::test::finish(),
         Err(err) => {
-            print_error(&err);
+            print_error(err.message());
             // As above: what ran is reported, and the run still fails.
             guest::test::finish();
             ExitCode::FAILURE
@@ -3346,11 +3346,13 @@ async fn run() -> ExitCode {
     // process-global act, so a library crate must not do it. Quiet by default
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.
     es_runtime_common::telemetry::init_tracing();
-    let result = match parse_args() {
+    // A program's run can end with a status of its own (`124` for a timeout,
+    // D238); every other command fails with `1`.
+    let result: Result<(), RunError> = match parse_args() {
         Ok(Command::Run(run, inspect, config)) => {
             run_module(*run, inspect.as_ref(), config.as_deref()).await
         }
-        Ok(Command::Watch(config)) => watch::supervise(config).await,
+        Ok(Command::Watch(config)) => watch::supervise(config).await.map_err(RunError::from),
         Ok(Command::Test(config)) => return run_tests(*config).await,
         Ok(Command::Build(request)) => {
             // Written even when the build failed: a policy that refuses what
@@ -3358,14 +3360,14 @@ async fn run() -> ExitCode {
             let built = build::run(request).await.map(drop);
             match (built, policy::write_inventory()) {
                 (Ok(()), Ok(())) => Ok(()),
-                (Err(e), _) | (Ok(()), Err(e)) => Err(e),
+                (Err(e), _) | (Ok(()), Err(e)) => Err(e.into()),
             }
         }
-        Ok(Command::Start(config)) => start::start(*config).await,
-        Ok(Command::Preview(config)) => preview::run(config).await,
+        Ok(Command::Start(config)) => start::start(*config).await.map_err(RunError::from),
+        Ok(Command::Preview(config)) => preview::run(config).await.map_err(RunError::from),
         Ok(Command::Typecheck(args)) => match std::env::current_dir() {
-            Ok(root) => check::check(&root, &args).await,
-            Err(e) => Err(format!("cannot read working directory: {e}")),
+            Ok(root) => check::check(&root, &args).await.map_err(RunError::from),
+            Err(e) => Err(format!("cannot read working directory: {e}").into()),
         },
         Ok(Command::Create(config)) => match create::create(&config).await {
             Ok(report) => {
@@ -3375,7 +3377,7 @@ async fn run() -> ExitCode {
             }
             Err(err) => {
                 prompt::abort("Stopped.");
-                Err(err)
+                Err(err.into())
             }
         },
         Ok(Command::Init(config)) => match init::init(&config) {
@@ -3386,10 +3388,10 @@ async fn run() -> ExitCode {
             }
             Err(err) => {
                 prompt::abort("Stopped.");
-                Err(err)
+                Err(err.into())
             }
         },
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     };
     match result {
         // Whatever the command line called this run, a program that imported
@@ -3397,8 +3399,8 @@ async fn run() -> ExitCode {
         // that did not prints nothing and succeeds — which is every other run.
         Ok(()) => guest::test::finish(),
         Err(err) => {
-            print_error(&err);
-            ExitCode::FAILURE
+            print_error(err.message());
+            ExitCode::from(err.exit_code())
         }
     }
 }

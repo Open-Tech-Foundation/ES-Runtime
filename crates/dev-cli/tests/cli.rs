@@ -602,8 +602,20 @@ fn the_watchdog_stops_a_runaway() {
         .arg("-e=while (true) {}")
         .output()
         .expect("spawn esdev");
-    assert!(!out.status.success());
+    // The same status as esrun's (D238): the run is shared, so is its ending.
+    assert_eq!(out.status.code(), Some(124), "{}", stderr(&out));
     assert!(stderr(&out).contains("timed out"), "{}", stderr(&out));
+}
+
+/// The async timeout esrun used to race to `0` (D238), under esdev too.
+#[test]
+fn the_watchdog_stops_an_await_that_never_settles() {
+    let out = esdev()
+        .arg("--timeout=150")
+        .arg("-e=await new Promise(() => {})")
+        .output()
+        .expect("spawn esdev");
+    assert_eq!(out.status.code(), Some(124), "{}", stderr(&out));
 }
 
 #[test]

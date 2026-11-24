@@ -25,7 +25,7 @@ use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec}
 use crate::SNAPSHOT;
 use crate::args::RunOptions;
 use crate::console::StdoutConsole;
-use crate::diagnostics::{Failure, flush_failures, timeout_message};
+use crate::diagnostics::{Failure, RunError, flush_failures};
 use crate::dotenv;
 use crate::extension::{ExtensionContext, HostExtension};
 use crate::permissions::{Scopes, address_scope, path_scope, signal_scope};
@@ -827,7 +827,7 @@ fn warn_ignored_ca_variables(bin: &str) {
 
 /// Runs `config` to completion. `bin` names the calling binary in the messages
 /// only it can be responsible for (the shutdown drain notice).
-pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
+pub async fn run(bin: &'static str, config: Config) -> Result<(), RunError> {
     // The capability trace is summarised however the run ends, which is why this
     // wrapper exists rather than a call at the bottom of the function below: the
     // run a developer most wants a report from is the one that *failed* for want
@@ -864,7 +864,7 @@ pub(crate) fn leave(code: i32) -> ! {
 
 /// The run itself. Everything that can end it early lives in here, so its one
 /// caller above can be the single place that reports afterwards.
-async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
+async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     // Read before `config.source` is consumed below: telemetry's default
     // `service.name` is the entry's own name.
     let service_name = default_service_name(&config.source);
@@ -989,12 +989,12 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // root — one mistake reported a hundred times, in a message about the
     // wrong thing.
     if !path::within_root(&base_dir, &fs_root) {
-        return Err(format!(
+        return Err(RunError::from(format!(
             "{} is outside the project root {} — run it from its own directory \
              (the sandbox is the working directory, never an argument)",
             base_dir.display(),
             fs_root.display()
-        ));
+        )));
     }
     // `--allow-read=<paths>` / `--allow-write=<paths>` narrow the jail (D38).
     // Entries are resolved against the *working directory*, because that is
@@ -1369,7 +1369,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
             Ok(result) => result,
             Err(_) => {
                 runtime.interrupt_handle().terminate();
-                return Err(timeout_message(options.timeout));
+                return Err(RunError::timed_out(options.timeout));
             }
         },
         None => load.await,
@@ -1382,9 +1382,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     if let Err(err) = loaded {
         if timed_out.load(Ordering::SeqCst) {
-            return Err(timeout_message(options.timeout));
+            return Err(RunError::timed_out(options.timeout));
         }
-        return Err(format!("{label}: {err}"));
+        return Err(format!("{label}: {err}").into());
     }
 
     // Drive async work (top-level await, fetch, setTimeout, promise reactions)
@@ -1451,9 +1451,11 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     let outcome = match options.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, drive).await {
             Ok(outcome) => outcome,
+            // An idle loop is parked where the watchdog's interrupt cannot
+            // reach it, so this deadline is what ends that case.
             Err(_) => {
                 runtime.interrupt_handle().terminate();
-                return Err(timeout_message(options.timeout));
+                return Err(RunError::timed_out(options.timeout));
             }
         },
         None => drive.await,
@@ -1470,6 +1472,18 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     if let Some(code) = process.requested_exit_code() {
         finish_trace(config.observer.as_ref());
         leave(code);
+    }
+
+    // The drive also returns, `Ok`, when the engine was terminated under it —
+    // which is how both the watchdog and the heap guard stop a program. Each
+    // records why; the reason is read here rather than inferred from which of
+    // the two deadlines above happened to fire first, so a timeout is always a
+    // timeout and running out of heap is never a quiet success.
+    if timed_out.load(Ordering::SeqCst) {
+        return Err(RunError::timed_out(options.timeout));
+    }
+    if runtime.heap_limit_exceeded() {
+        return Err(format!("{label}: execution terminated: heap limit exceeded").into());
     }
 
     // The drive returned because a graceful shutdown drained the servers. The
@@ -1490,7 +1504,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // evaluation. Report it as the primary error — its rejection also shows up
     // in `rejections`, so it is the one uncaught-rejection we don't re-report.
     if let ModuleEvalState::Failed(message) = runtime.module_eval_state() {
-        return Err(format!("uncaught exception in {label}\n{message}"));
+        return Err(format!("uncaught exception in {label}\n{message}").into());
     }
 
     // Anything the drive stopped before flushing, on the same terms.
@@ -1501,9 +1515,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     let count = reported.load(Ordering::SeqCst);
     if count > 0 {
         let plural = if count == 1 { "" } else { "s" };
-        return Err(format!(
-            "{count} unhandled failure{plural} — reported above"
-        ));
+        return Err(format!("{count} unhandled failure{plural} — reported above").into());
     }
     let _ = &outcome;
     Ok(())

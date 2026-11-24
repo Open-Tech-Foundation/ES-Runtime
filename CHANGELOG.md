@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A run that hit `--timeout` or `--max-heap` never ends as a success.** An
+  asynchronous timeout — a program awaiting something that never settled —
+  exited `0` in most runs and `1` in the rest, printing nothing; running out of
+  heap inside a timer exited `0`, silently, every time. The CLI now reads why
+  the engine was stopped rather than which of two deadlines fired first. A
+  timeout prints `error: execution timed out after <ms> ms` and **exits `124`**
+  (`timeout(1)`'s status; it was `1`), synchronous or not; running out of heap
+  prints its error and exits `1`. `exit(code)` still wins over both (D238).
+
 - **A limit given in the wrong place is refused, not dropped.** `new Isolate({
   source, cpuTime: 50, memory: 16 })` ran the code with no CPU budget and no
   memory ceiling: the code object's keys beyond `source` and `name` were never

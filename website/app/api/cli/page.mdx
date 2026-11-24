@@ -69,7 +69,7 @@ script that genuinely wants a flag esrun also knows.
 | --- | --- |
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
-| `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
+| `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds and exit `124`. See [Exit status](#exit-status). |
 | `--max-heap=<mb>` | Heap ceiling in megabytes for this agent, and the ceiling the workers it starts inherit. Default: the container's memory limit when there is one, else the host's memory. See [Memory](#memory). |
 | `--allow-<name>` | Grant one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail`. See [Permissions](#permissions). |
 | `--allow-all, -A` | Grant every capability. Cannot be combined with `--allow-<name>` or `--deny-all`. |
@@ -421,6 +421,18 @@ esrun stops accepting, lets in-flight requests answer, and exits `130` / `143`.
 Install a handler with [`onSignal`](/api/process) when you have your own cleanup
 — closing a pool, flushing a buffer — and esrun leaves the whole shutdown to
 you.
+
+## Exit status
+
+| Status | When |
+| --- | --- |
+| `0` | The program finished, with nothing left unhandled |
+| `1` | An uncaught exception, an unhandled rejection, a load error, or the heap ceiling reached |
+| `124` | `--timeout` stopped the run — the status `timeout(1)` uses |
+| `128 + signal` | A graceful shutdown: `130` for `^C`, `143` for `SIGTERM` |
+| the program's | `exit(code)` from `runtime:process`, which wins over a deadline it was racing |
+
+Each failure prints an `error:` block on stderr; none of them ends silently.
 
 ## Telemetry
 

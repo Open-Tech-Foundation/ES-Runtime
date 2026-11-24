@@ -67,7 +67,7 @@ PERMISSIONS:
     --deny-all                  Grant nothing — the default, said outright
 
 OPTIONS:
-    -t, --timeout=<ms>          Stop execution after <ms> (watchdog, SPEC §4)
+    -t, --timeout=<ms>          Stop execution after <ms> and exit 124
     --max-heap=<mb>             Heap ceiling in megabytes, for this agent and as
                                 the ceiling its workers inherit. Default: sized
                                 from the container's memory limit, or the host's
@@ -338,13 +338,14 @@ async fn main() -> ExitCode {
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
         Ok(config) => es_runtime_cli_common::run("esrun", config).await,
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            print_error(&err);
-            ExitCode::FAILURE
+            print_error(err.message());
+            // `1` for a failure, `124` for a run `--timeout` stopped.
+            ExitCode::from(err.exit_code())
         }
     }
 }

@@ -4980,3 +4980,16 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 - **An explicit opt-out** (`cpuTime: Infinity`): it brings the starvation back for whoever opts out and for their neighbours, which is the property the pool exists to have.
 
 **Consequences:** an isolate that legitimately spends more than a second of CPU in one turn now ends where it used to run — the one behaviour change, and the reason the default is a second rather than less; it raises `cpuTime`, splits its work across turns, or moves to a `Worker`. Work split across turns is still not bounded in total (D227): that is `terminate()` with a timer.
+
+### D238 — A run that hit a limit says so: `--timeout` exits 124, running out of heap exits 1, whichever path stopped it · *Accepted (2026-11-24)*
+
+**Context:** reported, and reproduced on 0.49.0. `esrun --timeout=200 -e='await new Promise(()=>{})'` exited `0` in 8 of 10 runs and `1` in the rest, printing nothing either way; `--max-heap=64` with the allocation inside a timer exited `0`, silently, every time. The same limits hit by synchronous top-level code exited `1` with a message. Both guardrails stop a program by terminating the engine, and the drive loop returns `Ok` when that happens. The CLI read the watchdog's `timed_out` flag only when the module *load* failed, and never asked the runtime whether the heap guard had fired; whether a timeout was reported at all depended on whether the loop's own `tokio` deadline or the watchdog thread fired first, at the same instant.
+
+**Decision (maintainer, 2026-11-24):**
+- **The reason is read, not inferred.** After the drive returns, the CLI checks, in order: a requested `exit(code)` (the program chose its status), the watchdog's flag (a timeout), `heap_limit_exceeded()` (running out of heap), then a graceful shutdown's `128 + signal`. Both deadlines stay — the loop's is what ends an idle run, whose parked loop the watchdog's interrupt cannot wake — but either one now reports the same timeout.
+- **A timeout exits `124`**, `timeout(1)`'s status, for the synchronous and asynchronous case alike; it was `1` or `0`. A supervisor or CI step can tell "ran too long" from "failed" without parsing text. Running out of heap stays `1`, with the message the top-level case already printed.
+- **The status travels with the error.** `cli_common::run` returns a `RunError` — the message and the exit code — instead of a `String`, so both binaries exit with the same status for the same run (D59); `esdev`'s commands that are not a program run keep `1`.
+
+**Rejected:** dropping the `tokio` deadline and trusting the watchdog alone (the review's suggestion) — an idle run would then never end. Exiting from inside the run with `leave(124)`, as a shutdown does — it skips what `esdev test` reports for a file whose run failed.
+
+**Consequences:** `--timeout` and `--max-heap` never end a run as a success. Scripts that treated a timeout as status `1` see `124`. **Not solved here:** a synchronous native op (a large PBKDF2, compression) runs to completion before the watchdog's termination can land — the deadline is reported, but late; that is its own change.
