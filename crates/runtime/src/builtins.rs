@@ -66,7 +66,11 @@ pub(crate) fn install(
         providers.signals(),
         interrupt,
         capabilities.clone(),
-        providers.worker_scope().is_some(),
+        match providers.worker_scope() {
+            None => crate::process_ops::Agent::Main,
+            Some(scope) if scope.is_isolate() => crate::process_ops::Agent::Isolate,
+            Some(_) => crate::process_ops::Agent::Worker,
+        },
         providers.clock(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.

@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`exit()` inside an `Isolate` throws instead of ending it silently.** The
+  exit code was dropped and the parent saw only "the isolate has ended", so a
+  plugin that finished with `exit(0)` looked like a crash. It is now a
+  `TypeError` — process control is not an isolate's — and the isolate keeps
+  running (D245). The docs also correct three isolate details: `env` is empty
+  rather than refused, `Isolate.prepare` needs `workers`, and a `memory` above
+  the parent's is a `TypeError`, not `ERR_ISOLATE_MEMORY_LIMIT`.
+
 - **Flags in the wrong place are refused, and hints name flags that exist.**
   `esrun app.js --otel=<url>` ran with telemetry off and passed the URL to the
   program; `--otel`, `--otel-service`, `--otel-min-duration` and

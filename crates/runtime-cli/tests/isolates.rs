@@ -524,6 +524,40 @@ fn unbudgeted_spinners_cannot_starve_the_pool() {
     assert_eq!(lines(&out), ["hi 24", "1 ERR_ISOLATE_CPU_LIMIT"]);
 }
 
+/// D245: process control is not an isolate's. `exit()` used to end the
+/// isolate silently, the code dropped and the parent told only that it "has
+/// ended"; now it throws, inside the isolate, like every other refusal there.
+#[test]
+fn exit_in_an_isolate_is_refused_not_a_silent_end() {
+    let out = run(
+        "isolate-exit",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const plugin = new Isolate({ source: `
+          import { exit } from "runtime:process";
+          export function tryExit() {
+            try { exit(3); return "exited"; }
+            catch (e) { return e.name + " " + /computation only/.test(e.message); }
+          }
+          export const still = () => "alive";
+        ` });
+        const { tryExit, still } = await plugin.exports;
+        console.log(await tryExit());
+        console.log(await still());
+        plugin.terminate();
+
+        const top = new Isolate({ source: `import { exit } from "runtime:process"; exit(0);` });
+        top.onerror = (e) => e.preventDefault();
+        try { await top.exports; console.log("served"); }
+        catch (e) { console.log(e.name, e.code === undefined); }
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["TypeError true", "alive", "TypeError true"]);
+}
+
 /// The code argument takes `source` and `name` and nothing else. A limit put
 /// there instead of in the options used to be dropped, and the code ran
 /// uncapped; now it is refused, naming where it belongs — and the spin below

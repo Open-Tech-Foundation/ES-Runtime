@@ -117,11 +117,13 @@ export async function transform(text) {
 
 | Works | Refused |
 | --- | --- |
-| Web standards: `URL`, `TextEncoder`, `structuredClone`, `crypto`, timers, `console` | `runtime:fs`, `fetch`, `runtime:net`, `runtime:db`, `runtime:http`, `env` |
-| `runtime:` modules that need no permission: `path`, `serialization`, `hashing`, `pdf`, `images`, `archive` on bytes passed in | `import()` of a file, starting a `Worker` or an `Isolate`, `Atomics.wait` |
+| Web standards: `URL`, `TextEncoder`, `structuredClone`, `crypto`, timers, `console` | `runtime:fs`, `fetch`, `runtime:net`, `runtime:db`, `runtime:http`, `cwd()` |
+| `runtime:` modules that need no permission: `path`, `serialization`, `hashing`, `pdf`, `images`, `archive` on bytes passed in | `import()` of a file, starting a `Worker` or an `Isolate`, `Atomics.wait`, `exit()` |
+| `env` from `runtime:process`, which is empty: an isolate sees no variable of its deployment | |
 
 A refused call fails like any denied capability, with `ERR_CAPABILITY_DENIED`,
-and the message says what to do instead:
+and the message says what to do instead (`exit()` throws a `TypeError`: return
+from the exported function, or throw):
 
 ```text
 capability denied: FileRead (permission "read") — an isolate is computation

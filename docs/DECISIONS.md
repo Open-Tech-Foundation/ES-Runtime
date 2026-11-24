@@ -5083,3 +5083,11 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Also here, from the same review:** `esrun --` before any script says what `--` is for, instead of "unknown option: --" and the whole usage; `--help` lists all eleven permission names and which of them take a list; the CLI page no longer says everything after `-e=<code>` is passed to the script, since an esrun flag there is refused as after a file. `esdev start` refuses `--otel*` with the message it gives every run-shaping flag, where it said "unknown option".
 
 **Consequences:** the first unit tests in `runtime-cli` — the value grammar, `--otel` after the script, and `--help` against `Capability::HOST_FACING` — plus one in `cli-common` that every flag `try_flag` takes is shared.
+
+### D245 — `exit()` in an isolate throws · *Accepted (2026-11-25)* · *amends D227's implementation*
+
+**Context:** reported. D227 says an isolate refuses process control, but `exit()` ended the isolate silently: the code was dropped (`IsolateProcess::exit`), calls in flight rejected with the generic `ERR_ISOLATE_TERMINATED` "the isolate has ended", and a top-level `exit(0)` rejected `exports` the same way with no `onerror`. A plugin written to finish with `process.exit(0)` read as a crash.
+
+**Decision (maintainer, 2026-11-25):** `exit()` inside an isolate throws a `TypeError` — "exit() is process control, and an isolate is computation only: return from the exported function, or throw" — like every other refusal there. The isolate keeps running; a top-level `exit()` fails the module with that error, which `exports` rejects with and `onerror` reports. The docs now also say what was always true of `env` inside an isolate: it is empty, not refused (D227's "no environment").
+
+**Rejected:** a distinct `ERR_ISOLATE_EXITED` outcome carrying the code — it gives an isolate a way to end itself that D227 decided it should not have.

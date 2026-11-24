@@ -444,8 +444,9 @@ rejects with `DataCloneError`.
 **Inside an isolate**, `runtime:workers` exports only `host`, a stub that calls
 the parent's function of each name and resolves with its result. Every
 capability is refused there, with `ERR_CAPABILITY_DENIED`: files, network,
-environment, `import()` of a file, workers. `runtime:` modules that need no
-capability work.
+`cwd()`, `import()` of a file, workers. `env` is empty, and `exit()` throws a
+`TypeError` — process control is not an isolate's. `runtime:` modules that need
+no capability work.
 
 | Code | Meaning |
 | --- | --- |

@@ -33,13 +33,29 @@ use crate::Result;
 /// Registers the `runtime:process` ops, capturing the (optional) [`Process`]
 /// provider, the engine's interrupt handle (for `exit`), and the runtime's live
 /// view of its own capability set (for `permissions`).
+/// Which agent these ops serve: the process's own, a `Worker`, or an
+/// `Isolate` (which is a worker too, on the shared pool). One value rather than
+/// two flags, so "an isolate that is not a worker" cannot be said.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Agent {
+    Main,
+    Worker,
+    Isolate,
+}
+
+impl Agent {
+    fn is_worker(self) -> bool {
+        self != Agent::Main
+    }
+}
+
 pub(crate) fn install(
     engine: &mut dyn Engine,
     process: Option<Arc<dyn Process>>,
     signals: Option<Arc<dyn Signals>>,
     interrupt: InterruptHandle,
     capabilities: Rc<Cell<CapabilitySet>>,
-    is_worker: bool,
+    agent: Agent,
     clock: Arc<dyn es_runtime_providers::Clock>,
 ) -> Result<()> {
     // How long *this agent* has been running.
@@ -288,6 +304,17 @@ pub(crate) fn install(
     // further either. Gating it on `Env` (as this once did) meant `--deny-env`
     // denied the unrelated ability to exit cleanly.
     engine.register_op(OpDecl::sync("process_exit", move |args| {
+        // Process control is not an isolate's (D227, D245). It used to end the
+        // isolate silently — the code dropped, the parent told only that the
+        // isolate "has ended" — so a plugin finishing with `exit(0)` read as a
+        // crash. Refused like everything else an isolate cannot do: the
+        // exported function returns, or throws.
+        if agent == Agent::Isolate {
+            return Err(OpError::type_error(
+                "exit() is process control, and an isolate is computation only: \
+                 return from the exported function, or throw",
+            ));
+        }
         let proc = require(&process)?;
         let code = args.first().and_then(Value::as_number).unwrap_or(0.0) as i32;
         proc.exit(code);
@@ -298,7 +325,7 @@ pub(crate) fn install(
         Ok(Value::Undefined)
     }))?;
 
-    install_signals(engine, signals, is_worker)?;
+    install_signals(engine, signals, agent.is_worker())?;
     Ok(())
 }
 

@@ -4691,19 +4691,20 @@ plugin.terminate();
 | `new Isolate({ source, name? }, options?)` | Module source text. Needs `workers`; imports only `runtime:` modules. |
 | `options.name` | The isolate's name. |
 | `options.host` | `{ name: function }` the isolate calls through `host`; each runs in the parent with its permissions. |
-| `options.memory` | Ceiling in MB for the heap and, separately, for `ArrayBuffer` storage; at least 8, at most the parent's. Past it: `ERR_ISOLATE_MEMORY_LIMIT`. |
+| `options.memory` | Ceiling in MB for the heap and, separately, for `ArrayBuffer` storage; at least 8, at most the parent's. Reaching it at run time: `ERR_ISOLATE_MEMORY_LIMIT`. Asking for more than the parent's is a `TypeError`, delivered as `onerror` and a rejected `exports` since the check runs where the isolate starts. |
 | `options.cpuTime` | Most CPU ms one turn may use (until the isolate next waits); default 1000, and never unbounded (D237). Past it: `ERR_ISOLATE_CPU_LIMIT`. |
 | `exports` | Promise of the exported functions, each an async call. Rejects if the module throws while loading. |
 | `postMessage(message)`, `onmessage`, `onerror` | One-way messages and failures, as on `Worker`. |
 | `terminate()`, `unref()`, `ref()` | As on `Worker`; waiting calls reject with `ERR_ISOLATE_TERMINATED`. |
-| `Isolate.prepare(count)` | Builds `count` isolates ahead of time, claimed by later isolates without their own `memory`. Resolves with how many wait. Needs `Worker`. |
+| `Isolate.prepare(count)` | Builds `count` isolates ahead of time, claimed by later isolates without their own `memory`. Resolves with how many wait. Needs `workers`. |
 
 Any other option throws, `permissions` included. The code object takes
 `source` and `name` only: a limit or `host` written there throws, naming the
 options argument it belongs in, rather than being dropped; so does a `name`
 given in both. Inside an isolate
 `runtime:workers` exports only `host`, and every capability is refused with
-`ERR_CAPABILITY_DENIED` and a message naming `host`.
+`ERR_CAPABILITY_DENIED` and a message naming `host`; `exit()` throws a
+`TypeError`, and `env` is empty.
 
 ## `runtime:build`
 
