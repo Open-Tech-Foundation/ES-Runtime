@@ -11,9 +11,13 @@
 //! which is what keeps every byte of key material traceable to the injected
 //! provider rather than an ambient OS RNG.
 
-use es_runtime_engine::{Engine, OpDecl, OpError, Value};
+use std::sync::Arc;
+
+use es_runtime_engine::{Engine, OpDecl, OpError, OpResult, Value};
+use es_runtime_providers::TaskSpawner;
 
 use crate::Result;
+use crate::blocking::blocking_op;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 
 /// The DER object identifier body for each curve (RFC 8410 §3): the three bytes
@@ -25,7 +29,10 @@ const OID_X25519: [u8; 3] = [0x2b, 0x65, 0x6e];
 const KEY_LEN: usize = 32;
 
 /// Registers the Ed25519 / X25519 host ops.
-pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    spawner: Option<Arc<dyn TaskSpawner>>,
+) -> Result<()> {
     // The public key for a 32-byte secret. Ed25519 hashes the seed and clamps;
     // X25519 clamps and multiplies the basepoint — the curve decides, not us.
     engine.register_op(OpDecl::sync("okp_public", |args| {
@@ -44,22 +51,24 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
         }))
     }))?;
 
-    engine.register_op(OpDecl::sync("ed25519_sign", |args| {
-        let secret = seed(&arg_bytes(&args, 0)?)?;
-        let message = arg_bytes(&args, 1)?;
-        use ed25519_dalek::Signer as _;
-        let signature = ed25519_dalek::SigningKey::from_bytes(&secret).sign(&message);
-        Ok(Value::Bytes(signature.to_bytes().to_vec()))
-    }))?;
+    // Each signature op twice, one body: a webhook's `sign()`/`verify()` is a
+    // synchronous API and keeps the synchronous op, while `crypto.subtle`'s is
+    // asynchronous and runs off the loop thread, since its cost grows with the
+    // message (D241).
+    engine.register_op(OpDecl::sync("ed25519_sign", ed25519_sign_op))?;
+    engine.register_op(blocking_op(
+        "subtle_ed25519_sign",
+        &spawner,
+        ed25519_sign_op,
+    ))?;
+    engine.register_op(OpDecl::sync("ed25519_verify", ed25519_verify_op))?;
+    engine.register_op(blocking_op(
+        "subtle_ed25519_verify",
+        &spawner,
+        ed25519_verify_op,
+    ))?;
 
-    engine.register_op(OpDecl::sync("ed25519_verify", |args| {
-        let public = arg_bytes(&args, 0)?;
-        let signature = arg_bytes(&args, 1)?;
-        let message = arg_bytes(&args, 2)?;
-        Ok(Value::Bool(ed25519_verify(&public, &signature, &message)))
-    }))?;
-
-    engine.register_op(OpDecl::sync("x25519_derive", |args| {
+    engine.register_op(blocking_op("x25519_derive", &spawner, |args| {
         let secret = seed(&arg_bytes(&args, 0)?)?;
         let peer = seed(&arg_bytes(&args, 1)?)?;
         let shared = x25519_dalek::StaticSecret::from(secret)
@@ -124,6 +133,23 @@ impl Curve {
             Curve::X25519 => OID_X25519,
         }
     }
+}
+
+/// `(seed, message)` → the Ed25519 signature.
+fn ed25519_sign_op(args: Vec<Value>) -> OpResult {
+    let secret = seed(&arg_bytes(&args, 0)?)?;
+    let message = arg_bytes(&args, 1)?;
+    use ed25519_dalek::Signer as _;
+    let signature = ed25519_dalek::SigningKey::from_bytes(&secret).sign(&message);
+    Ok(Value::Bytes(signature.to_bytes().to_vec()))
+}
+
+/// `(public key, signature, message)` → whether it verifies.
+fn ed25519_verify_op(args: Vec<Value>) -> OpResult {
+    let public = arg_bytes(&args, 0)?;
+    let signature = arg_bytes(&args, 1)?;
+    let message = arg_bytes(&args, 2)?;
+    Ok(Value::Bool(ed25519_verify(&public, &signature, &message)))
 }
 
 /// Narrows a byte slice to the fixed 32-byte scalar every key here is.

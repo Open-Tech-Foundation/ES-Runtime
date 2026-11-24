@@ -48,15 +48,15 @@ pub(crate) fn install(
     // Networking ops, capability-gated on Net.
     crate::fetch_ops::install(engine, providers.net())?;
     // WebCrypto ops, backed by the Entropy provider + RustCrypto.
-    crate::crypto_ops::install(engine, providers.entropy())?;
+    crate::crypto_ops::install(engine, providers.entropy(), providers.task_spawner())?;
     // Elliptic-curve WebCrypto (ECDSA/ECDH), also Entropy-backed for key gen.
-    crate::ec_ops::install(engine, providers.entropy())?;
+    crate::ec_ops::install(engine, providers.entropy(), providers.task_spawner())?;
     // Curve25519 WebCrypto (Ed25519 signatures, X25519 agreement). Needs no
     // entropy of its own: keys are built from Entropy bytes the prelude draws,
     // and Ed25519 signing is deterministic.
-    crate::curve25519_ops::install(engine)?;
+    crate::curve25519_ops::install(engine, providers.task_spawner())?;
     // RSA WebCrypto (PKCS1-v1_5 / PSS / OAEP), Entropy-backed for key gen/salt.
-    crate::rsa_ops::install(engine, providers.entropy())?;
+    crate::rsa_ops::install(engine, providers.entropy(), providers.task_spawner())?;
     // runtime:process ops: state reads gated on Env, signals on Signals, and
     // `permissions` ungated (D38). `exit` halts via the interrupt handle.
     let interrupt = engine.interrupt_handle();
@@ -131,7 +131,7 @@ pub(crate) fn install(
     crate::serialization_ops::install(engine)?;
     // runtime:hashing ops: digests, incremental hashers, HMAC, password
     // hashing. Pure computation, so no capability and no provider (D57).
-    crate::hashing_ops::install(engine)?;
+    crate::hashing_ops::install(engine, providers.task_spawner())?;
     // Signed and sealed cookies for runtime:http (D161). Pure computation; a
     // seal's nonce is drawn in JS, through the Entropy gate.
     crate::cookie_ops::install(engine)?;

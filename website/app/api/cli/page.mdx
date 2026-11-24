@@ -69,7 +69,7 @@ script that genuinely wants a flag esrun also knows.
 | --- | --- |
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
-| `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds and exit `124`. See [Exit status](#exit-status). |
+| `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds and exit `124`. JavaScript is stopped where it stands, and `crypto.subtle` and password hashing run off the thread it stops; one synchronous native call — `hash()` of a large buffer, a compression chunk — finishes first. See [Exit status](#exit-status). |
 | `--max-heap=<mb>` | Heap ceiling in megabytes for this agent, and the ceiling the workers it starts inherit. Default: the container's memory limit when there is one, else the host's memory. See [Memory](#memory). |
 | `--allow-<name>` | Grant one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`, `diagnostics`, `diagnostics-detail`. See [Permissions](#permissions). |
 | `--allow-all, -A` | Grant every capability. Cannot be combined with `--allow-<name>` or `--deny-all`. |

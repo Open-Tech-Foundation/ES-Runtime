@@ -17,6 +17,7 @@
 mod archive;
 mod archive_ops;
 mod base64_ops;
+mod blocking;
 mod builtins;
 mod cbor;
 mod compression_ops;

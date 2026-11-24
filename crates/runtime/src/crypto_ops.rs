@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use es_runtime_common::{ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::Entropy;
+use es_runtime_providers::{Entropy, TaskSpawner};
 
 use aes::{Aes128, Aes192, Aes256};
 use aes_gcm::aead::{Aead, KeyInit as AeadKeyInit, Payload};
@@ -29,9 +29,14 @@ use pbkdf2::pbkdf2_hmac;
 use sha2::Digest as _;
 
 use crate::Result;
+use crate::blocking::{blocking_op, sized_blocking_op};
 
 /// Registers the WebCrypto host ops.
-pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    entropy: Arc<dyn Entropy>,
+    spawner: Option<Arc<dyn TaskSpawner>>,
+) -> Result<()> {
     engine.register_op(OpDecl::typed("random_bytes", move |len: u32| {
         let mut buf = vec![0u8; len as usize];
         entropy.fill(&mut buf).map_err(|e| {
@@ -40,20 +45,20 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         Ok(buf)
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_digest", |args| {
+    engine.register_op(sized_blocking_op("subtle_digest", &spawner, |args| {
         let alg = arg_str(&args, 0)?;
         let data = arg_bytes(&args, 1)?;
         Ok(Value::Bytes(digest(&alg, &data)?))
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_hmac_sign", |args| {
+    engine.register_op(sized_blocking_op("subtle_hmac_sign", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let key = arg_bytes(&args, 1)?;
         let data = arg_bytes(&args, 2)?;
         Ok(Value::Bytes(hmac_sign(&hash, &key, &data)?))
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_hmac_verify", |args| {
+    engine.register_op(sized_blocking_op("subtle_hmac_verify", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let key = arg_bytes(&args, 1)?;
         let signature = arg_bytes(&args, 2)?;
@@ -61,39 +66,55 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         Ok(Value::Bool(hmac_verify(&hash, &key, &signature, &data)?))
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_aes_gcm_encrypt", |args| {
-        let key = arg_bytes(&args, 0)?;
-        let iv = arg_bytes(&args, 1)?;
-        let data = arg_bytes(&args, 2)?;
-        let aad = arg_bytes(&args, 3).unwrap_or_default();
-        Ok(Value::Bytes(aes_gcm_seal(&key, &iv, &data, &aad)?))
-    }))?;
+    engine.register_op(sized_blocking_op(
+        "subtle_aes_gcm_encrypt",
+        &spawner,
+        |args| {
+            let key = arg_bytes(&args, 0)?;
+            let iv = arg_bytes(&args, 1)?;
+            let data = arg_bytes(&args, 2)?;
+            let aad = arg_bytes(&args, 3).unwrap_or_default();
+            Ok(Value::Bytes(aes_gcm_seal(&key, &iv, &data, &aad)?))
+        },
+    ))?;
 
-    engine.register_op(OpDecl::sync("subtle_aes_gcm_decrypt", |args| {
-        let key = arg_bytes(&args, 0)?;
-        let iv = arg_bytes(&args, 1)?;
-        let data = arg_bytes(&args, 2)?;
-        let aad = arg_bytes(&args, 3).unwrap_or_default();
-        Ok(Value::Bytes(aes_gcm_open(&key, &iv, &data, &aad)?))
-    }))?;
+    engine.register_op(sized_blocking_op(
+        "subtle_aes_gcm_decrypt",
+        &spawner,
+        |args| {
+            let key = arg_bytes(&args, 0)?;
+            let iv = arg_bytes(&args, 1)?;
+            let data = arg_bytes(&args, 2)?;
+            let aad = arg_bytes(&args, 3).unwrap_or_default();
+            Ok(Value::Bytes(aes_gcm_open(&key, &iv, &data, &aad)?))
+        },
+    ))?;
 
-    engine.register_op(OpDecl::sync("subtle_aes_cbc_encrypt", |args| {
-        let key = arg_bytes(&args, 0)?;
-        let iv = arg_bytes(&args, 1)?;
-        let data = arg_bytes(&args, 2)?;
-        Ok(Value::Bytes(aes_cbc_encrypt(&key, &iv, &data)?))
-    }))?;
+    engine.register_op(sized_blocking_op(
+        "subtle_aes_cbc_encrypt",
+        &spawner,
+        |args| {
+            let key = arg_bytes(&args, 0)?;
+            let iv = arg_bytes(&args, 1)?;
+            let data = arg_bytes(&args, 2)?;
+            Ok(Value::Bytes(aes_cbc_encrypt(&key, &iv, &data)?))
+        },
+    ))?;
 
-    engine.register_op(OpDecl::sync("subtle_aes_cbc_decrypt", |args| {
-        let key = arg_bytes(&args, 0)?;
-        let iv = arg_bytes(&args, 1)?;
-        let data = arg_bytes(&args, 2)?;
-        Ok(Value::Bytes(aes_cbc_decrypt(&key, &iv, &data)?))
-    }))?;
+    engine.register_op(sized_blocking_op(
+        "subtle_aes_cbc_decrypt",
+        &spawner,
+        |args| {
+            let key = arg_bytes(&args, 0)?;
+            let iv = arg_bytes(&args, 1)?;
+            let data = arg_bytes(&args, 2)?;
+            Ok(Value::Bytes(aes_cbc_decrypt(&key, &iv, &data)?))
+        },
+    ))?;
 
     // AES-CTR is symmetric: the same keystream XOR serves encrypt and decrypt,
     // so one op backs both `subtle.encrypt` and `subtle.decrypt`.
-    engine.register_op(OpDecl::sync("subtle_aes_ctr", |args| {
+    engine.register_op(sized_blocking_op("subtle_aes_ctr", &spawner, |args| {
         let key = arg_bytes(&args, 0)?;
         let counter = arg_bytes(&args, 1)?;
         let length = args.get(2).and_then(Value::as_number).unwrap_or(0.0) as usize;
@@ -104,21 +125,25 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     // AES-KW (NIST SP 800-38F / RFC 3394). Unlike the other AES modes this one
     // takes no IV and is only ever applied to key material: `subtle.wrapKey` and
     // `subtle.unwrapKey` reach it, `encrypt`/`decrypt` deliberately do not.
-    engine.register_op(OpDecl::sync("subtle_aes_kw_wrap", |args| {
+    engine.register_op(sized_blocking_op("subtle_aes_kw_wrap", &spawner, |args| {
         let key = arg_bytes(&args, 0)?;
         let data = arg_bytes(&args, 1)?;
         Ok(Value::Bytes(aes_kw_wrap(&key, &data)?))
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_aes_kw_unwrap", |args| {
-        let key = arg_bytes(&args, 0)?;
-        let data = arg_bytes(&args, 1)?;
-        Ok(Value::Bytes(aes_kw_unwrap(&key, &data)?))
-    }))?;
+    engine.register_op(sized_blocking_op(
+        "subtle_aes_kw_unwrap",
+        &spawner,
+        |args| {
+            let key = arg_bytes(&args, 0)?;
+            let data = arg_bytes(&args, 1)?;
+            Ok(Value::Bytes(aes_kw_unwrap(&key, &data)?))
+        },
+    ))?;
 
     // Key derivation (`deriveBits`/`deriveKey`). `length` is in bytes — the
     // prelude converts from the spec's bit length.
-    engine.register_op(OpDecl::sync("subtle_hkdf", |args| {
+    engine.register_op(sized_blocking_op("subtle_hkdf", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let ikm = arg_bytes(&args, 1)?;
         let salt = arg_bytes(&args, 2)?;
@@ -129,7 +154,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("subtle_pbkdf2", |args| {
+    engine.register_op(blocking_op("subtle_pbkdf2", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let password = arg_bytes(&args, 1)?;
         let salt = arg_bytes(&args, 2)?;

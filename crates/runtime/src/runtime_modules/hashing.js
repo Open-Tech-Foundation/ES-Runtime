@@ -234,7 +234,7 @@ export const password = {
       ? toInput(params.salt, "salt")
       : crypto.getRandomValues(new Uint8Array(SALT_BYTES));
     delete params.salt;
-    return ops.hash_password(algorithm, toInput(input, "password"), salt, params);
+    return await ops.hash_password(algorithm, toInput(input, "password"), salt, params);
   },
 
   /**
@@ -246,7 +246,7 @@ export const password = {
    */
   async verify(input, stored) {
     if (typeof stored !== "string") throw new TypeError("a stored password hash must be a string");
-    return ops.hash_password_verify(toInput(input, "password"), stored);
+    return await ops.hash_password_verify(toInput(input, "password"), stored);
   },
 
   /**

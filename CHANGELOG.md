@@ -13,6 +13,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`--timeout` and a signal stop a program during a long `crypto.subtle` or
+  password-hashing call.** PBKDF2, RSA key generation, bcrypt and the rest ran
+  on the thread that sees the watchdog and `SIGTERM`, so a 300 ms timeout landed
+  only when a 15-second derive returned, and a `SIGTERM` was ignored and the run
+  exited `0`. They now run on the blocking pool: the same derive stops at the
+  deadline, and `SIGTERM`/`SIGINT` exit `143`/`130` at once. Asymmetric and
+  work-factor operations always run there, which also runs them in parallel
+  (ECDSA verify with 64 in flight: 4k → 34k a second); digest, HMAC, AES and
+  HKDF stay inline up to 64 KiB, where the work is microseconds. Nothing a
+  program sees changes — both APIs were already promise-returning (D241).
+
 - **An unclaimed `reportError()` is an uncaught exception.** It printed a bare
   stack and left the exit status at `0` — and so did a throw out of a signal
   handler, an event listener or a diagnostics subscriber, all of which go

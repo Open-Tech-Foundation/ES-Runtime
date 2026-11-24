@@ -330,8 +330,30 @@ fn reject_esrun_flags_after_source(args: &[String], source: &str) -> Result<(), 
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("error: cannot start the async runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = runtime.block_on(run());
+    // Dropping a runtime waits, without limit, for its blocking work (D241).
+    // A run that ended normally has none — the drive returned because nothing
+    // was pending — so there is nothing to wait for; one that was stopped (a
+    // timeout, an uncaught failure) may still have a PBKDF2 or a key generation
+    // running there whose result nobody will read. Waiting for it turned a
+    // 300 ms `--timeout` into the derive's whole duration. The process leaves
+    // now, as `exit()` and a signal already make it.
+    runtime.shutdown_background();
+    code
+}
+
+async fn run() -> ExitCode {
     // Before anything that could log. Installing a subscriber is a
     // process-global act, so a library crate must not do it. Quiet by default
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.

@@ -5016,3 +5016,32 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** ending the process at the first one, as Deno and Bun do. `esrun` reports an uncaught timer exception and keeps serving, and a second rule for one source of the same failure would be the inconsistency this removes.
 
 **Consequences:** a program whose listener or signal handler throws, unclaimed, now exits `1`, where it exited `0` with a stack on stderr; so does an esdev test file whose DOM listener throws. `onerror` / `addEventListener("error")` with `preventDefault()` is how a program keeps one.
+
+### D241 — Work whose cost can grow runs off the loop thread: `crypto.subtle` and password hashing · *Accepted (2026-11-24)* · *follows D238*
+
+**Context:** reported, and reproduced. PBKDF2 at 2²¹ iterations ran ~14.7 s (debug build) as a synchronous op on the thread driving the loop — the thread the `--timeout` watchdog's termination lands on and the one that sees `SIGTERM`. V8 can interrupt JavaScript, not Rust: a 300 ms `--timeout` was reported only when the derive returned, 14.9 s later, and a `SIGTERM` at 300 ms was never seen — the derive finished and the run exited `0`. Iterations are uncapped, as WebCrypto specifies; RSA key generation, a bcrypt cost and a large buffer to encrypt are the same shape.
+
+**Decision (maintainer, 2026-11-24):**
+- **An asynchronous API whose cost can grow runs off the loop thread,** on the embedder's `TaskSpawner` (tokio's blocking pool under both binaries), through `blocking::blocking_op`; with no spawner it runs inline, as before. The loop stays free to be stopped while the work finishes elsewhere. `crypto.subtle` and `runtime:hashing`'s `password` were already promise-returning, so nothing a guest can observe changes.
+- **Always off the thread:** everything whose cost a parameter sets or that is asymmetric — PBKDF2; RSA and EC key generation; RSA, ECDSA, ECDH, Ed25519 and X25519 operations; `password.hash` and `password.verify` (whose cost is read from the stored hash, so a hostile one sets it).
+- **Symmetric operations stay inline up to 64 KiB** of byte arguments between them — digest, HMAC, AES-GCM/CBC/CTR/KW, HKDF (`sized_blocking_op`). Below that the work is microseconds and the hop costs more than it does; above it the work grows with the data and moves off the thread. Every byte argument counts, an HMAC key included.
+- **Synchronous APIs stay synchronous:** `runtime:hashing`'s `hash()`/`hmac()`, a webhook's `sign()`/`verify()` (Standard Webhooks' API), a compression chunk. Their cost is the size of what the caller hands them, by contract. Ed25519 keeps a synchronous op for webhooks and gains `subtle_ed25519_*` twins for `crypto.subtle`, one body each.
+- **`esrun` leaves without waiting for abandoned work.** Dropping the tokio runtime waited, without limit, for its blocking pool, which turned a timed-out derive back into its whole duration; `esrun` now shuts the runtime down in the background. A run that ended normally has nothing there — its drive returned because nothing was pending. (`esdev` keeps its 2 s bound.)
+
+**Measured** (`bench/subtle-small.js`, release, i7-8700K, best of 2; serial µs a call, then calls a second with 64 in flight):
+
+| call | before | all off-thread | this decision | Deno 2.9.7 | Node 26.13 | Bun 1.4.5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| digest SHA-256, 32 B | 1.5 / 684k | 11.4 / 182k | 1.8 / 603k | 11.2 / 282k | 16.9 / 185k | 1.7 / 559k |
+| HMAC sign, 32 B | 2.2 / 445k | 14.1 / 190k | 2.6 / 394k | 15.6 / 242k | 19.0 / 199k | 11.5 / 345k |
+| AES-GCM encrypt, 1 KiB | 4.1 / 243k | 15.3 / 160k | 4.4 / 224k | 17.2 / 161k | 20.2 / 163k | 13.4 / 287k |
+| ECDSA P-256 verify | 242 / 4k | 309 / 33k | 274 / 34k | 624 / 12k | 93 / 62k | 68 / 130k |
+
+Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/crypto/subtle_crypto.rs`); the table suggests Bun keeps small digests inline. The ~0.3 µs a small call still pays is the async op's promise. Verified by hand: a 300 ms `--timeout` during the derive exits `124` at 312 ms, `SIGTERM` exits `143` at 303 ms, `SIGINT` `130`; a 4096-bit RSA key under `--timeout=200` exits at 214 ms; bcrypt cost 16 + `SIGTERM` exits at 404 ms.
+
+**Rejected:**
+- **Everything off the thread, as Deno does** — measured above: an 8× latency and 2–3.5× throughput cost on the small calls a server makes most (a JWT's HMAC, a cookie's), for work too short to delay a stop.
+- **A cooperative interrupt check inside the loops** (the review's alternative) — it reaches only code we write; the iterations live in RustCrypto's `pbkdf2`, `rsa` and `bcrypt`.
+- **Capping PBKDF2 iterations** — WebCrypto sets no cap, and the cost of a legitimate derive is the caller's choice.
+
+**Consequences:** a timeout or a signal stops a program during any of these promptly, and heavy asymmetric operations run in parallel across the pool (ECDSA verify 4k → 34k a second with 64 in flight). **Not covered:** a single synchronous native call — `hash()` of a large buffer, one compression chunk, `archive` building — still runs to its end before a stop lands; the CLI page says so. ECDSA verify itself is 3–4× slower than Node's and Bun's — RustCrypto's P-256, unchanged here.

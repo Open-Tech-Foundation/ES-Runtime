@@ -25,13 +25,14 @@
 use std::sync::Arc;
 
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::Entropy;
+use es_runtime_providers::{Entropy, TaskSpawner};
 
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BoxedUint, Oaep, Pkcs1v15Sign, Pss, RsaPrivateKey, RsaPublicKey};
 
 use crate::Result;
+use crate::blocking::blocking_op;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 use crate::ec_ops::{EntropyRng, prehash};
 
@@ -76,9 +77,13 @@ fn frame(parts: &[&[u8]]) -> Vec<u8> {
 
 /// Registers the RSA host ops. Several need entropy (key gen, PSS salt, PKCS#1
 /// blinding, OAEP padding), so the provider is cloned per op.
-pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    entropy: Arc<dyn Entropy>,
+    spawner: Option<Arc<dyn TaskSpawner>>,
+) -> Result<()> {
     let gen_entropy = entropy.clone();
-    engine.register_op(OpDecl::sync("rsa_generate_pkcs8", move |args| {
+    engine.register_op(blocking_op("rsa_generate_pkcs8", &spawner, move |args| {
         let bits = args.first().and_then(Value::as_number).unwrap_or(0.0) as usize;
         let exp = arg_bytes(&args, 1)?;
         Ok(Value::Bytes(generate(gen_entropy.as_ref(), bits, &exp)?))
@@ -120,7 +125,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     }))?;
 
     let sign_entropy = entropy.clone();
-    engine.register_op(OpDecl::sync("rsa_pkcs1v15_sign", move |args| {
+    engine.register_op(blocking_op("rsa_pkcs1v15_sign", &spawner, move |args| {
         let hash = arg_str(&args, 0)?;
         let pkcs8 = arg_bytes(&args, 1)?;
         let data = arg_bytes(&args, 2)?;
@@ -132,7 +137,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("rsa_pkcs1v15_verify", |args| {
+    engine.register_op(blocking_op("rsa_pkcs1v15_verify", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let spki = arg_bytes(&args, 1)?;
         let signature = arg_bytes(&args, 2)?;
@@ -143,7 +148,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     }))?;
 
     let pss_entropy = entropy.clone();
-    engine.register_op(OpDecl::sync("rsa_pss_sign", move |args| {
+    engine.register_op(blocking_op("rsa_pss_sign", &spawner, move |args| {
         let hash = arg_str(&args, 0)?;
         let salt_len = args.get(1).and_then(Value::as_number).unwrap_or(0.0) as usize;
         let pkcs8 = arg_bytes(&args, 2)?;
@@ -157,7 +162,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("rsa_pss_verify", |args| {
+    engine.register_op(blocking_op("rsa_pss_verify", &spawner, |args| {
         let hash = arg_str(&args, 0)?;
         let salt_len = args.get(1).and_then(Value::as_number).unwrap_or(0.0) as usize;
         let spki = arg_bytes(&args, 2)?;
@@ -169,7 +174,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     }))?;
 
     let oaep_entropy = entropy.clone();
-    engine.register_op(OpDecl::sync("rsa_oaep_encrypt", move |args| {
+    engine.register_op(blocking_op("rsa_oaep_encrypt", &spawner, move |args| {
         let hash = arg_str(&args, 0)?;
         let label = arg_bytes(&args, 1)?;
         let spki = arg_bytes(&args, 2)?;
@@ -184,7 +189,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     }))?;
 
     let decrypt_entropy = entropy;
-    engine.register_op(OpDecl::sync("rsa_oaep_decrypt", move |args| {
+    engine.register_op(blocking_op("rsa_oaep_decrypt", &spawner, move |args| {
         let hash = arg_str(&args, 0)?;
         let label = arg_bytes(&args, 1)?;
         let pkcs8 = arg_bytes(&args, 2)?;

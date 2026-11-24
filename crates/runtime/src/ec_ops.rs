@@ -16,9 +16,10 @@
 use std::sync::Arc;
 
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::Entropy;
+use es_runtime_providers::{Entropy, TaskSpawner};
 
 use crate::Result;
+use crate::blocking::blocking_op;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 
 /// Adapts an [`Entropy`] provider to the `rand_core` 0.10 traits the curve
@@ -265,9 +266,13 @@ macro_rules! by_curve {
 }
 
 /// Registers the elliptic-curve host ops.
-pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    entropy: Arc<dyn Entropy>,
+    spawner: Option<Arc<dyn TaskSpawner>>,
+) -> Result<()> {
     let gen_entropy = entropy.clone();
-    engine.register_op(OpDecl::sync("ec_generate_pkcs8", move |args| {
+    engine.register_op(blocking_op("ec_generate_pkcs8", &spawner, move |args| {
         let curve = arg_str(&args, 0)?;
         Ok(Value::Bytes(by_curve!(
             curve.as_str(),
@@ -320,7 +325,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         Ok(Value::Bytes(by_curve!(curve.as_str(), export_spki(&sec1))?))
     }))?;
 
-    engine.register_op(OpDecl::sync("ecdsa_sign", move |args| {
+    engine.register_op(blocking_op("ecdsa_sign", &spawner, move |args| {
         let curve = arg_str(&args, 0)?;
         let hash = arg_str(&args, 1)?;
         let pkcs8 = arg_bytes(&args, 2)?;
@@ -332,7 +337,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("ecdsa_verify", |args| {
+    engine.register_op(blocking_op("ecdsa_verify", &spawner, |args| {
         let curve = arg_str(&args, 0)?;
         let hash = arg_str(&args, 1)?;
         let sec1 = arg_bytes(&args, 2)?;
@@ -345,7 +350,7 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("ecdh_derive", |args| {
+    engine.register_op(blocking_op("ecdh_derive", &spawner, |args| {
         let curve = arg_str(&args, 0)?;
         let pkcs8 = arg_bytes(&args, 1)?;
         let peer = arg_bytes(&args, 2)?;

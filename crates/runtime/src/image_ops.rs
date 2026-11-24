@@ -32,6 +32,7 @@ use otf_pixels::{
 };
 
 use crate::Result;
+use crate::blocking::offload;
 
 /// Where the encoded bytes come from.
 enum Source {
@@ -263,26 +264,6 @@ pub(crate) fn install(
         engine.register_op(decl)?;
     }
     Ok(())
-}
-
-/// Runs `work` on the spawner, or inline without one.
-async fn offload<T: Send + 'static>(
-    spawner: Option<Arc<dyn TaskSpawner>>,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> std::result::Result<T, OpError> {
-    let Some(spawner) = spawner else {
-        return Ok(work());
-    };
-    let (tx, rx) = futures_channel::oneshot::channel();
-    spawner
-        .spawn_blocking(Box::new(move || {
-            let _ = tx.send(work());
-        }))
-        .await;
-    // A dropped sender means the work never finished: the pool shut down, or
-    // the work panicked, which Pixels promises malformed input cannot cause.
-    rx.await
-        .map_err(|_| OpError::new(ExceptionClass::Error, "the image work did not complete"))
 }
 
 async fn read_source(

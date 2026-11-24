@@ -41,6 +41,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::blocking::blocking_op;
+
 use base64::{
     Engine as _, engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD,
 };
@@ -507,7 +509,10 @@ fn password_verify(password: &[u8], stored: &str) -> Result<bool, OpError> {
 
 /// Registers the `hash_*` ops. None takes a capability: every one is a pure
 /// function of its arguments (see the module docs on salts).
-pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    spawner: Option<std::sync::Arc<dyn es_runtime_providers::TaskSpawner>>,
+) -> crate::Result<()> {
     // Per-agent by construction: `install` runs once per `Runtime`, so the map
     // and its counter are this isolate's alone and an id from another agent
     // simply is not in it. Nothing here is provider-backed, so there is no
@@ -578,7 +583,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         Ok(encoding.apply(hmac_sign(alg, &key, &data)?))
     }))?;
 
-    engine.register_op(OpDecl::sync("hash_password", |mut args| {
+    engine.register_op(blocking_op("hash_password", &spawner, |mut args| {
         let algorithm = args
             .first()
             .and_then(Value::as_str)
@@ -602,7 +607,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         )?))
     }))?;
 
-    engine.register_op(OpDecl::sync("hash_password_verify", |mut args| {
+    engine.register_op(blocking_op("hash_password_verify", &spawner, |mut args| {
         let stored = args
             .get(1)
             .and_then(Value::as_str)

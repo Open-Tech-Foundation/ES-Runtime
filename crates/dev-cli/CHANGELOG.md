@@ -28,6 +28,9 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **`--timeout` and `^C` stop a program during a long `crypto.subtle` or
+  password-hashing call** — they now run on the blocking pool (runtime D241).
+
 - **A throw out of an event listener fails a test file instead of only
   printing.** The test DOM reports listener errors through `reportError`, which
   is now an uncaught exception when nothing claims it (runtime D240) — the same

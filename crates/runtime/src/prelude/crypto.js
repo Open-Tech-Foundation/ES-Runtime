@@ -527,7 +527,7 @@
   const subtle = {
     async digest(algorithm, data) {
       const name = normalizeAlgorithm(algorithm).name;
-      return asArrayBuffer(ops.subtle_digest(name, toBytes(data)));
+      return asArrayBuffer(await ops.subtle_digest(name, toBytes(data)));
     },
 
     async generateKey(algorithm, extractable, usages) {
@@ -594,7 +594,7 @@
       if (EC_ALGS.has(algo.name)) {
         const curve = ecCurve(algo);
         const alg = { name: algo.name, namedCurve: curve };
-        const pkcs8 = ops.ec_generate_pkcs8(curve);
+        const pkcs8 = await ops.ec_generate_pkcs8(curve);
         const sec1 = ops.ec_public_point(curve, pkcs8);
         // Split the requested usages between the two keys: ECDSA →
         // sign(private)/verify(public); ECDH → derive*(private), none public.
@@ -609,7 +609,7 @@
       }
       if (RSA_ALGS.has(algo.name)) {
         const exp = toBytes(algo.publicExponent);
-        const pkcs8 = ops.rsa_generate_pkcs8(algo.modulusLength, exp);
+        const pkcs8 = await ops.rsa_generate_pkcs8(algo.modulusLength, exp);
         const spki = ops.rsa_public_spki(pkcs8);
         const alg = {
           name: algo.name,
@@ -702,24 +702,24 @@
       if (algo.name === "Ed25519") {
         // No hash to choose and no nonce to source: Ed25519 fixes SHA-512 and
         // derives its nonce from the key and message (RFC 8032).
-        return asArrayBuffer(ops.ed25519_sign(key[KEY], toBytes(data)));
+        return asArrayBuffer(await ops.subtle_ed25519_sign(key[KEY], toBytes(data)));
       }
       if (algo.name === "HMAC") {
         return asArrayBuffer(
-          ops.subtle_hmac_sign(key.algorithm.hash.name, key[KEY], toBytes(data)),
+          await ops.subtle_hmac_sign(key.algorithm.hash.name, key[KEY], toBytes(data)),
         );
       }
       if (algo.name === "ECDSA") {
         return asArrayBuffer(
-          ops.ecdsa_sign(key.algorithm.namedCurve, hashName(algo.hash), key[KEY], toBytes(data)),
+          await ops.ecdsa_sign(key.algorithm.namedCurve, hashName(algo.hash), key[KEY], toBytes(data)),
         );
       }
       if (algo.name === "RSASSA-PKCS1-v1_5") {
-        return asArrayBuffer(ops.rsa_pkcs1v15_sign(key.algorithm.hash.name, key[KEY], toBytes(data)));
+        return asArrayBuffer(await ops.rsa_pkcs1v15_sign(key.algorithm.hash.name, key[KEY], toBytes(data)));
       }
       if (algo.name === "RSA-PSS") {
         return asArrayBuffer(
-          ops.rsa_pss_sign(key.algorithm.hash.name, algo.saltLength, key[KEY], toBytes(data)),
+          await ops.rsa_pss_sign(key.algorithm.hash.name, algo.saltLength, key[KEY], toBytes(data)),
         );
       }
       throw new DOMException(`unsupported sign algorithm: ${algo.name}`, "NotSupportedError");
@@ -730,10 +730,10 @@
       requireOperation(normalizeAlgorithm(algorithm).name, "verify");
       requireUsage(key, "verify");
       if (algo.name === "Ed25519") {
-        return ops.ed25519_verify(key[KEY], toBytes(signature), toBytes(data));
+        return await ops.subtle_ed25519_verify(key[KEY], toBytes(signature), toBytes(data));
       }
       if (algo.name === "HMAC") {
-        return ops.subtle_hmac_verify(
+        return await ops.subtle_hmac_verify(
           key.algorithm.hash.name,
           key[KEY],
           toBytes(signature),
@@ -741,7 +741,7 @@
         );
       }
       if (algo.name === "ECDSA") {
-        return ops.ecdsa_verify(
+        return await ops.ecdsa_verify(
           key.algorithm.namedCurve,
           hashName(algo.hash),
           key[KEY],
@@ -750,10 +750,10 @@
         );
       }
       if (algo.name === "RSASSA-PKCS1-v1_5") {
-        return ops.rsa_pkcs1v15_verify(key.algorithm.hash.name, key[KEY], toBytes(signature), toBytes(data));
+        return await ops.rsa_pkcs1v15_verify(key.algorithm.hash.name, key[KEY], toBytes(signature), toBytes(data));
       }
       if (algo.name === "RSA-PSS") {
-        return ops.rsa_pss_verify(
+        return await ops.rsa_pss_verify(
           key.algorithm.hash.name,
           algo.saltLength,
           key[KEY],
@@ -783,17 +783,17 @@
         case "AES-GCM": {
           const iv = toBytes(algo.iv);
           const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
-          return asArrayBuffer(ops.subtle_aes_gcm_encrypt(key[KEY], iv, toBytes(data), aad));
+          return asArrayBuffer(await ops.subtle_aes_gcm_encrypt(key[KEY], iv, toBytes(data), aad));
         }
         case "AES-CBC":
-          return asArrayBuffer(ops.subtle_aes_cbc_encrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
+          return asArrayBuffer(await ops.subtle_aes_cbc_encrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
         case "AES-CTR":
           return asArrayBuffer(
-            ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
+            await ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
           );
         case "RSA-OAEP": {
           const label = algo.label ? toBytes(algo.label) : new Uint8Array(0);
-          return asArrayBuffer(ops.rsa_oaep_encrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
+          return asArrayBuffer(await ops.rsa_oaep_encrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
         }
       }
       throw new DOMException(`unsupported encrypt algorithm: ${algo.name}`, "NotSupportedError");
@@ -805,18 +805,18 @@
         case "AES-GCM": {
           const iv = toBytes(algo.iv);
           const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
-          return asArrayBuffer(ops.subtle_aes_gcm_decrypt(key[KEY], iv, toBytes(data), aad));
+          return asArrayBuffer(await ops.subtle_aes_gcm_decrypt(key[KEY], iv, toBytes(data), aad));
         }
         case "AES-CBC":
-          return asArrayBuffer(ops.subtle_aes_cbc_decrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
+          return asArrayBuffer(await ops.subtle_aes_cbc_decrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
         case "AES-CTR":
           // CTR is symmetric — the same op decrypts.
           return asArrayBuffer(
-            ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
+            await ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
           );
         case "RSA-OAEP": {
           const label = algo.label ? toBytes(algo.label) : new Uint8Array(0);
-          return asArrayBuffer(ops.rsa_oaep_decrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
+          return asArrayBuffer(await ops.rsa_oaep_decrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
         }
       }
       throw new DOMException(`unsupported decrypt algorithm: ${algo.name}`, "NotSupportedError");
@@ -844,7 +844,7 @@
       if (algo.name === "X25519") {
         // The shared secret is the full 32-byte X coordinate; a null length
         // returns all of it, otherwise the leading bits.
-        const shared = ops.x25519_derive(baseKey[KEY], algo.public[KEY]);
+        const shared = await ops.x25519_derive(baseKey[KEY], algo.public[KEY]);
         if (length == null) return asArrayBuffer(shared);
         if (length % 8 !== 0) {
           throw new DOMException("X25519 length must be a multiple of 8", "OperationError");
@@ -859,7 +859,7 @@
         // The full shared secret is the agreed X coordinate (field width).
         // A null length returns all of it; otherwise take the leading bits.
         const curve = baseKey.algorithm.namedCurve;
-        const shared = ops.ecdh_derive(curve, baseKey[KEY], algo.public[KEY]);
+        const shared = await ops.ecdh_derive(curve, baseKey[KEY], algo.public[KEY]);
         if (length == null) return asArrayBuffer(shared);
         if (length % 8 !== 0) {
           throw new DOMException("ECDH length must be a multiple of 8", "OperationError");
@@ -877,12 +877,12 @@
       if (algo.name === "HKDF") {
         const info = algo.info ? toBytes(algo.info) : new Uint8Array(0);
         return asArrayBuffer(
-          ops.subtle_hkdf(hashName(algo.hash), baseKey[KEY], toBytes(algo.salt), info, lengthBytes),
+          await ops.subtle_hkdf(hashName(algo.hash), baseKey[KEY], toBytes(algo.salt), info, lengthBytes),
         );
       }
       if (algo.name === "PBKDF2") {
         return asArrayBuffer(
-          ops.subtle_pbkdf2(
+          await ops.subtle_pbkdf2(
             hashName(algo.hash),
             baseKey[KEY],
             toBytes(algo.salt),
@@ -929,7 +929,7 @@
       const exported = await subtle.exportKey(format, key);
       const bytes = format === "jwk" ? jwkToBytes(exported) : toBytes(exported);
       if (algo.name === AES_KW) {
-        return asArrayBuffer(ops.subtle_aes_kw_wrap(wrappingKey[KEY], bytes));
+        return asArrayBuffer(await ops.subtle_aes_kw_wrap(wrappingKey[KEY], bytes));
       }
       return encryptUnchecked(algo, wrappingKey, bytes);
     },
@@ -947,7 +947,7 @@
       requireUsage(unwrappingKey, "unwrapKey");
       const bytes =
         algo.name === AES_KW
-          ? ops.subtle_aes_kw_unwrap(unwrappingKey[KEY], toBytes(wrappedKey))
+          ? await ops.subtle_aes_kw_unwrap(unwrappingKey[KEY], toBytes(wrappedKey))
           : new Uint8Array(await decryptUnchecked(algo, unwrappingKey, toBytes(wrappedKey)));
       const keyData = format === "jwk" ? bytesToJwk(bytes) : bytes;
       return subtle.importKey(
