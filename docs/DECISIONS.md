@@ -5003,3 +5003,16 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** a sticky "the module has settled once" flag (the review's suggestion) — it still holds every failure of a program that never settles, the case reported.
 
 **Consequences:** a failure in a parked program is printed when it happens and counts towards the exit status as before. **Not changed here:** an unclaimed `reportError()` — and the throws routed through it (a signal handler's, an event listener's) — still goes to the console with no `error:` headline and no effect on the exit status; Deno and Bun treat it as an uncaught error. That is its own decision.
+
+### D240 — An unclaimed `reportError` is an uncaught exception · *Accepted (2026-11-24)* · *follows D239*
+
+**Context:** found beside D239. `reportError()` dispatches an `error` event and, when nothing claims it, printed the bare stack with `console.error` — no `error:` headline, and no effect on the exit status. Everything the runtime routes through it inherited that: a throw out of an `onSignal` handler, out of an `EventTarget` listener (esdev's test DOM included), out of a `runtime:diagnostics` subscriber. A timer callback's throw, by contrast, reaches the embedder as an uncaught exception: printed with its headline, counted, `esrun` exits `1`. The reference docs already said every unclaimed failure "is printed and exits non-zero"; for `reportError` it was not true. Measured locally: Deno 2.9.7 and Bun 1.4.5 both treat an unclaimed `reportError` as an uncaught error and exit `1`; Node 26 has no `reportError`.
+
+**Decision (maintainer, 2026-11-24):**
+- **Unclaimed, `reportError` records the error for the embedder as an uncaught exception,** through `__report_uncaught`, an engine builtin beside `__heap_bytes` — a builtin because the error's stack lives on the JS value, which the op boundary would flatten. It is exactly what a timer's throw becomes: reported with its headline and counted in the exit status, while the program keeps running (a server keeps serving), as `esrun` already does for timers. `preventDefault()` on the event still claims it.
+- **A `runtime:http` failure report stays a log line.** It is the same function called with the request as context (D206), for a handler that threw and was answered with a `500`: handled, not uncaught.
+- **The headline is `error: uncaught exception`** for every source. It read "in a timer callback", which would now be false for most of them; the stack under it says where.
+
+**Rejected:** ending the process at the first one, as Deno and Bun do. `esrun` reports an uncaught timer exception and keeps serving, and a second rule for one source of the same failure would be the inconsistency this removes.
+
+**Consequences:** a program whose listener or signal handler throws, unclaimed, now exits `1`, where it exited `0` with a stack on stderr; so does an esdev test file whose DOM listener throws. `onerror` / `addEventListener("error")` with `preventDefault()` is how a program keeps one.

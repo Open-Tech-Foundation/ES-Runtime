@@ -1410,7 +1410,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     let sink = pending.clone();
     let driver = Driver::new(clock, timers).reporting_failures_to(move |failure| {
         let (headline, error) = match failure {
-            DriveFailure::UncaughtError(e) => ("uncaught exception in a timer callback", e),
+            // From a timer callback, a signal handler, an event listener or
+            // `reportError()` alike (D240): the stack below says where.
+            DriveFailure::UncaughtError(e) => ("uncaught exception", e),
             DriveFailure::UnhandledRejection(e) => ("unhandled promise rejection", e),
             // The enum is non-exhaustive; anything added later is still reported
             // rather than silently dropped.

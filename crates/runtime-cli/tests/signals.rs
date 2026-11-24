@@ -239,3 +239,37 @@ fn the_shutdown_grace_bounds_the_drain() {
         "the grace must cap the wait, but took {elapsed:?}"
     );
 }
+
+/// D240: a throw out of a signal handler is an uncaught exception — reported
+/// with the headline every other one has, and counted in the exit status. It
+/// was a bare stack on the console, and the run exited 0. The handler keeps
+/// working: the next signal still reaches it.
+#[test]
+fn a_throwing_signal_handler_is_reported_as_an_uncaught_exception() {
+    let mut child = Command::new(common::esrun_bin())
+        .arg("--allow-signals")
+        .arg(
+            "-e=import { onSignal, offSignal } from 'runtime:process'; \
+             let n = 0; \
+             const h = () => { n++; if (n === 2) { console.log('SECOND'); offSignal('SIGUSR1', h); return; } \
+               throw new Error('handler boom'); }; \
+             onSignal('SIGUSR1', h); console.log('READY');",
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn esrun");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut lines = BufReader::new(stdout).lines();
+    assert_eq!(lines.next().expect("ready").expect("read"), "READY");
+    send(child.id(), "USR1");
+    // The first is reported before the second is sent, so the order is fixed.
+    std::thread::sleep(Duration::from_millis(300));
+    send(child.id(), "USR1");
+    assert_eq!(lines.next().expect("second").expect("read"), "SECOND");
+    let out = child.wait_with_output().expect("wait");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("error: uncaught exception\n"), "stderr: {err}");
+    assert!(err.contains("Error: handler boom"), "stderr: {err}");
+    assert_eq!(out.status.code(), Some(1), "stderr: {err}");
+}

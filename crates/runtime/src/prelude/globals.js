@@ -81,10 +81,21 @@
     // instead — and since the parent reports what *it* does not claim, writing
     // it to this agent's console too would report one failure twice.
     if (__internal.failure.unclaimed?.(error)) return;
-    globalThis.console.error(text);
     // The same failure as data, for a host that shows it elsewhere — esdev's
     // overlay (D207). A no-op under esrun.
     ops.console_report(context ?? null, nameOf(error), messageOf(error), stackOf(error));
+    // A report with a context is `runtime:http` logging a request that failed
+    // and was answered with a 500 (D206): handled, so a log line. Anything else
+    // is an exception nothing caught — a `reportError()`, a signal handler's
+    // or an event listener's throw — and goes to the embedder as one, exactly
+    // as a timer callback's does: reported with its headline, and counted in
+    // the exit status (D240). A realm with no host to tell (the engine's own
+    // tests) keeps the console.
+    if (context === null && typeof globalThis.__report_uncaught === "function") {
+      globalThis.__report_uncaught(error);
+      return;
+    }
+    globalThis.console.error(text);
   };
   // Report an exception the way the platform does: dispatch an "error"
   // ErrorEvent on the global scope, and fall back to console.error only if

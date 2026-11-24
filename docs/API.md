@@ -254,7 +254,7 @@ non-zero.
 
 | Event | Fired when | Interface | Cancelable |
 | --- | --- | --- | --- |
-| `error` | an exception escapes a timer callback, or `reportError()` is called | `ErrorEvent` | yes |
+| `error` | an exception escapes a timer callback, a signal handler or an event listener, or `reportError()` is called | `ErrorEvent` | yes |
 | `unhandledrejection` | a promise rejection is still unhandled at the end of a tick | `PromiseRejectionEvent` | yes |
 | `rejectionhandled` | a handler is attached to a rejection already reported | `PromiseRejectionEvent` | no |
 

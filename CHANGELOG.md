@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An unclaimed `reportError()` is an uncaught exception.** It printed a bare
+  stack and left the exit status at `0` — and so did a throw out of a signal
+  handler, an event listener or a diagnostics subscriber, all of which go
+  through it. Now each is reported with the `error: uncaught exception` headline
+  and counts towards exit `1`, as a timer callback's throw does, while the
+  program keeps running; `preventDefault()` on the `error` event still claims
+  it. The headline for a timer's throw is the same — it no longer says "in a
+  timer callback", which the stack below already shows (D240).
+
 - **A failure is reported when it happens, even while the program waits at a
   top-level `await`.** An exception out of a timer or an unhandled rejection was
   held until the entry module's evaluation settled, so a program parked on an

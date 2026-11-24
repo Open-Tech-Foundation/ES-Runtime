@@ -118,7 +118,7 @@ A failure with nothing left to catch it is offered to the global scope first.
 
 | Event | Fired when | Cancelable |
 | --- | --- | --- |
-| `error` | an exception escapes a timer callback, or `reportError()` | yes |
+| `error` | an exception escapes a timer callback, a signal handler or an event listener, or `reportError()` | yes |
 | `unhandledrejection` | a rejection is unhandled at the end of a tick | yes |
 | `rejectionhandled` | a handler attaches to an already-reported rejection | no |
 

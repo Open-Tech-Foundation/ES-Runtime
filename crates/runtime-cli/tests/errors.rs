@@ -80,10 +80,7 @@ fn a_timer_exception_is_reported_while_a_top_level_await_is_pending() {
          await new Promise(() => {});",
     );
     let err = stderr(&out);
-    assert!(
-        err.contains("uncaught exception in a timer callback"),
-        "stderr: {err}"
-    );
+    assert!(err.contains("error: uncaught exception\n"), "stderr: {err}");
     assert!(err.contains("Error: while parked"), "stderr: {err}");
     assert_eq!(out.status.code(), Some(124), "stderr: {err}");
 }
@@ -133,6 +130,49 @@ fn the_entry_modules_own_throw_after_an_await_is_reported_once() {
         !err.contains("unhandled promise rejection"),
         "stderr: {err}"
     );
+}
+
+// D240: an unclaimed `reportError` is an uncaught exception, as in Deno and
+// Bun — and so is everything routed through it. It used to be a bare stack on
+// the console that left the exit status at 0.
+
+#[test]
+fn an_unclaimed_report_error_fails_the_run_and_the_program_keeps_running() {
+    let out = esrun(
+        "reportError(new TypeError('reported')); \
+         await new Promise((r) => setTimeout(r, 20)); console.log('still running');",
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("error: uncaught exception\nTypeError: reported"),
+        "stderr: {err}"
+    );
+    assert_eq!(stdout(&out).trim(), "still running");
+    assert_eq!(out.status.code(), Some(1), "stderr: {err}");
+}
+
+#[test]
+fn a_claimed_report_error_is_not_a_failure() {
+    let out = esrun(
+        "addEventListener('error', (e) => { console.log('claimed ' + e.error.message); e.preventDefault(); }); \
+         reportError(new Error('mine'));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "claimed mine");
+}
+
+#[test]
+fn a_throwing_event_listener_fails_the_run() {
+    let out = esrun(
+        "const t = new EventTarget(); \
+         t.addEventListener('ping', () => { throw new RangeError('listener'); }); \
+         t.addEventListener('ping', () => console.log('next listener ran')); \
+         t.dispatchEvent(new Event('ping'));",
+    );
+    let err = stderr(&out);
+    assert!(err.contains("RangeError: listener"), "stderr: {err}");
+    assert_eq!(stdout(&out).trim(), "next listener ran");
+    assert_eq!(out.status.code(), Some(1), "stderr: {err}");
 }
 
 #[test]

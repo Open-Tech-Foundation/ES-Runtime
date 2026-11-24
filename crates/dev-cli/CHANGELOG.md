@@ -28,6 +28,11 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A throw out of an event listener fails a test file instead of only
+  printing.** The test DOM reports listener errors through `reportError`, which
+  is now an uncaught exception when nothing claims it (runtime D240) — the same
+  as an error thrown from a timer.
+
 - **A program run reports a failure when it happens, even while it waits at a
   top-level `await`** — the run is esrun's (D239). A timer exception or an
   unhandled rejection in a program parked on an await was never printed.

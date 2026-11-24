@@ -132,6 +132,7 @@
     "__span_close",
     "__heap_bytes",
     "__timer_ref",
+    "__report_uncaught",
     "__utf8_decode",
     "__bson_encode",
     "__bson_decode",

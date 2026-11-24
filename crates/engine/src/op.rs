@@ -952,6 +952,11 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     refs.extend(crate::text::external_references());
     refs.extend(crate::bson::external_references());
     refs.extend(crate::json::external_references());
+    // Last, so no index above moves: installed on the global a snapshot
+    // captures, so heap-reachable from one like the rest (D240).
+    refs.push(v8::ExternalReference {
+        function: report_uncaught_builtin.map_fn_to(),
+    });
     std::borrow::Cow::Owned(refs)
 }
 
@@ -1254,6 +1259,48 @@ fn heap_bytes_inner(
         v8::Number::new(scope, stats.external_memory() as f64).into(),
     ];
     rv.set(v8::Array::new_with_elements(scope, &values).into());
+}
+
+/// Installs `__report_uncaught(error)`: records `error` for the embedder as an
+/// uncaught exception, exactly as one escaping a timer callback is (D240).
+///
+/// The prelude's `reportError` calls it once the `error` event it dispatched
+/// went unclaimed, so a failure reported from JavaScript — a signal handler's
+/// throw, an event listener's, `reportError()` itself — reaches the embedder
+/// the way any other uncaught exception does, instead of only the console. It
+/// dispatches nothing itself: the event has already been offered to the guest.
+/// A builtin rather than an op because the error's stack lives on the JS
+/// value, which the op boundary would flatten.
+pub(crate) fn install_report_builtin(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> Result<()> {
+    let global = context.global(scope);
+    install_global_fn(
+        scope,
+        global,
+        "__report_uncaught",
+        report_uncaught_builtin,
+        None,
+    )
+}
+
+fn report_uncaught_builtin(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(state) = op_state(scope) else { return };
+        let described = crate::convert::exception_details(scope, args.get(0));
+        state.borrow_mut().uncaught_errors.push(described);
+    }));
+    if caught.is_err() && !scope.is_execution_terminating() {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "internal error in __report_uncaught"),
+        );
+    }
 }
 
 /// Installs `__wasm_pending(delta)`, through which the prelude's `WebAssembly`
