@@ -11,6 +11,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- **An op with no capability check cannot be added unreviewed.** Every op is
+  callable by guest code, an `Isolate`'s included, so the 261 that check no
+  capability are now a reviewed list (`crates/runtime/src/ungated_ops.txt`)
+  that a test holds them to (D247).
+
 ### Fixed
 
 - **Starting a `Worker` without the grants names `workers` first, and inside

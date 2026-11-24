@@ -504,6 +504,12 @@ pub trait Engine {
     /// reports it and exits non-zero).
     fn take_uncaught_errors(&mut self) -> Vec<UncaughtError>;
 
+    /// Every registered op's name and the capabilities it requires before it
+    /// dispatches, in registration order. Read-only introspection: it is how a
+    /// test holds the set of ops that check *nothing* to a reviewed list, since
+    /// guest code — an `Isolate`'s included — can call every op there is.
+    fn op_requirements(&self) -> Vec<(String, Vec<es_runtime_common::Capability>)>;
+
     /// The ceilings this isolate was built with.
     ///
     /// Read by an agent that is about to start another: a worker's limits are
@@ -1335,6 +1341,10 @@ impl Engine for V8Engine {
 
     fn take_unhandled_rejections(&mut self) -> Vec<UncaughtError> {
         crate::op::take_unhandled_rejections(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn op_requirements(&self) -> Vec<(String, Vec<es_runtime_common::Capability>)> {
+        self.op_state.borrow().requirements()
     }
 
     fn take_uncaught_errors(&mut self) -> Vec<UncaughtError> {

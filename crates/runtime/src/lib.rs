@@ -6496,6 +6496,52 @@ mod tests {
         assert_eq!(out, Value::String("reassigned=false denied=true".into()));
     }
 
+    /// Every op is callable by guest code — an `Isolate`'s too, which holds no
+    /// capability and so is stopped only by each op's own check. An op that
+    /// requires nothing is therefore reachable by the least-trusted code this
+    /// runtime runs, and each one has to be a deliberate choice: a pure
+    /// function of its arguments, or an act on a handle the agent owns (D50).
+    /// This holds the set to `ungated_ops.txt`, so a new one fails here until
+    /// someone has looked at it and added it (D247).
+    #[test]
+    fn every_ungated_op_is_one_that_was_reviewed() {
+        let _g = v8_guard();
+        let rt = runtime();
+        let mut ungated: Vec<String> = rt
+            .engine
+            .op_requirements()
+            .into_iter()
+            .filter(|(_, required)| required.is_empty())
+            .map(|(name, _)| name)
+            .collect();
+        ungated.sort();
+        ungated.dedup();
+        let reviewed: Vec<&str> = include_str!("ungated_ops.txt")
+            .lines()
+            .map(|line| line.split('#').next().unwrap_or("").trim())
+            .filter(|line| !line.is_empty())
+            .collect();
+        let added: Vec<&String> = ungated
+            .iter()
+            .filter(|op| !reviewed.contains(&op.as_str()))
+            .collect();
+        let removed: Vec<&&str> = reviewed
+            .iter()
+            .filter(|op| !ungated.iter().any(|u| u == **op))
+            .collect();
+        assert!(
+            added.is_empty() && removed.is_empty(),
+            "ungated ops changed.\n\nNew, with no capability check — review each, then add it to \
+             crates/runtime/src/ungated_ops.txt:\n{}\n\nNo longer ungated — remove from the list:\n{}",
+            added
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            removed.iter().map(|s| **s).collect::<Vec<_>>().join("\n"),
+        );
+    }
+
     #[test]
     fn op_table_binding_is_locked() {
         let _g = v8_guard();

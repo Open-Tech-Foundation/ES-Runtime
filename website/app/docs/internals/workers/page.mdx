@@ -354,10 +354,14 @@ Most of a `Worker`'s cost is its thread, its loop and its providers, not V8.
 **Computation only, built that way.** An isolate's runtime is built from a
 provider set of its own: a clock, the console, entropy and its channel. There is
 no filesystem, database, socket, command or worker provider, and its network
-transport refuses every request. So an isolate holds nothing to reach out with
-even before its empty capability set refuses it. Each denial ends with a
-sentence naming `host`, because the usual remedy, a flag or a grant, does not
-exist there.
+transport refuses every request. The op table is the same one every agent
+has, so what stops an isolate is two things at once: each op checks its
+capability before it runs, and the providers behind them are the isolate's own,
+with nothing to reach. The ops that check nothing are each a pure function of
+their arguments or an act on a handle the isolate itself owns, and a test holds
+that set to a reviewed list, so a new op cannot join it unexamined (D247). Each
+denial ends with a sentence naming `host`, because the usual remedy, a flag or a
+grant, does not exist there.
 
 **The envelope.** An isolate's messages, calls to its exports and its calls to
 `host` share one channel, so every message is a frame whose first element says

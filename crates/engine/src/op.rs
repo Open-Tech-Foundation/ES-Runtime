@@ -464,6 +464,14 @@ impl OpState {
     }
 
     /// Adds an op to the table and returns its id (its index).
+    /// Each op's name and required capabilities, in registration order.
+    pub(crate) fn requirements(&self) -> Vec<(String, Vec<Capability>)> {
+        self.ops
+            .iter()
+            .map(|op| (op.name.clone(), op.required_capabilities.clone()))
+            .collect()
+    }
+
     pub(crate) fn add_op(
         &mut self,
         name: String,
