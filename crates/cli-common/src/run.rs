@@ -825,6 +825,12 @@ fn warn_ignored_ca_variables(bin: &str) {
     }
 }
 
+/// The most a finished run waits for its last telemetry to be accepted
+/// (D249) — esdev's bound on its runtime's shutdown, for the same reason: work
+/// that ends does so well within it, and work that cannot must not hold the
+/// process open.
+const TELEMETRY_FLUSH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Runs `config` to completion. `bin` names the calling binary in the messages
 /// only it can be responsible for (the shutdown drain notice).
 pub async fn run(bin: &'static str, config: Config) -> Result<(), RunError> {
@@ -1470,7 +1476,11 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     // hands the payload over and returns so the loop is never blocked on a
     // collector, which means there is normally something still in flight here —
     // and a run that finishes quickly is often the one worth having a trace of.
-    runtime.flush_telemetry().await;
+    //
+    // Bounded (D249): the exporter's own timeout is 10 s, so a collector that
+    // never answers held a finished run open for all of it. A reachable one
+    // answers in milliseconds; an unreachable one loses the batch either way.
+    let _ = tokio::time::timeout(TELEMETRY_FLUSH_BOUND, runtime.flush_telemetry()).await;
 
     // A guest `process.exit(code)` from async code halts the drive via the
     // interrupt; exit with that code rather than reporting the termination.

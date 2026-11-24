@@ -20,6 +20,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An unreachable `--otel` collector no longer holds a finished run open.**
+  The final flush waited for the exporter's 10 s timeout; it now waits at most
+  2 s (D249).
+
 - **A top-level `await` that nothing can settle is an error, not a silent
   hang.** `await new Promise(() => {})` with nothing else pending ran for ever.
   It now fails at once — `top-level await in <file> never settled` — and exits

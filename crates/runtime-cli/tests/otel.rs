@@ -727,3 +727,36 @@ fn request_spans_carry_their_status_and_durations_are_counted() {
         "{server_span}"
     );
 }
+
+/// D249: a collector that accepts the connection and never answers held a
+/// finished run open for the exporter's whole 10 s timeout. The last flush is
+/// bounded now; the run still exits 0, its own work having succeeded.
+#[test]
+fn a_collector_that_never_answers_does_not_hold_the_exit() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    // Accept and hold every connection without reading or answering.
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    let started = Instant::now();
+    let out = Command::new(common::esrun_bin())
+        .arg(format!("--otel=http://127.0.0.1:{port}"))
+        .arg("-e=console.log('done')")
+        .output()
+        .expect("spawn esrun");
+    let took = started.elapsed();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "done");
+    assert!(
+        took < Duration::from_secs(6),
+        "exit waited {took:?} for the collector"
+    );
+}

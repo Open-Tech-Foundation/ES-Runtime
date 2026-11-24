@@ -5115,3 +5115,13 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Rejected:** Node's `13` — a code only Node users would recognise. Changing `has_pending_work` itself — workers and isolates drive on it, and a worker waiting at its top level for a message is waiting on its channel, which is not on that list.
 
 **Consequences:** the D238 race test and the D239 reporting tests, which parked on `await new Promise(() => {})`, now park on a timer that outlives the run — waiting on real work, which is the case they are about.
+
+### D249 — The last telemetry flush waits at most 2 s · *Accepted (2026-11-25)*
+
+**Context:** reported. With `--otel` pointed at a collector that never answers, a run that had finished printed its output and then waited 10.0 s — the exporter's own request timeout — before exiting, because the CLI awaited `flush_telemetry()` without a bound. The page said a collector that is down "never fails or delays your program"; at exit it did.
+
+**Decision (maintainer, 2026-11-25):** the final flush is bounded at 2 s, esdev's bound on its runtime's shutdown and for the same reason: work that ends does so well within it, and work that cannot must not hold the process open. A reachable collector answers in milliseconds; an unreachable one loses the batch either way, so the bound costs nothing that waiting would have saved.
+
+**Rejected:** `--shutdown-grace` (10 s by default) — the same delay by default, for a bound that governs draining requests, not exporting spans.
+
+**Consequences:** measured, the reported case exits in 2.0 s instead of 10.1 s; a test holds a collector that accepts and never answers to under 6 s.
