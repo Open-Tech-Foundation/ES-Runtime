@@ -20,6 +20,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Isolate.prepare(n)` builds exactly `n`, and refuses a count that could
+  never fit.** It clamped silently at 10,000 — about 31 GiB, since a prepared
+  isolate holds about 3.1 MiB, not the 1.7 MiB documented — so a large count ran
+  the machine out of memory. Now a count that, with those already waiting, would
+  take more than 90% of the process's memory limit is a `RangeError` before any
+  is built; below that, the count is the caller's (D250).
+
 - **An unreachable `--otel` collector no longer holds a finished run open.**
   The final flush waited for the exporter's 10 s timeout; it now waits at most
   2 s (D249).

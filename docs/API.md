@@ -4696,7 +4696,7 @@ plugin.terminate();
 | `exports` | Promise of the exported functions, each an async call. Rejects if the module throws while loading. |
 | `postMessage(message)`, `onmessage`, `onerror` | One-way messages and failures, as on `Worker`. |
 | `terminate()`, `unref()`, `ref()` | As on `Worker`; waiting calls reject with `ERR_ISOLATE_TERMINATED`. |
-| `Isolate.prepare(count)` | Builds `count` isolates ahead of time, claimed by later isolates without their own `memory`. Resolves with how many wait. Needs `workers`. |
+| `Isolate.prepare(count)` | Builds `count` isolates ahead of time, claimed by later isolates without their own `memory`; each holds about 3.1 MiB while it waits. Resolves with how many wait. A count that, with those waiting, would take more than 90% of the process's memory limit is a `RangeError`, before any is built. Needs `workers`. |
 
 Any other option throws, `permissions` included. The code object takes
 `source` and `name` only: a limit or `host` written there throws, naming the

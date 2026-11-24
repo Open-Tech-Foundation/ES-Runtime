@@ -33,6 +33,14 @@ pub fn process_cpu_ms() -> f64 {
     imp::process_cpu_ms()
 }
 
+/// Bytes this process may use: the cgroup memory limit when there is one,
+/// otherwise the host's physical memory; `0` when neither could be read. The
+/// figure `--max-heap`'s default is sized from (D250 bounds `Isolate.prepare`
+/// by it as well).
+pub fn memory_limit_bytes() -> u64 {
+    crate::sysmem::available_bytes()
+}
+
 /// The process's current resident set in bytes, or `0` where it could not be
 /// read.
 ///

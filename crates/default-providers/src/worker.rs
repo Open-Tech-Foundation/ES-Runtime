@@ -601,6 +601,10 @@ impl WorkerHost for ThreadWorkerHost {
     /// thread it was built on until a spawn there claims it (D227). Only a
     /// pool prepares: a thread host's agent is built on a thread that does not
     /// exist until the spawn.
+    fn prepared(&self) -> usize {
+        self.pool.as_ref().map_or(0, |pool| pool.prepared())
+    }
+
     fn prepare(
         &self,
         template: WorkerSpec,
@@ -609,9 +613,11 @@ impl WorkerHost for ThreadWorkerHost {
         let Some(pool) = self.pool.clone() else {
             return Box::pin(async { Ok(0) });
         };
-        let room = MAX_PREPARED.saturating_sub(pool.prepared());
+        // Exactly `count`: how many warm isolates are worth their memory is the
+        // caller's decision, bounded by the runtime against the process's
+        // memory limit before it gets here (D250), never clamped silently.
         let mut built = Vec::new();
-        for _ in 0..count.min(room) {
+        for _ in 0..count {
             let (done, finished) = tokio::sync::oneshot::channel::<bool>();
             let factory = self.factory.clone();
             let template = template.clone();
@@ -633,11 +639,6 @@ impl WorkerHost for ThreadWorkerHost {
         })
     }
 }
-
-/// The most agents a pool keeps prepared at once. Each idle one is an isolate
-/// heap (~1.7 MiB), so a loop of `prepare` stops here rather than at the
-/// memory's end.
-pub const MAX_PREPARED: usize = 10_000;
 
 /// One agent built ahead of time, waiting on its pool thread.
 struct Prepared {

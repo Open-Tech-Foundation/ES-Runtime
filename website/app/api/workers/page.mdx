@@ -435,7 +435,7 @@ places.
 | `onmessage`, `onerror` | Event handlers; `addEventListener` works too. An `error` nothing calls `preventDefault()` on is logged. |
 | `terminate()` | Stops it at once. Waiting and later calls reject with `ERR_ISOLATE_TERMINATED`. |
 | `unref()`, `ref()` | Whether the isolate keeps the process alive. It does from the start. |
-| `Isolate.prepare(count)` | Static. Builds `count` isolates ahead of time; resolves with how many are waiting. A later `new Isolate()` without its own `memory` claims one and starts without building one. Needs `workers`. |
+| `Isolate.prepare(count)` | Static. Builds `count` isolates ahead of time; resolves with how many are waiting. A later `new Isolate()` without its own `memory` claims one and starts without building one. Each holds about 3.1 MiB while it waits, so size `count` to your memory; one that, with those waiting, would take more than 90% of the process's memory limit is a `RangeError` before any is built. Needs `workers`. |
 
 Arguments and results cross by structured clone. A thrown error keeps its
 standard class, `message`, `stack` and `code`; a result that cannot be cloned

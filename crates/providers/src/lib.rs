@@ -2093,6 +2093,12 @@ pub trait WorkerHost: Send + Sync {
         let _ = (template, count);
         Box::pin(async { Ok(0) })
     }
+
+    /// How many agents [`prepare`](Self::prepare) built are waiting now —
+    /// what a further `prepare` adds to. A host that cannot prepare has none.
+    fn prepared(&self) -> usize {
+        0
+    }
 }
 
 /// The queues behind `MessagePort`, so that a port can be **transferred** to

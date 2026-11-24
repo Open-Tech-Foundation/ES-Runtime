@@ -524,6 +524,29 @@ fn unbudgeted_spinners_cannot_starve_the_pool() {
     assert_eq!(lines(&out), ["hi 24", "1 ERR_ISOLATE_CPU_LIMIT"]);
 }
 
+/// D250: `prepare(n)` builds exactly `n` — how many warm isolates are worth
+/// their memory is the caller's call — but a count that could never fit, more
+/// than 90% of the memory limit on its own, is refused before anything is
+/// built. It used to clamp silently at 10,000, about 31 GiB.
+#[test]
+fn a_prepare_that_could_never_fit_is_refused_up_front() {
+    let out = run(
+        "prepare-bound",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const started = performance.now();
+        try { await Isolate.prepare(1_000_000); console.log("prepared"); }
+        catch (e) { console.log(e.name, /at most \d+ fit in 90%/.test(e.message)); }
+        console.log(performance.now() - started < 2000);
+        console.log(await Isolate.prepare(3));
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(lines(&out), ["RangeError true", "true", "3"]);
+}
+
 /// D246: a `Worker` started inside an isolate is refused with the isolate's
 /// own note. It said "add --allow-imports", a flag that can do nothing there,
 /// naming the read before the start.

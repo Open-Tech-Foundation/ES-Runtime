@@ -433,10 +433,13 @@ pub(crate) fn install_isolates(
                     0,
                     0,
                 )?;
-                let waiting = require_isolates(&host)?
-                    .prepare(template, count)
-                    .await
-                    .map_err(map_err)?;
+                let host = require_isolates(&host)?;
+                check_prepare_fits(
+                    host.prepared(),
+                    count,
+                    es_runtime_engine::sysinfo::memory_limit_bytes(),
+                )?;
+                let waiting = host.prepare(template, count).await.map_err(map_err)?;
                 Ok(Value::Number(waiting as f64))
             })
         })
@@ -444,6 +447,44 @@ pub(crate) fn install_isolates(
     )?;
 
     install_channel(engine, &ISOLATE_OPS, isolates, children)
+}
+
+/// What one prepared isolate is taken to cost in resident memory, for the
+/// bound on `Isolate.prepare` (D250): an upper estimate of the ~3.1 MiB
+/// `bench/isolate-prepare-memory.js` measures, which that probe keeps honest.
+const PREPARED_ISOLATE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The share of the process's memory limit prepared isolates may take
+/// together, in percent. Not all of it: the process itself — V8, the prelude,
+/// the program's own heap, the pool's threads — needs the rest.
+const PREPARED_SHARE_PERCENT: u64 = 90;
+
+/// Refuses an `Isolate.prepare(count)` that cannot fit, whatever else the
+/// process is doing: `waiting + count` isolates would take more than 90% of the
+/// memory limit on their own (D250). How many fit alongside the program's own
+/// load is the caller's decision, as `--max-heap` is; only the impossible is
+/// refused. With no limit readable (`0`) nothing is refused.
+fn check_prepare_fits(
+    waiting: usize,
+    count: usize,
+    limit_bytes: u64,
+) -> std::result::Result<(), OpError> {
+    if limit_bytes == 0 {
+        return Ok(());
+    }
+    let budget = limit_bytes / 100 * PREPARED_SHARE_PERCENT;
+    let most = budget / PREPARED_ISOLATE_BYTES;
+    let total = (waiting as u64).saturating_add(count as u64);
+    if total <= most {
+        return Ok(());
+    }
+    Err(OpError::range_error(format!(
+        "Isolate.prepare({count}) would leave {total} isolates waiting, about {} MiB, and at \
+         most {most} fit in {PREPARED_SHARE_PERCENT}% of this process's {} MiB memory limit \
+         ({waiting} are waiting already)",
+        total * PREPARED_ISOLATE_BYTES / (1024 * 1024),
+        limit_bytes / (1024 * 1024),
+    )))
 }
 
 /// The CPU budget a turn of an isolate gets when it asks for none (D237).
@@ -1010,6 +1051,25 @@ mod tests {
     use es_runtime_common::Limits;
 
     const MB: usize = 1024 * 1024;
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// D250: 90% of a 1 GiB limit is ~921 MiB, so 230 isolates at 4 MiB fit
+    /// and 231 do not; those already waiting count towards it.
+    #[test]
+    fn prepare_is_refused_only_past_its_share_of_the_limit() {
+        let limit = 1024 * MIB;
+        assert!(check_prepare_fits(0, 230, limit).is_ok());
+        let err = check_prepare_fits(0, 231, limit).unwrap_err();
+        assert!(err.to_string().contains("at most 230 fit"), "{err}");
+        assert!(check_prepare_fits(200, 30, limit).is_ok());
+        assert!(check_prepare_fits(200, 31, limit).is_err());
+    }
+
+    #[test]
+    fn with_no_readable_limit_nothing_is_refused() {
+        assert!(check_prepare_fits(0, 1_000_000, 0).is_ok());
+    }
 
     fn spec_with_cpu(cpu_time_ms: u64) -> WorkerSpec {
         isolate_spec(

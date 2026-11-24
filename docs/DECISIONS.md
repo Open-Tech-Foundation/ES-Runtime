@@ -5125,3 +5125,14 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Rejected:** `--shutdown-grace` (10 s by default) — the same delay by default, for a bound that governs draining requests, not exporting spans.
 
 **Consequences:** measured, the reported case exits in 2.0 s instead of 10.1 s; a test holds a collector that accepts and never answers to under 6 s.
+
+### D250 — `Isolate.prepare(n)` builds exactly `n`, and refuses only a count that could never fit · *Accepted (2026-11-25)* · *amends D227's phase 4*
+
+**Context:** reported, and re-measured. A prepared isolate holds **3.24 MB (≈ 3.1 MiB)** of resident memory, linear to 360 and stable over three runs (`bench/isolate-prepare-memory.js`, release, 12 cores, 16 GB) — not the 1.65–1.77 MiB the docs gave, which is a bare snapshot-restored isolate without the pool's runtime, providers and channel. `prepare` was bounded only by `MAX_PREPARED = 10_000`, about 31 GiB, so `prepare(10000)` ran a 16 GB machine out of memory instead of returning — and below that cap it clamped silently.
+
+**Decision (maintainer, 2026-11-25):** the feature exists to allocate isolates before they are needed, and how many are worth their memory depends on the deployment — so the caller decides, and the runtime gives them a true figure and refuses only the impossible.
+- `prepare(n)` builds exactly `n`; the silent clamp is gone.
+- The docs give the measured cost, and the probe that produces it runs in `bench/probe-isolates.sh`.
+- A count whose isolates, with those already waiting, would take more than **90%** of the process's memory limit (the cgroup's, else physical memory — the figure `--max-heap`'s default reads) at 4 MiB each is a `RangeError` before any is built, stating the numbers. The 10% left is the process's own: V8, the prelude, the program's heap, the pool's threads. It is a ceiling, not a guarantee — a count under it can still be too many alongside a large program — and that part is the caller's, as `--max-heap` is.
+
+**Rejected (with the maintainer):** clamping to available memory at the call — memory moves while the isolates are built and after, so a snapshot of headroom protects nothing in a running server. A live per-isolate check and a pool that drops prepared isolates under pressure — machinery that second-guesses the caller's capacity decision, and the warmth it discards is what was asked for. Building lazily — it spreads the CPU, not the memory, and a cold `new Isolate()` already is lazy.

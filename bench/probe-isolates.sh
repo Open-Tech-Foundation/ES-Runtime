@@ -13,6 +13,8 @@
 #                    and under v8::Locker, pinned and migrating
 #   isolate-start.js an Isolate's start, cold and from Isolate.prepare, through
 #                    a release esrun
+#   isolate-prepare-memory.js
+#                    resident memory per prepared isolate (D250)
 #
 # Linux only for the memory rows: they read /proc/self/status.
 set -euo pipefail
@@ -34,3 +36,6 @@ target/release/examples/isolate_locker "$ISOLATES" "$THREADS"
 echo
 echo "## isolate-start.js"
 target/release/esrun --allow-workers bench/isolate-start.js
+echo
+echo "## isolate-prepare-memory.js"
+target/release/esrun --allow-workers --allow-diagnostics bench/isolate-prepare-memory.js

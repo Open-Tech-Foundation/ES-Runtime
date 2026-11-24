@@ -413,6 +413,17 @@ From `esrun --allow-workers bench/isolate-start.js`, which
 `bash bench/probe-isolates.sh` also runs; per-isolate times are amortised over
 the pool's threads.
 
+**What a prepared isolate holds.** About **3.1 MiB** of resident memory each,
+linear in how many wait (measured to 360), and almost nothing more once one is
+claimed and called. That is nearly twice the bare snapshot isolate above: a pool
+isolate also carries its runtime, its providers and its channel, and it is this
+figure that sizes `prepare`. From `esrun --allow-workers --allow-diagnostics
+bench/isolate-prepare-memory.js`, which `bash bench/probe-isolates.sh` also
+runs. `prepare(n)` builds exactly `n` — how many are worth their memory is the
+caller's decision — and refuses, before building any, a count whose isolates,
+with those already waiting, would take more than 90% of the process's memory
+limit (the cgroup's, else physical memory) at 4 MiB each (D250).
+
 **Limits.** An isolate shares its thread, so it may not block it: `Atomics.wait`
 throws, and no synchronous op is reachable. Every turn has a CPU budget — 1000
 ms when the program names none — because a turn that never ended would hold up

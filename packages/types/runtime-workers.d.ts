@@ -410,7 +410,9 @@ declare module "runtime:workers" {
     /**
      * Builds `count` isolates ahead of time; a later `new Isolate()` without
      * its own `memory` claims one and starts without building one. Resolves
-     * with how many are waiting. Needs `workers`.
+     * with how many are waiting. Each holds about 3.1 MiB while it waits; a
+     * count that, with those waiting, would take more than 90% of the
+     * process's memory limit rejects with a `RangeError`. Needs `workers`.
      */
     static prepare(count: number): Promise<number>;
   }

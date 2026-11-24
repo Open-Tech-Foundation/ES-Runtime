@@ -15,6 +15,9 @@ itself.
 
 ### Changed
 
+- `Isolate.prepare` documents what a prepared isolate costs and that a count
+  past 90% of the memory limit rejects (runtime D250).
+
 - `IsolateOptions.cpuTime` documents its default, `1000`, and that there is no
   unbounded value (runtime D237).
 
