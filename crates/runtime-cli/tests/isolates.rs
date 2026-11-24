@@ -468,6 +468,52 @@ fn a_spinning_isolate_does_not_hold_the_pool_past_its_budget() {
     assert_eq!(lines(&out), ["40 ERR_ISOLATE_CPU_LIMIT"]);
 }
 
+/// The code argument takes `source` and `name` and nothing else. A limit put
+/// there instead of in the options used to be dropped, and the code ran
+/// uncapped; now it is refused, naming where it belongs — and the spin below
+/// never starts.
+#[test]
+fn a_limit_in_the_code_argument_is_refused_not_dropped() {
+    let out = run(
+        "code-keys",
+        "",
+        r#"
+        import { Isolate } from "runtime:workers";
+        const spin = "export function spin(){ for(;;){} }";
+        for (const extra of [{ cpuTime: 50 }, { memory: 16 }, { host: {} }]) {
+          try { new Isolate({ source: spin, ...extra }).terminate(); console.log("accepted"); }
+          catch (e) {
+            const key = Object.keys(extra)[0];
+            console.log(e.name, e.message.includes(`{ ${key} }`));
+          }
+        }
+        try { new Isolate({ source: spin, permissions: ["net"] }).terminate(); console.log("accepted"); }
+        catch (e) { console.log(e.name, /computation only/.test(e.message)); }
+        try { new Isolate({ source: spin, cputime: 50 }).terminate(); console.log("accepted"); }
+        catch (e) { console.log(e.name, /unknown key "cputime"/.test(e.message)); }
+        try { new Isolate({ source: "", name: "a" }, { name: "b" }).terminate(); console.log("accepted"); }
+        catch (e) { console.log(e.name, /given twice/.test(e.message)); }
+        const ok = new Isolate({ source: "export const hi = () => 'hi';", name: "fine" });
+        console.log(await (await ok.exports).hi());
+        ok.terminate();
+        "#,
+        GRANT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        lines(&out),
+        [
+            "TypeError true",
+            "TypeError true",
+            "TypeError true",
+            "TypeError true",
+            "TypeError true",
+            "TypeError true",
+            "hi",
+        ]
+    );
+}
+
 #[test]
 fn cpu_time_must_be_a_positive_whole_number() {
     let out = run(

@@ -4692,7 +4692,10 @@ plugin.terminate();
 | `terminate()`, `unref()`, `ref()` | As on `Worker`; waiting calls reject with `ERR_ISOLATE_TERMINATED`. |
 | `Isolate.prepare(count)` | Builds `count` isolates ahead of time, claimed by later isolates without their own `memory`. Resolves with how many wait. Needs `Worker`. |
 
-Any other option throws, `permissions` included. Inside an isolate
+Any other option throws, `permissions` included. The code object takes
+`source` and `name` only: a limit or `host` written there throws, naming the
+options argument it belongs in, rather than being dropped; so does a `name`
+given in both. Inside an isolate
 `runtime:workers` exports only `host`, and every capability is refused with
 `ERR_CAPABILITY_DENIED` and a message naming `host`.
 

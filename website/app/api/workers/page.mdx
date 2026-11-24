@@ -423,7 +423,10 @@ const iso = new Isolate(code, options);
 | `options.cpuTime` | `number` | Most CPU milliseconds one turn may use — from when the isolate gets its thread until it next waits. Default: no limit. |
 
 Any other option throws a `TypeError`, `permissions` included: an isolate can be
-granted nothing.
+granted nothing. `{ source, name? }` takes those two keys only — `memory`,
+`cpuTime` or `host` written beside `source` throws a `TypeError` naming the
+options argument, so a limit is never dropped; so does a `name` given in both
+places.
 
 | Member | |
 | --- | --- |

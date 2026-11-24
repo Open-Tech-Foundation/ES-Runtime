@@ -11,6 +11,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **A limit given in the wrong place is refused, not dropped.** `new Isolate({
+  source, cpuTime: 50, memory: 16 })` ran the code with no CPU budget and no
+  memory ceiling: the code object's keys beyond `source` and `name` were never
+  read, while the options argument refused every key it did not know. The code
+  object now takes `source` and `name` only — `memory`, `cpuTime` or `host`
+  there is a `TypeError` naming the options argument, `permissions` gets the
+  isolate's computation-only message, any other key is an unknown key, and a
+  `name` given in both places is refused rather than one silently winning.
+
 ### Documentation
 
 - **The security pages say what the runtime does.** The permission vocabulary

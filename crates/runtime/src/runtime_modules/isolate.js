@@ -133,6 +133,38 @@ function isolateCpuTime(value) {
 }
 
 const ISOLATE_OPTIONS = new Set(["name", "host", "memory", "cpuTime"]);
+const ISOLATE_CODE_KEYS = new Set(["source", "name"]);
+
+/**
+ * Refuses any key of a `{ source }` argument but `source` and `name`. A limit
+ * written there would otherwise be dropped, and the code would run without
+ * it: the one mistake an isolate's options must never turn into silently.
+ */
+function isolateCheckCode(code, opts) {
+  for (const key of Object.keys(code)) {
+    if (ISOLATE_CODE_KEYS.has(key)) continue;
+    if (key === "permissions") {
+      throw new TypeError(
+        "an Isolate is computation only and takes no permissions — pass it what it " +
+          'needs through "host" functions, or use a Worker',
+      );
+    }
+    if (ISOLATE_OPTIONS.has(key)) {
+      throw new TypeError(
+        `"${key}" is an Isolate option, not part of its code: ` +
+          `new Isolate({ source }, { ${key} })`,
+      );
+    }
+    throw new TypeError(
+      `unknown key ${JSON.stringify(key)} in Isolate code — it takes { source, name }`,
+    );
+  }
+  if (code.name !== undefined && opts.name !== undefined) {
+    throw new TypeError(
+      'Isolate "name" given twice — in the code and in the options; give it once',
+    );
+  }
+}
 
 /**
  * A small, sandboxed agent on a shared pool of threads.
@@ -176,6 +208,9 @@ class Isolate extends EventTarget {
       if (!ISOLATE_OPTIONS.has(key)) {
         throw new TypeError(`unknown Isolate option ${JSON.stringify(key)}`);
       }
+    }
+    if (code !== null && typeof code === "object" && !(code instanceof URL)) {
+      isolateCheckCode(code, opts);
     }
     this.#host = isolateHost(opts.host);
     const memory = isolateMemory(opts.memory);
