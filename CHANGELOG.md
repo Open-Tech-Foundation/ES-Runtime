@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A failure is reported when it happens, even while the program waits at a
+  top-level `await`.** An exception out of a timer or an unhandled rejection was
+  held until the entry module's evaluation settled, so a program parked on an
+  `await` that never settled reported nothing at all, and one whose `await` did
+  settle printed the failure late, after later output. Each failure is now
+  printed after the tick it happened in; the entry module's own throw is still
+  reported once (D239).
+
 - **A run that hit `--timeout` or `--max-heap` never ends as a success.** An
   asynchronous timeout — a program awaiting something that never settled —
   exited `0` in most runs and `1` in the rest, printing nothing; running out of

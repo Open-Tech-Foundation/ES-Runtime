@@ -1399,10 +1399,13 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     // Buffered for one tick rather than printed from the sink directly, because
     // the entry module's *own* top-level throw also arrives here as an unhandled
     // rejection — and that failure is reported once, below, as an uncaught
-    // exception naming the file. Holding each batch until the module's
-    // evaluation has settled is what lets that one be dropped instead of
-    // printed twice; for a long-running server (the case this exists for) the
-    // module settled long ago and a tick is no delay at all.
+    // exception naming the file. Each batch is flushed after the tick that
+    // produced it, against the evaluation state as it stands then: the state is
+    // read live off the module's promise, so a tick that rejected it already
+    // reads `Failed` and that one failure is dropped. Nothing waits for the
+    // module to settle — a program parked on a top-level `await` (a promise that
+    // never settles, an awaited signal) may never settle, and its failures were
+    // held unreported for as long as it ran (D239).
     let pending = Arc::new(Mutex::new(Vec::<Failure>::new()));
     let sink = pending.clone();
     let driver = Driver::new(clock, timers).reporting_failures_to(move |failure| {
@@ -1443,9 +1446,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     let flush_count = reported.clone();
     let drive = driver.drive_while(&mut runtime, move |rt| {
         let state = rt.module_eval_state();
-        if !matches!(state, ModuleEvalState::Pending) {
-            flush_failures(&flush_pending, &flush_count, &state);
-        }
+        flush_failures(&flush_pending, &flush_count, &state);
         !matches!(state, ModuleEvalState::Failed(_))
     });
     let outcome = match options.timeout {

@@ -67,6 +67,74 @@ fn an_unhandled_rejection_fails_the_run() {
     assert!(err.contains("Error: nobody"), "stderr: {err}");
 }
 
+// D239: failures were held back until the entry module's evaluation settled,
+// so a program parked on a top-level `await` reported nothing while it ran —
+// and nothing ever, if the await never settled. Each test below parks on one
+// and is ended by `--timeout`; what matters is what was printed before that.
+
+#[test]
+fn a_timer_exception_is_reported_while_a_top_level_await_is_pending() {
+    let out = esrun_with(
+        &["--timeout=600"],
+        "setTimeout(() => { throw new Error('while parked'); }, 0); \
+         await new Promise(() => {});",
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("uncaught exception in a timer callback"),
+        "stderr: {err}"
+    );
+    assert!(err.contains("Error: while parked"), "stderr: {err}");
+    assert_eq!(out.status.code(), Some(124), "stderr: {err}");
+}
+
+#[test]
+fn an_unhandled_rejection_is_reported_while_a_top_level_await_is_pending() {
+    let out = esrun_with(
+        &["--timeout=600"],
+        "setTimeout(() => { Promise.reject(new Error('parked rejection')); }, 0); \
+         await new Promise(() => {});",
+    );
+    let err = stderr(&out);
+    assert!(err.contains("unhandled promise rejection"), "stderr: {err}");
+    assert!(err.contains("Error: parked rejection"), "stderr: {err}");
+}
+
+/// Reported when it happened, not after the await it happened during: the
+/// failure comes before the line the program prints once the await settles.
+/// Both go to stderr, so one stream holds the order.
+#[test]
+fn a_failure_is_reported_before_the_top_level_await_it_happened_during_settles() {
+    let out = esrun(
+        "setTimeout(() => { throw new Error('early'); }, 0); \
+         await new Promise((r) => setTimeout(r, 300)); \
+         console.error('settled');",
+    );
+    let err = stderr(&out);
+    let failure = err.find("Error: early").expect("the failure is reported");
+    let settled = err.find("settled").expect("the await settles");
+    assert!(failure < settled, "reported late:\n{err}");
+    assert!(!out.status.success(), "stderr: {err}");
+}
+
+/// What the buffering existed for still holds: the entry module's own throw
+/// after an await is reported once, as an uncaught exception naming the
+/// module, and not a second time as an unhandled rejection.
+#[test]
+fn the_entry_modules_own_throw_after_an_await_is_reported_once() {
+    let out = esrun("await new Promise((r) => setTimeout(r, 20)); throw new Error('own');");
+    let err = stderr(&out);
+    assert_eq!(err.matches("Error: own").count(), 1, "stderr: {err}");
+    assert!(
+        err.contains("uncaught exception in <eval>"),
+        "stderr: {err}"
+    );
+    assert!(
+        !err.contains("unhandled promise rejection"),
+        "stderr: {err}"
+    );
+}
+
 #[test]
 fn an_unhandledrejection_listener_claims_the_rejection() {
     let out = esrun(

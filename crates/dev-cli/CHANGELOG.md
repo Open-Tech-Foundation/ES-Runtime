@@ -28,6 +28,10 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A program run reports a failure when it happens, even while it waits at a
+  top-level `await`** — the run is esrun's (D239). A timer exception or an
+  unhandled rejection in a program parked on an await was never printed.
+
 - **A program run that `--timeout` stopped exits `124`, and never `0`.** The
   run is esrun's (D238): an await that never settled could end in success, and
   running out of heap inside a timer did, silently. `esdev <file>` now exits

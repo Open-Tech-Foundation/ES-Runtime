@@ -4993,3 +4993,13 @@ Under `strace`, one `exists("f.txt")` run from `/home/G/es-bench/.adhoc/ex` is 9
 **Rejected:** dropping the `tokio` deadline and trusting the watchdog alone (the review's suggestion) — an idle run would then never end. Exiting from inside the run with `leave(124)`, as a shutdown does — it skips what `esdev test` reports for a file whose run failed.
 
 **Consequences:** `--timeout` and `--max-heap` never end a run as a success. Scripts that treated a timeout as status `1` see `124`. **Not solved here:** a synchronous native op (a large PBKDF2, compression) runs to completion before the watchdog's termination can land — the deadline is reported, but late; that is its own change.
+
+### D239 — A failure is reported after the tick it happened in, whether or not the entry module has settled · *Accepted (2026-11-24)*
+
+**Context:** reported, and reproduced. `esrun -e='setTimeout(()=>{throw new Error("x")},0); await new Promise(()=>{})'` printed nothing and ran until killed; so did an unhandled rejection in the same position. When the await did settle, the failure was printed after it — after output the program wrote later. The CLI buffers each tick's failures so the entry module's own top-level throw, which also arrives as an unhandled rejection, is reported once (as "uncaught exception in <module>") rather than twice, and it flushed that buffer only once the module's evaluation was no longer `Pending`. The reasoning recorded beside it — "for a long-running server the module settled long ago" — does not hold for a program parked on a top-level `await` (a promise that never settles, an awaited signal, a long external call), which are exactly the programs whose crash most needs seeing.
+
+**Decision:** each batch is flushed after the tick that produced it, against the evaluation state as it stands then. That state is read live off the module's promise, and the failures are collected inside the tick, so a tick that rejected the module's evaluation already reads `Failed` when its batch is flushed and the duplicate is still dropped. The wait bought nothing the de-duplication needed.
+
+**Rejected:** a sticky "the module has settled once" flag (the review's suggestion) — it still holds every failure of a program that never settles, the case reported.
+
+**Consequences:** a failure in a parked program is printed when it happens and counts towards the exit status as before. **Not changed here:** an unclaimed `reportError()` — and the throws routed through it (a signal handler's, an event listener's) — still goes to the console with no `error:` headline and no effect on the exit status; Deno and Bun treat it as an uncaught error. That is its own decision.
