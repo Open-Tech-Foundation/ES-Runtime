@@ -429,7 +429,7 @@ you.
 | Status | When |
 | --- | --- |
 | `0` | The program finished, with nothing left unhandled |
-| `1` | An uncaught exception, an unhandled rejection, a load error, or the heap ceiling reached |
+| `1` | An uncaught exception, an unhandled rejection, a load error, the heap ceiling reached, or a top-level `await` that nothing left can settle |
 | `124` | `--timeout` stopped the run — the status `timeout(1)` uses |
 | `128 + signal` | A graceful shutdown: `130` for `^C`, `143` for `SIGTERM` |
 | the program's | `exit(code)` from `runtime:process`, which wins over a deadline it was racing |

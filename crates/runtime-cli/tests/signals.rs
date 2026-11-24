@@ -82,7 +82,7 @@ fn a_guest_handler_intercepts_a_real_sigterm() {
 fn an_unwatched_signal_still_terminates() {
     let mut child = Command::new(common::esrun_bin())
         .arg("--allow-all")
-        .arg("-e=console.log('READY'); await new Promise(() => {});")
+        .arg("-e=console.log('READY'); await new Promise((r) => setTimeout(r, 3600000));")
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn esrun");

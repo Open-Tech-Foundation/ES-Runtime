@@ -1449,7 +1449,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     let drive = driver.drive_while(&mut runtime, move |rt| {
         let state = rt.module_eval_state();
         flush_failures(&flush_pending, &flush_count, &state);
-        !matches!(state, ModuleEvalState::Failed(_))
+        // A top-level `await` nothing can settle would park the loop for ever,
+        // with nothing to wake it (D248): stop, and report it below.
+        !matches!(state, ModuleEvalState::Failed(_)) && !rt.module_eval_stalled()
     });
     let outcome = match options.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, drive).await {
@@ -1508,6 +1510,15 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), RunError> {
     // in `rejections`, so it is the one uncaught-rejection we don't re-report.
     if let ModuleEvalState::Failed(message) = runtime.module_eval_state() {
         return Err(format!("uncaught exception in {label}\n{message}").into());
+    }
+    // Still waiting at a top-level `await` that nothing left can settle — Deno
+    // reports the same, and Node exits 13 with a warning (D248).
+    if runtime.module_eval_stalled() {
+        return Err(format!(
+            "top-level await in {label} never settled: it waits on a promise that nothing \
+             left in the program can resolve (no timer, I/O or other work is pending)"
+        )
+        .into());
     }
 
     // Anything the drive stopped before flushing, on the same terms.

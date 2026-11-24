@@ -20,6 +20,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A top-level `await` that nothing can settle is an error, not a silent
+  hang.** `await new Promise(() => {})` with nothing else pending ran for ever.
+  It now fails at once — `top-level await in <file> never settled` — and exits
+  `1`, as Deno does; a program waiting on a server, a timer or I/O runs as
+  before (D248).
+
 - **Starting a `Worker` without the grants names `workers` first, and inside
   an `Isolate` names no flag.** With neither `workers` nor `imports` the refusal
   said to add `--allow-imports`; inside an isolate, where no flag applies, it

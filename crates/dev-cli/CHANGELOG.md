@@ -28,6 +28,9 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A program whose top-level `await` nothing can settle fails instead of
+  hanging** — the run is esrun's (D248).
+
 - **An `--otel*` flag after the program is refused,** as every other run flag
   there is, instead of being passed to the program; `esdev start --otel` says
   it shapes a single run rather than "unknown option" (D244).

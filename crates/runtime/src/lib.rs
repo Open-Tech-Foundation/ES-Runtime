@@ -1601,11 +1601,24 @@ impl Runtime {
     /// Whether any async op, timer, or unsettled module evaluation is still
     /// outstanding.
     pub fn has_pending_work(&self) -> bool {
+        self.module_eval_pending || self.has_work_besides_the_entry()
+    }
+
+    /// Whether the entry module's evaluation is waiting at a top-level `await`
+    /// that nothing left can settle (D248): it is pending, and there is no op,
+    /// referenced timer, import, compile or handle that could ever resolve the
+    /// promise it waits on. Microtasks are drained every tick, so such a
+    /// module stays pending for as long as the process lives.
+    pub fn module_eval_stalled(&self) -> bool {
+        self.module_eval_pending && !self.has_work_besides_the_entry()
+    }
+
+    /// Pending work other than the entry module's own evaluation.
+    fn has_work_besides_the_entry(&self) -> bool {
         self.engine.has_pending_async_ops()
             // The engine's table rather than the schedule: it is exact about a
             // cleared timer, and knows which ones `unrefTimer` let go.
             || self.engine.has_referenced_timers()
-            || self.module_eval_pending
             || self.engine.has_pending_dynamic_imports()
             || self.engine.has_pending_wasm()
             || self.handle_refs.get() > 0

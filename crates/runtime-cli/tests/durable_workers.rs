@@ -148,7 +148,7 @@ fn acknowledged_writes_survive_a_kill() {
            const l = Ledger.get("main");
            for (let i = 1; i <= 5; i++) await l.append(`e${i}`);
            console.log("ACKED");
-           await new Promise(() => {});"#,
+           await new Promise((r) => setTimeout(r, 3600000)); // held open until killed (D248)"#,
     )
     .expect("write module");
 
@@ -203,7 +203,7 @@ fn a_second_process_is_refused_while_the_first_holds_the_directory() {
         r#"import { W } from "./w.mjs";
            await W.get("a").ping();
            console.log("HOLDING");
-           await new Promise(() => {});"#,
+           await new Promise((r) => setTimeout(r, 3600000)); // held open until killed (D248)"#,
     )
     .expect("write module");
 
@@ -1350,7 +1350,7 @@ fn an_alarm_interrupted_by_a_crash_runs_again() {
            import { startAlarms } from "runtime:workers";
            await Job.get("j").arm();
            startAlarms({ classes: [Job] });
-           await new Promise(() => {});"#,
+           await new Promise((r) => setTimeout(r, 3600000)); // held open until killed (D248)"#,
         &[],
     );
     assert!(first.status.success(), "{}", stderr(&first));
@@ -1770,7 +1770,7 @@ fn acknowledged_writes_from_a_shard_survive_a_kill() {
            const c = Cart.get("main");
            for (let i = 1; i <= 5; i++) await c.add(`e${i}`);
            console.log("ACKED");
-           await new Promise(() => {});"#,
+           await new Promise((r) => setTimeout(r, 3600000)); // held open until killed (D248)"#,
     )
     .expect("write module");
     let mut child = Command::new(common::esrun_bin())

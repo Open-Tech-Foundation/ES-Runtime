@@ -39,10 +39,16 @@ fn a_synchronous_runaway_times_out_with_124() {
 /// The reported race: the watchdog and the loop's deadline fire at the same
 /// instant, and when the watchdog won the run exited `0` with nothing printed.
 /// Repeated, since a race that loses one run in six passes a single attempt.
+/// The loop is parked on a timer that outlives the deadline — waiting on work,
+/// where the watchdog's interrupt cannot wake it. (A promise nothing can
+/// settle is reported as such before any deadline, D248.)
 #[test]
-fn an_await_that_never_settles_times_out_with_124_every_time() {
+fn a_parked_await_times_out_with_124_every_time() {
     for attempt in 0..6 {
-        let out = esrun(&["--timeout=150"], "await new Promise(() => {});");
+        let out = esrun(
+            &["--timeout=150"],
+            "await new Promise((r) => setTimeout(r, 60000));",
+        );
         assert_eq!(
             out.status.code(),
             Some(TIMEOUT),
@@ -207,4 +213,50 @@ fn a_digest_is_the_same_on_either_side_of_the_inline_bound() {
         String::from_utf8_lossy(&out.stdout).trim(),
         "1024 true\n71680 true"
     );
+}
+
+// D248: a top-level `await` on a promise nothing can settle parked the loop
+// for ever, silently. It is a failure now, reported as soon as nothing is left
+// that could settle it — while anything that could (a server, a timer, I/O)
+// keeps the program running as before.
+
+#[test]
+fn an_await_nothing_can_settle_is_an_error() {
+    let started = std::time::Instant::now();
+    let out = esrun(&[], "await new Promise(() => {}); console.log('after');");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("top-level await in <eval> never settled"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("after"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// An unreferenced timer is not a reason to stay (`unrefTimer`), so it cannot
+/// be what settles the await either.
+#[test]
+fn an_unreferenced_timer_does_not_count_as_something_that_can_settle_it() {
+    let out = esrun(
+        &[],
+        "import { unrefTimer } from 'runtime:process'; \
+         unrefTimer(setTimeout(() => {}, 60000)); await new Promise(() => {});",
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("never settled"), "{}", stderr(&out));
+}
+
+/// A server is something that can: the program keeps serving, until here the
+/// deadline ends it.
+#[test]
+fn a_server_keeps_a_waiting_program_running() {
+    let out = esrun(
+        &["--allow-listen", "--timeout=400"],
+        "import { serve } from 'runtime:http'; \
+         serve({ hostname: '127.0.0.1', port: 0 }, () => new Response('x')); \
+         await new Promise(() => {});",
+    );
+    assert_eq!(out.status.code(), Some(TIMEOUT), "{}", stderr(&out));
+    assert!(!stderr(&out).contains("never settled"), "{}", stderr(&out));
 }

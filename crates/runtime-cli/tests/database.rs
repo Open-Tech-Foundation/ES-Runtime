@@ -1531,7 +1531,7 @@ fn a_second_process_cannot_open_a_database_another_holds() {
            const db = await connect("sqlite:./app.db", { driver: sqlite });
            await db.execute("CREATE TABLE t (x)");
            console.log("HOLDING");
-           await new Promise(() => {});"#,
+           await new Promise((r) => setTimeout(r, 3600000)); // held open until killed (D248)"#,
     )
     .expect("write holder");
     std::fs::write(

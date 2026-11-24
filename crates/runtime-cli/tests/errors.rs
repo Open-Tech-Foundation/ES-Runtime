@@ -69,15 +69,17 @@ fn an_unhandled_rejection_fails_the_run() {
 
 // D239: failures were held back until the entry module's evaluation settled,
 // so a program parked on a top-level `await` reported nothing while it ran —
-// and nothing ever, if the await never settled. Each test below parks on one
-// and is ended by `--timeout`; what matters is what was printed before that.
+// and nothing ever, if the await never settled. Each test below parks on one —
+// a timer that outlives the run, so the await is waiting on real work rather
+// than on nothing (D248) — and is ended by `--timeout`; what matters is what
+// was printed before that.
 
 #[test]
 fn a_timer_exception_is_reported_while_a_top_level_await_is_pending() {
     let out = esrun_with(
         &["--timeout=600"],
         "setTimeout(() => { throw new Error('while parked'); }, 0); \
-         await new Promise(() => {});",
+         await new Promise((r) => setTimeout(r, 60000));",
     );
     let err = stderr(&out);
     assert!(err.contains("error: uncaught exception\n"), "stderr: {err}");
@@ -90,7 +92,7 @@ fn an_unhandled_rejection_is_reported_while_a_top_level_await_is_pending() {
     let out = esrun_with(
         &["--timeout=600"],
         "setTimeout(() => { Promise.reject(new Error('parked rejection')); }, 0); \
-         await new Promise(() => {});",
+         await new Promise((r) => setTimeout(r, 60000));",
     );
     let err = stderr(&out);
     assert!(err.contains("unhandled promise rejection"), "stderr: {err}");
