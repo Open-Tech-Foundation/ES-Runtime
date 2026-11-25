@@ -50,7 +50,7 @@ dev-cli     ─┘        │                │        └──▶ bson
 
 - **Lifecycle:** create/dispose isolates and contexts; build and load startup snapshots.
 - **Execution control:** run scripts/modules; interrupt and terminate execution; install a near-heap-limit callback; stack-depth guard.
-- **Value marshaling:** create/read primitives, objects, arrays, functions, promises, exceptions; **zero-copy** `ArrayBuffer`/typed-array transfer.
+- **Value marshaling:** create/read primitives, objects, arrays, functions, promises, exceptions; `ArrayBuffer`/typed-array transfer — moved without a copy Rust→JS, copied JS→Rust (D3a; see §9).
 - **Op registration:** register Rust handlers callable from JS (see §4).
 - **Module instantiation:** ☑ implemented. Compile/instantiate/evaluate ES modules behind an opaque `ModuleId` (no V8 type crosses): `runtime` runs the async load phase, the engine's synchronous resolve callback is a pure lookup over the compiled id map, and evaluation (top-level await) settles on the driven loop. `import.meta.url` is set by an isolate-level initializer. **Dynamic `import()`** rides a host callback whose promise the runtime settles after loading + evaluating the requested graph (shared with static imports via the realm module map). Loading is routed through the capability-checked `ModuleLoader` provider (§6). See DECISIONS D21/D22/D23.
 
@@ -126,7 +126,7 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 
 ## 9. Performance
 
-- **V8 startup snapshot** with the prelude + op shells baked in — ☑ implemented (D8); ~2.3× faster runtime construction. The `esrun` CLI builds this snapshot at compile time (`runtime-cli/build.rs`) and `include_bytes!`s it into the binary, so every launch restores the prelude rather than recompiling it (host-arch builds only; cross-compilation would need a target-run step).
+- **V8 startup snapshot** with the prelude + op shells baked in — ☑ implemented (D8); ~2.3× faster runtime construction. `cli-common` builds this snapshot at compile time (`crates/cli-common/build.rs`), once for both binaries, and `include_bytes!`s it in, so every launch restores the prelude rather than recompiling it (host-arch builds only; cross-compilation would need a target-run step).
 - Zero-copy for `ArrayBuffer`/typed-array transfer — **audited and deferred** (D3a Phase 8): `Value::Bytes` copies on the JS→Rust crossing; sound zero-copy there needs a backing-store detach/pin protocol since async ops outlive the call scope. The Rust→JS direction **is** zero-copy: a returned `Value::Bytes` vec *moves* into the `ArrayBuffer` backing store, and op results are consumed, not cloned. Avoid gratuitous UTF-8↔UTF-16 round-trips.
 - **Hot ops return offsets, not structures.** `url_parse` returns the canonical href plus component offsets (one string + 15 numbers in a JS array); the prelude's getters are lazy `slice()`s. This beat both per-property V8 object building *and* a JSON round-trip (see `bench/README.md`).
 

@@ -7,7 +7,7 @@ import { Callout } from "@opentf/afw-docs";
 
 # Dependencies and module context
 
-`docs/_meta.js` above is imported by nothing. The graph cannot discover it, so
+`./docs/_meta.js` above is imported by nothing. The graph cannot discover it, so
 without a word from the plugin a change to it rebuilds nothing — and the failure
 shows up as a page that is quietly out of date, which is the worst kind to
 debug.

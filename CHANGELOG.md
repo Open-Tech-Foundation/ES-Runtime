@@ -143,6 +143,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Documentation
 
+- **Every page is held to the code it describes.** A test now fails CI when any
+  page names an error code no source defines, cites a decision that does not
+  exist, links to a page the site does not have, names a repo path that is not
+  there, names a `runtime:` module that does not exist, or puts a flag on an
+  `esrun`/`esdev` command that no parser takes. Fixed on the way: `esrun`
+  reports `ERR_NOT_FOUND` for an unresolved import (the esdev imports page said
+  Node's `ERR_MODULE_NOT_FOUND`); `encodeParamSets` is in the driver reference;
+  SPEC no longer says six fuzz targets or 278 conformance assertions (there are
+  22 targets, and `RESULTS.md` holds the count), and SECURITY.md lists what is
+  fuzzed; ARCHITECTURE no longer calls marshaling zero-copy or puts the snapshot
+  build in `runtime-cli`; SPEC and the internal security review describe the
+  watchdog and the sandbox root as they now are.
+
 - **The security pages say what the runtime does.** The permission vocabulary
   is eleven names, not nine: README, SECURITY.md, API.md and ARCHITECTURE.md now
   list `diagnostics` and `diagnostics-detail`, and name the seven that take a

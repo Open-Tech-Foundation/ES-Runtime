@@ -76,7 +76,7 @@ An error thrown inside keeps its class, message and `code`:
 try {
   await validate(input);
 } catch (e) {
-  if (e instanceof RangeError && e.code === "ERR_LIMIT") retryLater();
+  if (e instanceof RangeError && e.code === "APP_RATE_LIMITED") retryLater();
 }
 ```
 

@@ -17,7 +17,7 @@ For adding a backend or building an ORM.
 | `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `queryText`, `queryAst` and `transactions`. |
 | `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder for a backend handed **bytes**. |
 | `defineRecordShape(columns)` / `Rows.fromObjects(records)` | The same `Row` contract for a backend whose values are **already JavaScript**. |
-| `encodeParams` / `splitParams` | Parameter encoding. |
+| `encodeParams` / `encodeParamSets` / `splitParams` | Parameter encoding: one set, or many for one batched statement (`[[positional, named], …]`, as `splitParams` gives). |
 | `ByteWriter` | A growable buffer with length-prefix back-fill. |
 | `mapError` / `asDbError` | Map a backend's vocabulary onto the portable codes. |
 | `runBackendConformance(open)` | The suite that proves a backend behaves like the built-ins. |

@@ -115,10 +115,12 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
 4. **`panic = "abort"` builds.** Panic containment assumes `panic = "unwind"`.
    Under `abort`, a host-op (or provider) panic aborts the process — the chosen
    policy for that build, but worth stating.
-5. **Watchdog is wall-clock + interruption-point based.** It stops scripts at V8
-   interruption points (tight loops are interruptible). It is not cycle-accurate
-   CPU accounting, and a pathological non-yielding native path could delay
-   termination.
+5. **The watchdog stops JavaScript, not native code.** `--timeout` is wall-clock
+   and stops a script at V8 interruption points (tight loops are interruptible);
+   an `Isolate`'s `cpuTime` budgets CPU time a turn instead (D227, D237). Long
+   `crypto.subtle` and password-hashing work runs off the loop thread, so a
+   timeout or signal lands during it (D241), but one synchronous native call —
+   `hash()` of a large buffer, a compression chunk — runs to its end first.
 6. **Side channels (Spectre, timing).** Relies on V8's own mitigations; not
    separately addressed at this layer.
 7. **`esrun` grants nothing unless the command line says so** (D65), and module

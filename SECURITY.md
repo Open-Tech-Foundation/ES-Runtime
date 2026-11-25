@@ -28,9 +28,11 @@ The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
   `panic = "unwind"`).
 - **Deny-by-default capabilities**; deterministic providers for reproducibility.
 
-**Checked in CI:** `cargo-fuzz` over the parsers that read untrusted bytes
-(URL, URLPattern, `TextDecoder`, YAML, XML, CSV, CBOR, compression, archives,
-images, and DER key import), seeded from the committed corpus in `fuzz/seeds/`; Miri over
+**Checked in CI:** `cargo-fuzz` over the parsers that read untrusted bytes —
+one target each in `fuzz/fuzz_targets/`: the HTTP/1.1 and HTTP/2 framing and
+HPACK, WebSocket frames, DNS, URL and URLPattern, `TextDecoder`, JSON, YAML,
+XML, CSV, CBOR, BSON, compression, archives, images, PDF and DER key import —
+seeded from the committed corpus in `fuzz/seeds/`; Miri over
 the crates that do not link V8; the conformance suite; and the supply-chain
 gates below. Guest tampering with
 intrinsics cannot reach a capability (see
