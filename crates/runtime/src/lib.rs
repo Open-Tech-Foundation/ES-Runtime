@@ -6568,6 +6568,85 @@ mod tests {
         assert_eq!(out, Value::String("all-ok".into()));
     }
 
+    /// D256: numeric algorithm members are converted as WebIDL says, follow
+    /// the spec's length rules, and never make more than 64 KiB.
+    #[test]
+    fn subtle_lengths_follow_webidl_and_are_bounded() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const subtle = crypto.subtle; \
+             const failed = []; \
+             const check = (name, ok) => { if (!ok) failed.push(name); }; \
+             const fails = async (name, error, run) => { \
+               try { await run(); failed.push(name + ': resolved'); } \
+               catch (e) { if (e.name !== error) failed.push(`${name}: ${e.name} ${e.message}`); } \
+             }; \
+             const hmac = (length, hash = 'SHA-256') => subtle.generateKey({ name: 'HMAC', hash, length }, true, ['sign']); \
+             const bits = async (key) => (await subtle.exportKey('raw', key)).byteLength * 8; \
+             check('default is the block size', (await hmac(undefined)).algorithm.length === 512); \
+             check('sha-512 default', (await hmac(undefined, 'SHA-512')).algorithm.length === 1024); \
+             check('a fraction truncates', (await hmac(8.9)).algorithm.length === 8); \
+             check('64 KiB is allowed', await bits(await hmac(65536 * 8)) === 65536 * 8); \
+             await fails('zero', 'OperationError', () => hmac(0)); \
+             await fails('past 64 KiB', 'OperationError', () => hmac(65536 * 8 + 1)); \
+             await fails('2**32 - 1', 'OperationError', () => hmac(2 ** 32 - 1)); \
+             await fails('2**32', 'TypeError', () => hmac(2 ** 32)); \
+             await fails('negative', 'TypeError', () => hmac(-1)); \
+             await fails('NaN', 'TypeError', () => hmac(NaN)); \
+             await fails('aes needs a length', 'TypeError', () => subtle.generateKey({ name: 'AES-GCM' }, true, ['encrypt'])); \
+             const raw = new Uint8Array(32).fill(7); \
+             const imp = (length, data = raw) => subtle.importKey('raw', data, { name: 'HMAC', hash: 'SHA-256', length }, true, ['sign']); \
+             check('import length', (await imp(252)).algorithm.length === 252); \
+             check('import default', (await imp(undefined)).algorithm.length === 256); \
+             await fails('import longer than data', 'DataError', () => imp(257)); \
+             await fails('import a byte short', 'DataError', () => imp(248)); \
+             await fails('import empty', 'DataError', () => imp(undefined, new Uint8Array(0))); \
+             const pw = await subtle.importKey('raw', raw, 'PBKDF2', false, ['deriveBits', 'deriveKey']); \
+             const pbkdf2 = { name: 'PBKDF2', hash: 'SHA-256', salt: raw, iterations: 1 }; \
+             check('pbkdf2 64 KiB', (await subtle.deriveBits(pbkdf2, pw, 65536 * 8)).byteLength === 65536); \
+             check('pbkdf2 zero length', (await subtle.deriveBits(pbkdf2, pw, 0)).byteLength === 0); \
+             await fails('pbkdf2 past 64 KiB', 'OperationError', () => subtle.deriveBits(pbkdf2, pw, 65536 * 8 + 8)); \
+             await fails('pbkdf2 4 GiB', 'OperationError', () => subtle.deriveBits(pbkdf2, pw, 2 ** 32 - 8)); \
+             await fails('deriveBits length 2**32', 'TypeError', () => subtle.deriveBits(pbkdf2, pw, 2 ** 32)); \
+             await fails('pbkdf2 iterations -1', 'TypeError', () => subtle.deriveBits({ ...pbkdf2, iterations: -1 }, pw, 256)); \
+             const derived = await subtle.deriveKey(pbkdf2, pw, { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']); \
+             check('derived hmac default', derived.algorithm.length === 512); \
+             await fails('derived hmac zero', 'TypeError', () => subtle.deriveKey(pbkdf2, pw, { name: 'HMAC', hash: 'SHA-256', length: 0 }, true, ['sign'])); \
+             const ikm = await subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits']); \
+             await fails('hkdf past its limit', 'OperationError', () => subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: raw, info: raw }, ikm, 2 ** 32 - 8)); \
+             const aes = await subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, ['encrypt']); \
+             const iv = new Uint8Array(12); \
+             check('gcm 128-bit tag', (await subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, aes, raw)).byteLength === 48); \
+             await fails('gcm 96-bit tag', 'NotSupportedError', () => subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 96 }, aes, raw)); \
+             await fails('gcm 100-bit tag', 'OperationError', () => subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 100 }, aes, raw)); \
+             await fails('gcm 256-bit tag', 'TypeError', () => subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 256 }, aes, raw)); \
+             const algorithm = { name: 'HMAC', hash: 'SHA-256', length: 8.5 }; \
+             await subtle.generateKey(algorithm, true, ['sign']); \
+             check('the caller object is not changed', algorithm.length === 8.5); \
+             return failed.length === 0 ? 'all-ok' : failed.join('; ');",
+        );
+        assert_eq!(out, Value::String("all-ok".into()));
+    }
+
+    /// The bound holds at the op as well, for any caller (D256): the `ops`
+    /// fuzz target once made it allocate 4 GB.
+    #[test]
+    fn random_bytes_op_draws_at_most_64_kib() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.expose_ops_for_testing();
+        let out = eval_async(
+            &mut rt,
+            "const ok = __ops.random_bytes(65536).length === 65536; \
+             let refused = ''; \
+             try { __ops.random_bytes(2 ** 32 - 1); } catch (e) { refused = e.name; } \
+             return `${ok} ${refused}`;",
+        );
+        assert_eq!(out, Value::String("true RangeError".into()));
+    }
+
     #[test]
     fn capability_gate_survives_js_tampering() {
         // The security boundary is in Rust (OpState owns the op table + the

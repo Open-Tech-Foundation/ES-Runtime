@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **A WebCrypto length can no longer allocate gigabytes (D256).** One call to
+  `crypto.subtle.generateKey({ name: "HMAC", length: 2 ** 32 - 1 })` allocated
+  512 MB, as did a PBKDF2 `deriveBits` of the same length; HKDF allocated
+  before checking its limit. No length now makes more than 64 KiB, the most
+  `getRandomValues` returns at once: past it, HMAC key generation and PBKDF2
+  fail with `OperationError`, and the ops underneath refuse it too. The `ops`
+  fuzz target found it; its two inputs are now seeds.
+
 - **Guest code can no longer reach the op table (D253).** `globalThis.__ops`
   held every op, with writable entries the standard APIs looked up at each
   call. Any code in a program, a dependency included, could replace one
@@ -63,6 +71,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `ERR_IMAGE_FORMAT_UNSUPPORTED`, and `rotate` took multiples of 90 only.
 
 ### Fixed
+
+- **`crypto.subtle` converts and checks numbers as the standard says (D256).**
+  Lengths, `modulusLength`, `saltLength`, `iterations` and `deriveBits`'s
+  `length` are converted per WebIDL: out of range or `NaN` is a `TypeError`, a
+  fraction truncates. An HMAC key now defaults to its hash's block size (512
+  bits for SHA-256, as in Node, Deno and Bun; it was 256), and refuses length
+  0. `importKey` checks HMAC `length` against the data. AES-GCM refuses a
+  `tagLength` other than 128 instead of silently writing a 128-bit tag.
 
 - **An unreferenced timer can settle a pending top-level `await` again
   (D254).** D248 reported such an await as "never settled" even though the

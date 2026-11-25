@@ -5212,3 +5212,26 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Consequences:** the binary links otf-pixels 0.6.0. Pixels' animation limits apply at their defaults (10,000 frames, 2³² pixels across all frames), beside `maxPixels` per frame. The comparison page's animation and rotation rows change for esrun.
 
 **Not here:** text overlay, `withExif`, HEIC, multi-page TIFF as frames, and `sharpen({ sigma, ... })`, as before.
+
+### D256 — WebCrypto lengths are converted as WebIDL says, follow the spec's rules, and never allocate more than 64 KiB · *Accepted (2026-11-25)* · *complements D241*
+
+**Context:** the `ops` fuzz target (D253) ran out of memory in `random_bytes`, which allocated whatever `u32` it was handed. Guest code cannot call it directly, but it reaches it through `crypto.subtle.generateKey({ name: "HMAC", length })`, and the audit that followed found the same shape elsewhere, all from one gap: `normalizeAlgorithm` was `typeof a === "string" ? { name: a } : a`, so no numeric member of an algorithm dictionary got the WebIDL conversion the spec (w3c.github.io/webcrypto, 2026-10-22) gives it. Measured on esrun 0.49 (debug):
+- HMAC `generateKey` with `length: 2**32 - 1` allocated 512 MB; `2**32`, `-1` and `1.5` were taken as they came (the IDL is `[EnforceRange] unsigned long`: the first two are a `TypeError`, `1.5` is 1); `0` made an empty key (the spec says `OperationError`).
+- The default HMAC key was the hash's output size (256 bits for SHA-256); the spec, Node 26.13, Deno 2.9.7 and Bun 1.4.5 all use its block size (512).
+- `deriveBits` with PBKDF2 and `length: 2**32 - 8` allocated 512 MB and ran 120 s. Node, Deno and Bun do the same (5.7–6.2 s, release).
+- HKDF allocated the output before checking the spec's `255 × hashLength` limit.
+- `importKey` ignored `HmacImportParams.length`, and `encrypt` ignored `AesGcmParams.tagLength`, writing a 128-bit tag where 96 bits were asked for.
+
+D241 kept CPU cost the caller's choice, because a timeout or a signal can stop it. Memory is different: one number becomes one allocation, which no timeout can take back.
+
+**Decision:**
+- **Numeric members are converted per WebIDL when the algorithm is normalized,** for the operation at hand: `[EnforceRange] unsigned long` for HMAC `length` (generate, import, derived-key length), RSA `modulusLength`, RSA-PSS `saltLength`, PBKDF2 `iterations` and `deriveBits`'s `length`; `[EnforceRange] unsigned short` for AES `length`; `[EnforceRange] octet` for AES-CTR `length` and AES-GCM `tagLength`. Out of range, `NaN` or infinite is a `TypeError`; a fraction is truncated; a required member missing is a `TypeError`.
+- **The spec's length rules apply:** HMAC defaults to the hash's block size and refuses 0 (`OperationError` when generating, `TypeError` as a derived key's length); `importKey` checks `length` against the data and refuses empty data (`DataError`); AES-GCM refuses a `tagLength` the spec does not list (`OperationError`) and one it lists but this runtime does not produce, which is any but 128 (`NotSupportedError`), instead of writing the wrong tag.
+- **No length makes more than 65,536 bytes,** the most `getRandomValues` hands out in one call: HMAC `generateKey` and PBKDF2 `deriveBits` past it fail with `OperationError` (the spec's "if the operation fails"), and `random_bytes` and the PBKDF2 op refuse it themselves, so no future caller can reopen it. HKDF checks its own, lower limit before allocating.
+
+**Rejected:**
+- **Node's, Deno's and Bun's 512 MB PBKDF2 output.** A key-derivation output past a few hundred bytes has no use, and a request-controlled length makes every derive a memory lever.
+- **A limit only in the op.** The op would fail with an internal error, not the `OperationError` the API owes; the API checks first and the op holds the line beneath it.
+- **Capping `iterations` or `modulusLength` here.** CPU, not memory: D241 covers it, and RSA is bounded at 4096 bits by the `rsa` crate.
+
+**Consequences:** HMAC keys generated without a `length` are twice as long as before, as everywhere else. A program that passed out-of-range or fractional numbers gets the `TypeError` WebIDL promises. The ops fuzz target no longer finds the 4 GB allocation.

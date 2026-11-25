@@ -86,7 +86,28 @@
   // JWK calls them OKP ("octet key pair"), which is the name used throughout.
   const OKP_ALGS = new Set(["Ed25519", "X25519"]);
   const RSA_ALGS = new Set(["RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP"]);
-  const HASH_BITS = { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 };
+  // The block size, which is an HMAC key's default length (NIST SP 800-224,
+  // Table 2; 512 for SHA-1).
+  const HASH_BLOCK_BITS = { "SHA-1": 512, "SHA-256": 512, "SHA-384": 1024, "SHA-512": 1024 };
+  // No length makes more than this many bytes: the most getRandomValues hands
+  // out in one call (D256). A number the caller picks never becomes a larger
+  // allocation than that.
+  const MAX_LENGTH_BYTES = 65536;
+  // The tag lengths AES-GCM allows; only 128 is produced here.
+  const GCM_TAG_LENGTHS = [32, 64, 96, 104, 112, 120, 128];
+
+  // WebIDL's [EnforceRange] integer conversion: finite, truncated, in range,
+  // or a TypeError.
+  const ULONG = 0xffffffff;
+  const USHORT = 0xffff;
+  const OCTET = 0xff;
+  function enforceRange(value, max, what) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new TypeError(`${what} must be a finite number`);
+    const t = Math.trunc(n) || 0;
+    if (t < 0 || t > max) throw new TypeError(`${what} is outside the range [0, ${max}]`);
+    return t;
+  }
   // Field byte length (and so the JWK coordinate width) per named curve.
   const EC_FIELD = { "P-256": 32, "P-384": 48, "P-521": 66 };
 
@@ -224,8 +245,74 @@
   function asArrayBuffer(u8) {
     return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
   }
-  function normalizeAlgorithm(algorithm) {
-    return typeof algorithm === "string" ? { name: algorithm } : algorithm;
+  // The numeric members of each operation's parameter dictionary, by
+  // algorithm, with their WebIDL type and whether they are required (D256).
+  const AES_GEN = { length: [USHORT, true] };
+  const RSA_GEN = { modulusLength: [ULONG, true] };
+  const NUMERIC = {
+    generateKey: {
+      HMAC: { length: [ULONG, false] },
+      "AES-GCM": AES_GEN,
+      "AES-CBC": AES_GEN,
+      "AES-CTR": AES_GEN,
+      "AES-KW": AES_GEN,
+      "RSASSA-PKCS1-v1_5": RSA_GEN,
+      "RSA-PSS": RSA_GEN,
+      "RSA-OAEP": RSA_GEN,
+    },
+    importKey: { HMAC: { length: [ULONG, false] } },
+    encrypt: { "AES-CTR": { length: [OCTET, true] }, "AES-GCM": { tagLength: [OCTET, false] } },
+    decrypt: { "AES-CTR": { length: [OCTET, true] }, "AES-GCM": { tagLength: [OCTET, false] } },
+    sign: { "RSA-PSS": { saltLength: [ULONG, true] } },
+    verify: { "RSA-PSS": { saltLength: [ULONG, true] } },
+    deriveBits: { PBKDF2: { iterations: [ULONG, true] } },
+    // deriveKey's derived-key algorithm ("get key length").
+    keyLength: {
+      HMAC: { length: [ULONG, false] },
+      "AES-GCM": AES_GEN,
+      "AES-CBC": AES_GEN,
+      "AES-CTR": AES_GEN,
+      "AES-KW": AES_GEN,
+    },
+  };
+
+  // The algorithm as `op` reads it: a name becomes `{ name }`, and the
+  // dictionary's numeric members are converted as WebIDL says, so every later
+  // step sees an integer in range. The caller's object is copied, not changed.
+  function normalizeAlgorithm(algorithm, op) {
+    if (typeof algorithm === "string") algorithm = { name: algorithm };
+    const members = op === undefined ? undefined : NUMERIC[op]?.[algorithm?.name];
+    if (members === undefined) return algorithm;
+    const out = {};
+    for (const key in algorithm) out[key] = algorithm[key];
+    for (const [key, [max, required]] of Object.entries(members)) {
+      const value = algorithm[key];
+      if (value === undefined) {
+        if (required) throw new TypeError(`${algorithm.name} needs ${key}`);
+        continue;
+      }
+      out[key] = enforceRange(value, max, `${algorithm.name} ${key}`);
+    }
+    return out;
+  }
+
+  // An HMAC key's length when none is given: the hash's block size.
+  function hmacDefaultBits(hash) {
+    const bits = HASH_BLOCK_BITS[hash];
+    if (bits === undefined) throw new DOMException(`unsupported HMAC hash: ${hash}`, "NotSupportedError");
+    return bits;
+  }
+
+  // AES-GCM's tag: a length the spec lists but this runtime does not write is
+  // refused rather than silently given a 128-bit tag.
+  function checkGcmTag(algo) {
+    const bits = algo.tagLength ?? 128;
+    if (!GCM_TAG_LENGTHS.includes(bits)) {
+      throw new DOMException(`AES-GCM tagLength must be one of ${GCM_TAG_LENGTHS.join(", ")}`, "OperationError");
+    }
+    if (bits !== 128) {
+      throw new DOMException("AES-GCM tags shorter than 128 bits are not supported", "NotSupportedError");
+    }
   }
   function hashName(h) {
     return typeof h === "string" ? h : h.name;
@@ -558,10 +645,14 @@
   };
 
   async function generateKeyInner(algorithm, extractable, usages) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "generateKey");
       if (algo.name === "HMAC") {
         const hash = hashName(algo.hash);
-        const lengthBits = algo.length ?? HASH_BITS[hash];
+        const lengthBits = algo.length ?? hmacDefaultBits(hash);
+        if (lengthBits === 0) throw new DOMException("HMAC key length must not be 0", "OperationError");
+        if (lengthBits > MAX_LENGTH_BYTES * 8) {
+          throw new DOMException(`HMAC key length must be at most ${MAX_LENGTH_BYTES * 8} bits`, "OperationError");
+        }
         const material = ops.random_bytes(Math.ceil(lengthBits / 8));
         return new CryptoKey("secret", extractable, { name: "HMAC", hash: { name: hash }, length: lengthBits }, usages, material);
       }
@@ -630,7 +721,7 @@
   }
 
   async function importKeyInner(format, keyData, algorithm, extractable, usages) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "importKey");
       if (OKP_ALGS.has(algo.name)) {
         return importOkpKey(format, keyData, algo, extractable, usages);
       }
@@ -646,10 +737,17 @@
       const material =
         format === "jwk" ? octetJwkToBytes(keyData, algo) : toBytes(keyData).slice();
       if (algo.name === "HMAC") {
+        const bits = material.length * 8;
+        if (bits === 0) throw new DOMException("an HMAC key must not be empty", "DataError");
+        // A given length names the last byte's significant bits: it may be
+        // shorter than the data by under a byte, never longer.
+        if (algo.length !== undefined && (algo.length > bits || algo.length <= bits - 8)) {
+          throw new DOMException(`HMAC length ${algo.length} does not fit ${material.length} bytes of key`, "DataError");
+        }
         return new CryptoKey(
           "secret",
           extractable,
-          { name: "HMAC", hash: { name: hashName(algo.hash) }, length: material.length * 8 },
+          { name: "HMAC", hash: { name: hashName(algo.hash) }, length: algo.length ?? bits },
           usages,
           material,
         );
@@ -696,7 +794,7 @@
     },
 
     async sign(algorithm, key, data) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "sign");
       requireOperation(normalizeAlgorithm(algorithm).name, "sign");
       requireUsage(key, "sign");
       if (algo.name === "Ed25519") {
@@ -726,7 +824,7 @@
     },
 
     async verify(algorithm, key, signature, data) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "verify");
       requireOperation(normalizeAlgorithm(algorithm).name, "verify");
       requireUsage(key, "verify");
       if (algo.name === "Ed25519") {
@@ -778,9 +876,10 @@
   });
 
   async function encryptUnchecked(algorithm, key, data) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "encrypt");
       switch (algo.name) {
         case "AES-GCM": {
+          checkGcmTag(algo);
           const iv = toBytes(algo.iv);
           const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
           return asArrayBuffer(await ops.subtle_aes_gcm_encrypt(key[KEY], iv, toBytes(data), aad));
@@ -800,9 +899,10 @@
   }
 
   async function decryptUnchecked(algorithm, key, data) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "decrypt");
       switch (algo.name) {
         case "AES-GCM": {
+          checkGcmTag(algo);
           const iv = toBytes(algo.iv);
           const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
           return asArrayBuffer(await ops.subtle_aes_gcm_decrypt(key[KEY], iv, toBytes(data), aad));
@@ -840,7 +940,9 @@
   });
 
   async function deriveBitsUnchecked(algorithm, baseKey, length) {
-      const algo = normalizeAlgorithm(algorithm);
+      const algo = normalizeAlgorithm(algorithm, "deriveBits");
+      // `optional [EnforceRange] unsigned long? length = null`.
+      length = length == null ? null : enforceRange(length, ULONG, "deriveBits length");
       if (algo.name === "X25519") {
         // The shared secret is the full 32-byte X coordinate; a null length
         // returns all of it, otherwise the leading bits.
@@ -881,6 +983,9 @@
         );
       }
       if (algo.name === "PBKDF2") {
+        if (lengthBytes > MAX_LENGTH_BYTES) {
+          throw new DOMException(`PBKDF2 length must be at most ${MAX_LENGTH_BYTES * 8} bits`, "OperationError");
+        }
         return asArrayBuffer(
           await ops.subtle_pbkdf2(
             hashName(algo.hash),
@@ -895,7 +1000,7 @@
   }
 
   async function deriveKeyFrom(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages) {
-      const dka = normalizeAlgorithm(derivedKeyAlgorithm);
+      const dka = normalizeAlgorithm(derivedKeyAlgorithm, "keyLength");
       let bits;
       if (AES_ALGS.has(dka.name)) {
         bits = dka.length;
@@ -903,7 +1008,8 @@
           throw new DOMException(`invalid derived ${dka.name} key length`, "OperationError");
         }
       } else if (dka.name === "HMAC") {
-        bits = dka.length ?? HASH_BITS[hashName(dka.hash)];
+        bits = dka.length ?? hmacDefaultBits(hashName(dka.hash));
+        if (bits === 0) throw new TypeError("HMAC key length must not be 0");
       } else {
         throw new DOMException(`cannot derive ${dka.name} keys`, "NotSupportedError");
       }

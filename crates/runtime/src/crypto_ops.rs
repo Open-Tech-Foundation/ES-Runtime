@@ -31,6 +31,11 @@ use sha2::Digest as _;
 use crate::Result;
 use crate::blocking::{blocking_op, sized_blocking_op};
 
+/// The most bytes a length the caller picks can make (D256): what
+/// `getRandomValues` hands out in one call. The prelude refuses more with the
+/// error the API owes; the ops refuse it again, so no caller can reopen it.
+pub(crate) const MAX_LENGTH_BYTES: usize = 65536;
+
 /// Registers the WebCrypto host ops.
 pub(crate) fn install(
     engine: &mut dyn Engine,
@@ -38,6 +43,11 @@ pub(crate) fn install(
     spawner: Option<Arc<dyn TaskSpawner>>,
 ) -> Result<()> {
     engine.register_op(OpDecl::typed("random_bytes", move |len: u32| {
+        if len as usize > MAX_LENGTH_BYTES {
+            return Err(OpError::range_error(format!(
+                "at most {MAX_LENGTH_BYTES} random bytes are drawn at once"
+            )));
+        }
         let mut buf = vec![0u8; len as usize];
         entropy.fill(&mut buf).map_err(|e| {
             OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
@@ -447,6 +457,17 @@ fn hkdf_derive(
     info: &[u8],
     length: usize,
 ) -> std::result::Result<Vec<u8>, OpError> {
+    // RFC 5869's limit, checked before the output is allocated.
+    let hash_len = match hash {
+        "SHA-1" => 20,
+        "SHA-256" => 32,
+        "SHA-384" => 48,
+        "SHA-512" => 64,
+        other => return Err(not_supported(format!("unsupported HKDF hash: {other}"))),
+    };
+    if length > 255 * hash_len {
+        return Err(operation_error("HKDF output length too large"));
+    }
     let mut okm = vec![0u8; length];
     let ok = match hash {
         "SHA-1" => Hkdf::<sha1::Sha1>::new(Some(salt), ikm)
@@ -480,6 +501,11 @@ fn pbkdf2_derive(
     if iterations == 0 {
         return Err(operation_error("PBKDF2 iterations must be at least 1"));
     }
+    if length > MAX_LENGTH_BYTES {
+        return Err(operation_error(format!(
+            "PBKDF2 output must be at most {MAX_LENGTH_BYTES} bytes"
+        )));
+    }
     let mut out = vec![0u8; length];
     match hash {
         "SHA-1" => pbkdf2_hmac::<sha1::Sha1>(password, salt, iterations, &mut out),
@@ -489,4 +515,43 @@ fn pbkdf2_derive(
         other => return Err(not_supported(format!("unsupported PBKDF2 hash: {other}"))),
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hkdf_refuses_an_over_long_output_before_allocating() {
+        assert_eq!(
+            hkdf_derive("SHA-256", b"k", b"", b"", 255 * 32)
+                .unwrap()
+                .len(),
+            8160
+        );
+        // Would be 512 MB were it allocated first.
+        let error = hkdf_derive("SHA-256", b"k", b"", b"", 1 << 29).unwrap_err();
+        assert!(format!("{error:?}").contains("too large"), "{error:?}");
+        assert!(hkdf_derive("MD5", b"k", b"", b"", 16).is_err());
+    }
+
+    #[test]
+    fn pbkdf2_output_is_bounded() {
+        assert_eq!(
+            pbkdf2_derive("SHA-256", b"p", b"s", 1, MAX_LENGTH_BYTES)
+                .unwrap()
+                .len(),
+            MAX_LENGTH_BYTES
+        );
+        assert!(pbkdf2_derive("SHA-256", b"p", b"s", 1, MAX_LENGTH_BYTES + 1).is_err());
+        assert!(
+            pbkdf2_derive("SHA-256", b"p", b"s", 0, 32).is_err(),
+            "zero iterations"
+        );
+        assert!(
+            pbkdf2_derive("SHA-256", b"p", b"s", 1, 0)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

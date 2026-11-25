@@ -93,6 +93,26 @@ for and the backend already does it.
 Signatures are the fixed-width `r ‖ s` form, and cross-verify with other
 implementations in both directions.
 
+## Lengths are converted, checked and bounded
+
+Every number in an algorithm is converted as the standard's WebIDL says before
+anything else reads it: a key or tag length, `modulusLength`, `saltLength`,
+`iterations` and `deriveBits`' `length`. Out of range, `NaN` or infinite is a
+`TypeError`, a fraction is truncated, and a required one that is missing is a
+`TypeError` too. The standard's own length rules follow: an HMAC key defaults
+to its hash's block size (512 bits for SHA-256) and is never empty, an imported
+one's `length` must fit its bytes, and an AES-GCM `tagLength` other than 128
+bits is refused (`NotSupportedError`) rather than written as 128.
+
+**No length makes more than 64 KiB**, the most `getRandomValues` hands out in one
+call. An HMAC key or a PBKDF2 output past that fails with `OperationError`, and
+HKDF checks its own lower limit before it allocates. Node, Deno and Bun derive
+a 512 MB PBKDF2 output from one number; here a number cannot become a larger
+allocation than 64 KiB, which matters because no timeout can take back memory
+once it is held. Time is different: `iterations` and RSA key generation are
+the caller's to spend, and a timeout or signal stops them (below). The
+reasoning is in [DECISIONS.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md) (D256, D241).
+
 ## Two RustCrypto generations, on purpose
 
 The dependency tree carries `aes-gcm` on one `cipher` generation and the
@@ -109,9 +129,11 @@ accident.
 has no ambient state; the only host resource it touches is the entropy provider,
 which is what a `Math.random` equivalent would need anyway.
 
-Everything runs on the isolate's thread. A 4096-bit RSA key generation is a
-pause, not a background job — there is no thread pool behind these ops, so a
-program that needs one should generate keys before it starts serving.
+Work whose cost can grow runs off the isolate's thread, on the blocking pool:
+PBKDF2, key generation and every asymmetric operation, and symmetric work once
+its inputs pass 64 KiB. Small digests, HMACs and AES calls stay inline, where
+the hop would cost more than the work. A timeout or a signal therefore stops a
+program during a long derive at once; the derive itself finishes on its thread.
 
 **Masking is not confidentiality.** A `Secret` from
 [`runtime:process`](/api/process) redacts in logs; a `CryptoKey`'s material is

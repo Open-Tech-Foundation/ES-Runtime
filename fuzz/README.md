@@ -44,7 +44,8 @@ by the conformance suite and the Rust tests.
 **every input that has found a bug** — an input that once crashed is a
 regression test, and starting from it means the fuzzer does not have to
 rediscover it. `seeds/urlpattern/crash-*` are the two that found the
-bracket-depth underflow in `urlpattern` 0.6.0.
+bracket-depth underflow in `urlpattern` 0.6.0, and `seeds/ops/oom-*` the two that
+made `random_bytes` allocate 4 GB (D256).
 
 Targets reach the runtime's internals through `es-runtime`'s `fuzzing` feature
 (`crates/runtime/src/fuzz.rs`), which exists for this and is not public API — except `dns`, which reaches the resolver through
