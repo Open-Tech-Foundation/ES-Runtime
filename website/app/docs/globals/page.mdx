@@ -150,7 +150,8 @@ channel cannot become three — and arrives through `event.ports`. `ArrayBuffer`
 and streams transfer too; a `SharedArrayBuffer` is *shared* rather than
 transferred, which is what makes `Atomics` between agents mean anything.
 
-Inside a worker the global scope is a `DedicatedWorkerGlobalScope`, with
+Inside a worker the global scope is a `DedicatedWorkerGlobalScope` —
+`postMessage`, `onmessage`, `onmessageerror`, `close()` and `name` — with
 `WorkerNavigator` and `WorkerLocation` alongside it.
 
 ## Data
@@ -166,7 +167,7 @@ Inside a worker the global scope is a `DedicatedWorkerGlobalScope`, with
 
 | Global | Notes |
 | --- | --- |
-| `performance` | `now()`, `timeOrigin`, User Timing (`mark`/`measure`/`getEntries*`/`clear*`) |
+| `performance` | `now()`, `timeOrigin`, User Timing: `mark`, `measure`, `getEntries`/`getEntriesByName`/`getEntriesByType`, `clearMarks`, `clearMeasures` |
 | `PerformanceEntry` / `PerformanceMark` / `PerformanceMeasure` | |
 
 ## WebAssembly

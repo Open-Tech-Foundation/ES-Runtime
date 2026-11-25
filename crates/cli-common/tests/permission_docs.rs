@@ -14,10 +14,9 @@ fn repo() -> PathBuf {
 }
 
 /// Every page that lists the permission names for a reader.
-const PAGES: [&str; 8] = [
+const PAGES: [&str; 7] = [
     "README.md",
     "SECURITY.md",
-    "docs/API.md",
     "docs/ARCHITECTURE.md",
     "website/app/docs/security/permissions/page.mdx",
     "website/app/api/cli/page.mdx",
@@ -75,7 +74,6 @@ fn the_scopable_names_are_the_ones_the_pages_say() {
     for page in [
         "README.md",
         "SECURITY.md",
-        "docs/API.md",
         "website/app/docs/security/permissions/page.mdx",
     ] {
         let text = read(page).split_whitespace().collect::<Vec<_>>().join(" ");

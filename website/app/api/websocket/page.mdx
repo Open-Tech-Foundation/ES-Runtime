@@ -54,6 +54,46 @@ ws.close(1000, "done"); // code 1000 or 3000–4999; reason ≤ 123 UTF-8 bytes
 
 <span id="server"></span>
 
+## `WebSocketStream`
+
+The promise/stream-based interface from the same
+[WHATWG spec](https://websockets.spec.whatwg.org/#the-websocketstream-interface) —
+also a global, over the same connection seam and `Net` gate as `WebSocket`.
+Reads are pull-based (real receive backpressure) and each write resolves when
+the host has taken the frame (send backpressure).
+
+```js
+const wss = new WebSocketStream("wss://example.com/socket", {
+  protocols: ["chat"],   // optional
+  signal: controller.signal, // optional AbortSignal
+});
+const { readable, writable, protocol, extensions } = await wss.opened;
+
+const writer = writable.getWriter();
+await writer.write("hello");            // string ⇒ text frame
+await writer.write(new Uint8Array([1])); // BufferSource ⇒ binary frame
+
+for await (const chunk of readable) {
+  // chunk is a string (text) or Uint8Array (binary)
+}
+
+wss.close({ closeCode: 1000, reason: "done" });
+const { closeCode, reason } = await wss.closed;
+```
+
+| Member | Type | Notes |
+| --- | --- | --- |
+| `new WebSocketStream(url, options?)` | `(url, { protocols?, signal? }) => WebSocketStream` | Same URL/protocol validation as `WebSocket`. Needs `net`. |
+| `opened` | `Promise<{ readable, writable, protocol, extensions }>` | Rejects with `WebSocketError` if the connection fails. |
+| `closed` | `Promise<{ closeCode, reason }>` | Resolves on a clean close; rejects with `WebSocketError` on an abnormal one. |
+| `close(closeInfo?)` | `({ closeCode?, reason? }) => void` | Same code/reason validation as `WebSocket#close`. |
+| `WebSocketError` | `DOMException` subclass (global) | `name === "WebSocketError"`, plus `closeCode`/`reason`. |
+
+Receipt is pull-driven (the embedder's tick, no owned loop), so a
+server-initiated close is observed while reading — or, after a local
+`close()`/writable close, by an internal drain that keeps receiving until the
+peer's close frame settles `closed`.
+
 ## Server · `runtime:websocket`
 
 Serving is capability-gated I/O, so it lives in a `runtime:` module like
@@ -234,7 +274,6 @@ spells them.
 | `(event)` | A failed connection or a denied Net capability surfaces as an `error` event followed by a `close` (code 1006) — not a thrown exception. |
 
 <Callout type="note" title="Not yet">
-  The promise/stream-based `WebSocketStream`, permessage-deflate (`extensions` is
-  always `""`), and pub/sub topics over the explicit-set
-  `broadcast()`.
+  permessage-deflate (`extensions` is always `""`), and pub/sub topics over the
+  explicit-set `broadcast()`.
 </Callout>

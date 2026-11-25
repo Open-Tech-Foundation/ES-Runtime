@@ -8,7 +8,7 @@
 //
 // So each entry below is an explicit, reasoned exclusion. The rule for adding
 // one: the test must be inapplicable **by design**, traceable to a decision
-// already recorded (SPEC non-goals, DECISIONS, API.md "Scope & non-goals") —
+// already recorded (SPEC non-goals, DECISIONS, the site's /docs/scope) —
 // never merely "we do not implement this yet". Anything unimplemented but
 // legitimately server-side stays in `runnable` and counts as a failure until it
 // is fixed. That is the whole point of the number.
@@ -105,7 +105,7 @@ export const FILES = [
     reason:
       "needs WPT's server: every case appends ?pipe=header(Access-Control-Allow-Origin,*) " +
       "and turns on a worker having a null origin — an HTTP-origin test, not a module-worker one. " +
-      "`data:` and `blob:` worker URLs are separately a non-goal (API.md): a module comes from a file",
+      "`data:` and `blob:` worker URLs are separately a non-goal (/docs/scope): a module comes from a file",
   },
   {
     match: /^webmessaging\/Channel_postMessage_Blob\.any\.js$/,
@@ -188,7 +188,7 @@ export const SUBTESTS = [
     match: /^Testing Navigator properties on workers\.$/,
     reason:
       "asserts appName === 'Netscape', appVersion, platform and product — the browser " +
-      "Navigator's compatibility surface, deliberately absent (API.md): answering it with " +
+      "Navigator's compatibility surface, deliberately absent (/docs/globals): answering it with " +
       "constants would make a feature check pass and then lie",
   },
   {

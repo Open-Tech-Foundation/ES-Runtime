@@ -146,6 +146,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Documentation
 
+- **The site is the one API reference; `docs/API.md` is gone (D252).** Two
+  copies of the reference had drifted in both directions. What only the repo
+  copy had moved to the site first: a new [error codes](/api/errors) page,
+  `WebSocketStream` (the site still called it "not yet"), the full `runtime:test`
+  matcher and mock reference, `BenchResult`, build's output options, and the
+  worker scope's members. A test now also checks that every error code the
+  runtime raises is documented.
+
 - **A second docs review, verified against the binary and fixed.** Among the
   corrections: `password.hash()` and the TOTP secret generators need no
   permission (they draw randomness as `crypto.getRandomValues` does); `args` and

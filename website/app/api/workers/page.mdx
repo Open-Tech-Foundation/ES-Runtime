@@ -400,6 +400,8 @@ onSignal("SIGTERM", async () => {
 | `ERR_DURABLE_SHUTDOWN` | Shutting down, or that worker has been closed. |
 | `ERR_DURABLE_SHARD_LOST` | The shard running the worker ended while a call was in flight. |
 | `ERR_DURABLE_CYCLE` | The call would close a loop of workers waiting on each other; the message names it. |
+| `ERR_DURABLE_CONFIGURED` | `configure()` after the first worker was used: the settings decide where state lives, so they cannot change mid-run. |
+| `ERR_DURABLE_ID_COLLISION` | Two ids hashed to one state file — astronomically unlikely, and refused rather than letting two workers share one state. |
 
 ## Isolate
 

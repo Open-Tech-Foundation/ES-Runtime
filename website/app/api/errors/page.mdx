@@ -1,0 +1,73 @@
+---
+title: Error codes
+description: The stable error codes esrun's host failures carry, and where each module's own codes are listed.
+---
+
+# Error codes
+
+A failure from the host carries a **stable string `code`** on the thrown
+exception. It is the contract to branch on: messages are prose and may be
+reworded, codes never change meaning. A failure with no stable classification
+has no `code`, so test for the codes you handle rather than exhaustively.
+
+```js
+try {
+  await file("config.json").text();
+} catch (e) {
+  if (e.code === "ERR_NOT_FOUND") return defaults;
+  throw e;
+}
+```
+
+The code rides on whatever class the failure surfaces as — `Error`, `TypeError`,
+a `DOMException`, `runtime:net`'s `SocketError:`-prefixed `TypeError` — as an own
+`code` property. The set may grow in a minor release; existing codes keep their
+meaning. A rejected `import()` and a throwing `import.meta.resolve` carry the
+same codes: a missing module is `ERR_NOT_FOUND`, one outside the root
+`ERR_JAIL_ESCAPE`.
+
+## Host codes
+
+Any API that reaches the host can raise these.
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_CAPABILITY_DENIED` | A required permission was not granted (nothing is, by default). |
+| `ERR_PERMISSION_DENIED` | Refused by the OS, or by a scoped grant — `--allow-read=<list>`, `--allow-net=<list>`, … — that does not cover the target. Distinct from a missing permission. |
+| `ERR_FOREIGN_HANDLE` | A socket, child process, server, file descriptor or request that belongs to another agent. A handle works only in the agent that made it. |
+| `ERR_PROVIDER_UNAVAILABLE` | The host has nothing installed behind this API. |
+| `ERR_NOT_FOUND` | The path, module or package does not exist. |
+| `ERR_ALREADY_EXISTS` | The target already exists. |
+| `ERR_IS_DIRECTORY` / `ERR_NOT_DIRECTORY` | A file operation hit a directory / a directory operation hit a non-directory. |
+| `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
+| `ERR_JAIL_ESCAPE` | The real path, or a module being imported, lies outside the project root and every path granted. |
+| `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the project root itself and the operation would change it. |
+| `ERR_SAME_FILE` | Source and destination are the same file, for an operation that would read one while truncating the other. |
+| `ERR_UNKNOWN_FILE_EXTENSION` | An import or a worker's entry named a file that is not a module file (`.js`, `.mjs`, `.cjs`, `.json`, `.wasm`); refused before it was read. |
+| `ERR_CONNECTION_REFUSED` | The peer refused the connection. |
+| `ERR_CONNECTION_RESET` | The peer reset or aborted the connection. |
+| `ERR_TIMED_OUT` | The operation timed out. |
+| `ERR_ADDRESS_IN_USE` | The local address is already in use. |
+| `ERR_UNREACHABLE` | The host or network is unreachable. |
+| `ERR_DNS` | Name resolution failed. |
+| `ERR_TLS` | A TLS handshake or certificate check failed. |
+| `ERR_PROXY_TUNNEL` | The outbound proxy (`--proxy`) refused to open a tunnel; its status is in the message. |
+| `ERR_TOO_MANY_REDIRECTS` | A redirect chain passed the Fetch standard's cap of 20. |
+| `ERR_CANCELLED` | The operation was cancelled. |
+| `ERR_ENTROPY` | The host's source of randomness failed. |
+| `ERR_IO` | An I/O failure with no finer classification. |
+
+## Codes a module adds
+
+Each is listed, with what raises it, on its module's page:
+
+| Codes | Where |
+| --- | --- |
+| `ERR_DB_*` — a portable classification of what a database did, with the backend's own code on `e.backendCode` | [`runtime:db` queries](/api/db/queries#errors) |
+| `ERR_DURABLE_*` | [`runtime:workers`](/api/workers#errors) |
+| `ERR_ISOLATE_*`, `ERR_WORKER_OUT_OF_MEMORY` | [`runtime:workers`](/api/workers) |
+| `ERR_IMAGE_*` | [`runtime:images`](/api/images) |
+| `ERR_PDF_*` | [`runtime:pdf`](/api/pdf) |
+| `ERR_ARCHIVE_*` | [`runtime:archive`](/api/archive) |
+| `ERR_PARSE_ARGS_*`, `ERR_INVALID_ARG_*` — Node's own `parseArgs` codes | [`runtime:process`](/api/process) |
+| `ERR_MAX_BUFFER` | [`runtime:system`](/api/system#errors) |

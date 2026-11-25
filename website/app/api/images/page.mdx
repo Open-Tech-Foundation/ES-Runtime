@@ -38,7 +38,7 @@ from a name.
 | Option | Default | Effect |
 | --- | --- | --- |
 | `maxPixels` | `268402689` | Over this many pixels fails at the header with `ERR_IMAGE_TOO_MANY_PIXELS`, before allocation. Applies with nothing set; pass a number to lower or raise it. |
-| `autoOrient` | `true` | Apply the orientation the file declares; `metadata()` reports the upright size. |
+| `autoOrient` | `true` | Apply the orientation the file declares (EXIF, or AVIF's `irot`/`imir`); `metadata()` reports the upright size. |
 | `toSrgb` | `true` | Convert an embedded matrix/TRC ICC profile to sRGB. Off, keep the pixels and write the profile to outputs. |
 | `animated` | `false` | Every frame. Not yet supported: an animation with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
 | `page` | `0` | The page to open of a multi-page TIFF. Past the end, or past 0 for any other format, is a `RangeError` from the terminal. |

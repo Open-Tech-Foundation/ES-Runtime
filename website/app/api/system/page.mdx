@@ -125,6 +125,8 @@ A child that exits with a non-zero status is not an error: `status` reports it.
 | A shell (`exec`, `shell: true`, `` $`…` ``) | The shell-injection class stays out. |
 | `fork()` / IPC | Worker processes want their own design. |
 | `stdio` arrays, raw fds | An fd hands the guest authority over anything inherited. |
+| `detached`, `uid`/`gid`, `argv0` | Privilege and identity belong to the host, not to guest code. |
+| Sync variants (`outputSync`) | A blocking spawn would stall the event loop. |
 | `detached`, `uid`/`gid` | Privilege manipulation belongs to the embedder. |
 | Sync variants | Ops run inside the async runtime. |
 | PTY | This runtime pipes. |

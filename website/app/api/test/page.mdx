@@ -121,7 +121,11 @@ registers a benchmark; `.run()` measures it and `bench.compare(...)` measures
 several, resolving to results by name. `b.start()`/`b.end()` time part of a
 call, `writeResult` saves a result and `bench.from(name, source)` reads one
 back. `toBeFasterThan(other, { delta })` and `toBeSlowerThan` compare results.
-See [Benchmarks](/esdev/test/bench).
+A `BenchResult` is `{ name, samples, latency, throughput }`: `latency` in
+milliseconds a call (`mean`, `min`, `max`, `p50`, `p75`, `p99`, `p999`, `sd`,
+`rme`) and `throughput` in calls a second (`mean`, `min`, `max`, `p50`, `rme`),
+where `rme` is the 95% margin of the mean as a percentage. See
+[Benchmarks](/esdev/test/bench).
 
 ## Tags
 
@@ -278,18 +282,21 @@ mismatched `Promise` — `await` them.
 | `toContain` / `toContainEqual` | A member, a substring, a `Set`/`Map` key |
 | `toHaveLength` / `toHaveProperty` | `toHaveProperty("a.b", 1)` |
 | `toMatch` / `toMatchObject` | String or `RegExp`; a subset of keys |
-| `toBeGreaterThan` / `…OrEqual` / `toBeLessThan` / `…OrEqual` / `toBeCloseTo` | |
+| `toBeGreaterThan` / `toBeGreaterThanOrEqual` / `toBeLessThan` / `toBeLessThanOrEqual` | |
+| `toBeCloseTo(n, digits?)` | Two digits by default |
 | `toSatisfy` / `toBeOneOf` | A predicate holds; equal to one of an array |
 | `toThrow` / `toThrowError` | Calls it; takes the same expectation `assertThrows` does |
-| `toHaveBeenCalled` / `…Times` / `…With` / `…LastCalledWith` / `…NthCalledWith` | Needs a `mock.fn()` |
+| `toHaveBeenCalled` / `toHaveBeenCalledTimes` / `toHaveBeenCalledWith` / `toHaveBeenLastCalledWith` / `toHaveBeenNthCalledWith` | Needs a `mock.fn()`; anything else is a `TypeError` naming the matcher. `Nth` is 1-based |
 | `toHaveBeenCalledExactlyOnceWith` | Called once, with these arguments |
-| `toHaveBeenCalledBefore(other)` / `toHaveBeenCalledAfter(other)` | By each mock's first call |
+| `toHaveBeenCalledBefore(other, requireCall = true)` / `toHaveBeenCalledAfter(other, requireCall = true)` | By each mock's first call; a mock never called fails unless `requireCall` is `false` |
 | `toHaveBeenExhausted()` | Needs a `mock.when` chain: every answer used |
-| `toHaveReturned` / `…Times` / `…With` / `toHaveLastReturnedWith` / `toHaveNthReturnedWith` | |
-| `toHaveResolved` / `…Times` / `…With` / `toHaveLastResolvedWith` / `toHaveNthResolvedWith` | What returned promises resolved to, once settled |
+| `toHaveReturned` / `toHaveReturnedTimes` / `toHaveReturnedWith` / `toHaveLastReturnedWith` / `toHaveNthReturnedWith` | Returned without throwing |
+| `toHaveResolved` / `toHaveResolvedTimes` / `toHaveResolvedWith` / `toHaveLastResolvedWith` / `toHaveNthResolvedWith` | What returned promises resolved to, once settled — await the call first; a non-promise return counts at once |
 
-The shorter jest spellings — `toBeCalled`, `toBeCalledWith`, `lastCalledWith`,
-`toReturnWith` — are aliases of the same matchers, not variants of them.
+The shorter jest spellings — `toBeCalled`, `toBeCalledTimes`, `toBeCalledWith`,
+`lastCalledWith`, `nthCalledWith`, `toReturn`, `toReturnTimes`, `toReturnWith`,
+`lastReturnedWith`, `nthReturnedWith` — are aliases of the same matchers, not
+variants of them.
 
 Snapshots use deterministic printed values: primitives (including
 `undefined`, `bigint`, `NaN`, and `-0`), arrays and plain objects, `Date`,
@@ -485,10 +492,13 @@ name, lasts the rest of the file, and is refused in browser runs. See
 [Mocking a module](/esdev/test/mocks#mocking-a-module).
 
 On the mock itself: `mock.calls`, `mock.results`, `mock.instances`,
-`mock.lastCall`; `mockImplementation`, `mockReturnValue`, `mockReturnThis`,
+`mock.lastCall`, `mock.settledResults` (`{ type: "fulfilled" | "rejected" |
+"incomplete", value }` per call), `mock.contexts` (`this` per call) and
+`mock.invocationCallOrder` (each call's place among calls to every mock in the
+file, from 1); `mockImplementation`, `mockReturnValue`, `mockReturnThis`,
 `mockResolvedValue`, `mockRejectedValue`, `mockThrow` — each with a `…Once` —
 `withImplementation`, `getMockImplementation`, and `mockClear`, `mockReset`,
-`mockRestore`, `mockName`. `using spy = mock.spyOn(…)` restores it when the
+`mockRestore`, `mockName`, `getMockName`. `using spy = mock.spyOn(…)` restores it when the
 block ends.
 
 A `mock.when` chain takes `calledWith(...args)` and then `thenReturn`,
@@ -528,7 +538,8 @@ test("polls every second until it answers", async () => {
 | --- | --- |
 | `clock.freeze(at?)` | Stops time, optionally at a moment |
 | `clock.freeze({ now, toFake, toNotFake, loopLimit })` | …replacing only some of it |
-| `clock.release()` | The real ones back |
+| `clock.release()` | The real ones back; waiting timers are dropped |
+| `clock.isFrozen()` | Whether time is stopped |
 | `clock.advance(ms)` / `advanceAsync(ms)` | Move it |
 | `clock.advanceToNextFrame()` | To the next animation frame (every 16ms) |
 | `clock.next()` / `nextAsync()` | Jump to the next timer and run it |

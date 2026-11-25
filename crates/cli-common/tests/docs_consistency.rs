@@ -102,6 +102,10 @@ fn error_codes(text: &str) -> BTreeSet<String> {
             end += 1;
         }
         // `ERR_ARCHIVE_*` names a family, not a code.
+        if bytes.get(end) == Some(&b'*') {
+            i = end;
+            continue;
+        }
         let code = text[start..end].trim_end_matches('_');
         let before = start.checked_sub(1).map(|j| bytes[j]);
         if code.len() > 4 && !before.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
@@ -496,4 +500,58 @@ fn every_section_link_reaches_a_heading() {
     }
     found.dedup();
     fail_if_any("links to a section the page does not have", found);
+}
+
+/// The other direction from `every_error_code_the_docs_name_is_one_the_code_has`:
+/// every code the runtime raises is documented. A host code (`ErrorCode`, in
+/// `common`) is on the error codes page, its one home; a code a module raises
+/// in its own JavaScript is on some page — its module's.
+#[test]
+fn every_error_code_the_runtime_raises_is_documented() {
+    let errors_page =
+        std::fs::read_to_string(repo().join("website/app/api/errors/page.mdx")).unwrap();
+    let common = std::fs::read_to_string(repo().join("crates/common/src/error.rs")).unwrap();
+    let host: BTreeSet<String> = common
+        .match_indices("=> \"ERR_")
+        .map(|(at, _)| common[at + 4..].chars().take_while(|c| *c != '"').collect())
+        .collect();
+    let mut found: Vec<String> = host
+        .iter()
+        .filter(|code| {
+            // Listed by name, or as a family a module page owns (`ERR_PDF_*`).
+            let family = code
+                .match_indices('_')
+                .nth(1)
+                .map(|(at, _)| format!("`{}_*`", &code[..at]));
+            !errors_page.contains(&format!("`{code}`"))
+                && !family.is_some_and(|f| errors_page.contains(&f))
+        })
+        .map(|code| format!("website/app/api/errors/page.mdx lacks host code {code}"))
+        .collect();
+
+    let site: String = files("website/app", &|p| ext(p, &["mdx"]))
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    let mut raised = BTreeSet::new();
+    for dir in [
+        "crates/runtime/src/runtime_modules",
+        "crates/runtime/src/prelude",
+    ] {
+        for p in files(dir, &|p| ext(p, &["js"])) {
+            let text = std::fs::read_to_string(&p).unwrap();
+            for (at, _) in text.match_indices("\"ERR_") {
+                let code: String = text[at + 1..].chars().take_while(|c| *c != '"').collect();
+                raised.insert(code);
+            }
+        }
+    }
+    for code in raised.difference(&host) {
+        if !site.contains(code.as_str()) {
+            found.push(format!(
+                "{code}: raised by a runtime module, documented on no page"
+            ));
+        }
+    }
+    fail_if_any("error codes the docs do not list", found);
 }
