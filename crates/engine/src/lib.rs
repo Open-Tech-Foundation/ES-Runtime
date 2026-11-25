@@ -57,7 +57,7 @@ pub use cpu::CpuBudget;
 pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};
 pub use error::{Error, Result};
 pub use inspector::{HAS_INSPECTOR, InspectorOptions, InspectorTransport, NO_INSPECTOR_MESSAGE};
-pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
+pub use module::{INTERNAL_OPS, ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use trace::{CapabilityObserver, SharedObserver};
 pub use turn::TurnHandle;

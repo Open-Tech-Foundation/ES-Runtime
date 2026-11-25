@@ -65,7 +65,7 @@
 
 import { env, unmask } from "runtime:process";
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // Every plugin object and `external` predicate the guest has handed over, by
 // the handle the host knows it as. The host never sees a function: it sees a

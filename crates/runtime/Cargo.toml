@@ -72,7 +72,15 @@ otf-pixels = "0.5.0"
 # runtime:pdf (D190): pure Rust, `unsafe` forbidden, no I/O of its own.
 otf-pdf = "0.2.0"
 
+[dev-dependencies]
+# `test-hooks`: tests that call an op directly put the op table back on the
+# global for themselves (D253). Dev-only, so no build of the runtime has it.
+es-runtime-engine = { workspace = true, features = ["test-hooks"] }
+
 [features]
+# `Runtime::expose_ops_for_testing`, for another crate's tests that call an op
+# directly (D253). Only dev-dependencies enable it.
+test-hooks = ["es-runtime-engine/test-hooks"]
 # Exposes `crate::fuzz` for the targets under `fuzz/` (SPEC §5). Not public API
 # and never enabled by a dependant — only the fuzz crate turns it on.
 fuzzing = []

@@ -726,10 +726,11 @@ fn granting_only_imports_says_workers_is_what_starting_one_needs() {
 
 #[test]
 fn a_worker_entry_is_never_handed_back_to_javascript() {
-    // Every op is reachable from guest code through `__ops`, so an op that
-    // returned a worker's entry source was a file reader: under
+    // An op that returned a worker's entry source was a file reader: under
     // `--allow-imports` alone it read `.env` and handed the text back. The
-    // spawn now reads the entry itself and nothing returns it.
+    // spawn now reads the entry itself and nothing returns it — and since
+    // D253 guest code cannot call `worker_spawn` directly at all, so what is
+    // left to show is that the only door, `new Worker`, still needs `workers`.
     let dir = temp("entry_source");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
@@ -737,12 +738,8 @@ fn a_worker_entry_is_never_handed_back_to_javascript() {
     std::fs::write(dir.join(".env"), "TOKEN=hunter2\n").expect("write");
     std::fs::write(
         dir.join("main.js"),
-        "console.log(typeof globalThis.__ops.worker_read_entry);\n\
-         try {\n\
-           await globalThis.__ops.worker_spawn(\n\
-             new URL('./.env', import.meta.url).href, '', [], null, 0);\n\
-           console.log('spawned');\n\
-         } catch (e) { console.log(e.code); }\n",
+        "console.log(typeof globalThis.__ops);\n\
+         new Worker(new URL('./.env', import.meta.url));\n",
     )
     .expect("write");
     let out = esrun()
@@ -750,10 +747,15 @@ fn a_worker_entry_is_never_handed_back_to_javascript() {
         .args(["--deny-all", "--allow-imports", "main.js"])
         .output()
         .expect("spawn esrun");
-    let printed = stdout(&out);
-    assert_eq!(
-        printed,
-        "undefined\nERR_CAPABILITY_DENIED\n",
+    // The refusal comes from starting the worker, not from the constructor.
+    assert_eq!(stdout(&out), "undefined\n", "stderr: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("capability denied: Worker"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("hunter2"),
         "stderr: {}",
         stderr(&out)
     );
@@ -1672,25 +1674,21 @@ fn a_timeout_stops_a_worker_spinning_in_a_synchronous_loop() {
 
 // Handle ownership (D50). The providers behind these ops are shared across every
 // agent in the process and hand out small sequential ids, so a worker granted
-// nothing can name its parent's resources by counting. What stops it is not the
-// capability check — the op that *uses* a handle deliberately has none — but the
-// record of which agent minted the id.
+// nothing could name its parent's resources by counting. Two things stop it now:
+// guest code cannot reach the ops at all (D253), and behind that, each op checks
+// which agent minted the id. These hold the first end to end, and that the
+// parent's own use of each resource is untouched.
 
 #[test]
 fn a_worker_cannot_kill_a_child_process_it_did_not_spawn() {
     let out = run(
         "steal-child",
         r#"
-        const said = [];
-        for (let id = 1; id <= 4; id++) {
-          try {
-            await globalThis.__ops.system_kill(id, "SIGKILL");
-            said.push(`killed ${id}`);
-          } catch (e) {
-            said.push(e.code);
-          }
-        }
-        postMessage(said.join(" "));
+        // The op table is out of guest reach (D253), a worker's included, so
+        // there is no op to name a parent's handle with. The ownership check
+        // behind each op is held in-process: `runtime` crate,
+        // `every_handle_op_refuses_an_id_this_agent_did_not_mint`.
+        postMessage(typeof globalThis.__ops === "undefined" ? "unreachable" : "reachable");
         "#,
         r#"
         import { Command } from "runtime:system";
@@ -1717,10 +1715,7 @@ fn a_worker_cannot_kill_a_child_process_it_did_not_spawn() {
         &[],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert_eq!(
-        stdout(&out),
-        "ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE\nalive\n"
-    );
+    assert_eq!(stdout(&out), "unreachable\nalive\n");
 }
 
 #[test]
@@ -1730,16 +1725,11 @@ fn a_worker_cannot_answer_a_request_its_parent_is_serving() {
     let out = run(
         "steal-request",
         r#"
-        const said = [];
-        for (let id = 1; id <= 6; id++) {
-          try {
-            await globalThis.__ops.http_respond(id, 200, [], "hijacked", null);
-            said.push(`answered ${id}`);
-          } catch (e) {
-            said.push(e.code);
-          }
-        }
-        postMessage(said.join(" "));
+        // The op table is out of guest reach (D253), a worker's included, so
+        // there is no op to name a parent's handle with. The ownership check
+        // behind each op is held in-process: `runtime` crate,
+        // `every_handle_op_refuses_an_id_this_agent_did_not_mint`.
+        postMessage(typeof globalThis.__ops === "undefined" ? "unreachable" : "reachable");
         "#,
         r#"
         import { serve } from "runtime:http";
@@ -1758,10 +1748,7 @@ fn a_worker_cannot_answer_a_request_its_parent_is_serving() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let said = stdout(&out);
-    assert!(
-        !said.contains("answered"),
-        "a foreign request id was honoured: {said}"
-    );
+    assert!(said.starts_with("unreachable\n"), "{said}");
     assert!(said.ends_with("200 mine\n"), "{said}");
 }
 
@@ -1775,16 +1762,11 @@ fn a_worker_cannot_upgrade_a_request_its_parent_is_serving() {
     let out = run(
         "steal-upgrade",
         r#"
-        const said = [];
-        for (let id = 1; id <= 6; id++) {
-          try {
-            await globalThis.__ops.ws_upgrade(id);
-            said.push(`took ${id}`);
-          } catch (e) {
-            said.push(e.code);
-          }
-        }
-        postMessage(said.join(" "));
+        // The op table is out of guest reach (D253), a worker's included, so
+        // there is no op to name a parent's handle with. The ownership check
+        // behind each op is held in-process: `runtime` crate,
+        // `every_handle_op_refuses_an_id_this_agent_did_not_mint`.
+        postMessage(typeof globalThis.__ops === "undefined" ? "unreachable" : "reachable");
         "#,
         r#"
         import { serve } from "runtime:http";
@@ -1812,10 +1794,7 @@ fn a_worker_cannot_upgrade_a_request_its_parent_is_serving() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let said = stdout(&out);
-    assert!(
-        !said.contains("took"),
-        "a foreign request was upgraded: {said}"
-    );
+    assert!(said.starts_with("unreachable\n"), "{said}");
     // The parent's own upgrade still works — the check refused the worker, not
     // the operation.
     assert!(
@@ -1835,16 +1814,11 @@ fn a_worker_cannot_write_to_a_socket_its_parent_opened() {
     let out = run(
         "steal-socket",
         r#"
-        const said = [];
-        for (let id = 1; id <= 4; id++) {
-          try {
-            await globalThis.__ops.net_write(id, new TextEncoder().encode("hijacked"));
-            said.push(`wrote ${id}`);
-          } catch (e) {
-            said.push(e.code);
-          }
-        }
-        postMessage(said.join(" "));
+        // The op table is out of guest reach (D253), a worker's included, so
+        // there is no op to name a parent's handle with. The ownership check
+        // behind each op is held in-process: `runtime` crate,
+        // `every_handle_op_refuses_an_id_this_agent_did_not_mint`.
+        postMessage(typeof globalThis.__ops === "undefined" ? "unreachable" : "reachable");
         "#,
         r#"
         import { listen, connect } from "runtime:net";
@@ -1874,9 +1848,6 @@ fn a_worker_cannot_write_to_a_socket_its_parent_opened() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let said = stdout(&out);
-    assert!(
-        !said.contains("wrote"),
-        "a foreign socket accepted a write: {said}"
-    );
+    assert!(said.starts_with("unreachable\n"), "{said}");
     assert!(said.ends_with("mine\n"), "{said}");
 }

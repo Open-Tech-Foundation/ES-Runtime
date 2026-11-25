@@ -1055,10 +1055,20 @@ pub fn reset() {
 /// so a file means the same thing in a page as in this runtime.
 pub const SOURCE: &str = include_str!("test.js");
 
-const MODULES: &[HostModule] = &[HostModule {
-    specifier: "runtime:test",
-    source: SOURCE,
-}];
+const MODULES: &[HostModule] = &[
+    HostModule {
+        specifier: "runtime:test",
+        source: SOURCE,
+    },
+    // What the global setup process's generated entry calls (`global_setup.rs`).
+    // The entry is a program, not a built-in, so the op table is out of its
+    // reach (D253); these two functions are the whole of what it needs.
+    HostModule {
+        specifier: "runtime:test/global-setup",
+        source: "export const ready = (provided) => __ops.test_global_ready(provided);\n\
+                 export const wait = () => __ops.test_global_wait();\n",
+    },
+];
 
 impl HostExtension for TestExtension {
     fn modules(&self) -> &[HostModule] {

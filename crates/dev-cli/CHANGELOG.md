@@ -26,6 +26,12 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+### Security
+
+- **Programs run by `esdev` cannot reach the op table either (D253).** The test
+  runner's global-setup entry gets the two calls it needs from
+  `runtime:test/global-setup` instead.
+
 ### Fixed
 
 - **A test's options error lists every option** — `timeout`, `retry`,

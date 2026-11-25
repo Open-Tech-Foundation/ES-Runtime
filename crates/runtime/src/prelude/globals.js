@@ -2,7 +2,7 @@
 // Loaded after console so reportError can route through it.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
 
   globalThis.queueMicrotask = (callback) => {
     if (typeof callback !== "function") {
@@ -141,7 +141,7 @@
     // host I/O, done synchronously through the loader's own resolution — so the
     // answer is always a URL `import()` would have produced (D41). A failure to
     // resolve throws from the op, naming the package.
-    const resolved = globalThis.__ops.module_resolve_sync(target, base);
+    const resolved = __ops.module_resolve_sync(target, base);
     if (resolved !== null) return resolved;
 
     // The loader has no synchronous path (modules over a network, say). Say

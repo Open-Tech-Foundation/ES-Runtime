@@ -8,7 +8,7 @@
 // which is what WebIDL describes and what inspectors and type checks expect.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
   const timeOrigin = ops.time_origin();
   // Guards the constructor: `performance` is exposed as an instance, and
   // `new Performance()` is not something a script may do.

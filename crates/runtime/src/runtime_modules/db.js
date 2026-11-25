@@ -11,7 +11,7 @@
 // Postgres, MySQL, anything written outside this file — is JS over
 // `runtime:net`, and adding one requires no change to the runtime at all.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();

@@ -6,7 +6,7 @@
 // has `send`/`receive` rather than streams (DECISIONS D58). Backed by async ops,
 // gated on Net (connect, send) / NetListen (listen, bind).
 
-const ops = globalThis.__ops;
+const ops = __ops;
 const encoder = new TextEncoder();
 const EMPTY = new Uint8Array(0);
 

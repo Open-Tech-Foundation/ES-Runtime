@@ -10,7 +10,7 @@
 // ws: only. A wss: endpoint is runtime:http's `serve` with TLS and
 // `upgradeWebSocket`, which serves https: and wss: on one port.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 // Which host request a server-side Request came from — set by the prelude when
 // runtime:http builds one, and `undefined` for every other Request (D55).
 const requestIdOf = globalThis.__serverRequestId;

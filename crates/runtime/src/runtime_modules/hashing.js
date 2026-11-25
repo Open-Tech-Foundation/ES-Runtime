@@ -25,7 +25,7 @@
 // capability. `password.verify()` needs no randomness — the salt is inside the
 // stored string — so a service that only checks passwords needs nothing.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // Defaults per algorithm, following the OWASP Password Storage Cheat Sheet.
 // They live here, in the open, rather than in the host: raising them is a

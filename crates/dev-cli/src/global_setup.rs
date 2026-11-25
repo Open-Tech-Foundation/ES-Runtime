@@ -201,7 +201,7 @@ pub async fn run(config: &TestConfig, out: &Path) -> ExitCode {
 fn entry(modules: &[String]) -> String {
     let urls = serde_json::to_string(modules).unwrap_or_else(|_| "[]".to_string());
     format!(
-        r#"const ops = globalThis.__ops;
+        r#"import {{ ready, wait }} from "runtime:test/global-setup";
 const provided = Object.create(null);
 const context = Object.freeze({{
   provide(key, value) {{
@@ -226,8 +226,8 @@ try {{
     if (typeof teardown === "function") teardowns.push(teardown);
     if (typeof module.teardown === "function") teardowns.push(module.teardown);
   }}
-  ops.test_global_ready(JSON.stringify(provided));
-  await ops.test_global_wait();
+  ready(JSON.stringify(provided));
+  await wait();
 }} catch (err) {{
   failure = [err];
 }}

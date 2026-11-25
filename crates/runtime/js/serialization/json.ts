@@ -18,9 +18,10 @@ const g = globalThis as unknown as {
 // Captured now: the globals are hidden, not locked (harden.js).
 const jsonParse = g.__json_parse;
 const jsonValidate = g.__json_validate;
-const { json_edit_plan, json_edit } = (
-  g as unknown as { __ops: Record<string, (...a: any[]) => any> }
-).__ops;
+// The op table: the runtime imports it into this module as `__ops`, and
+// nothing outside the runtime's own modules can (D253).
+declare const __ops: Record<string, (...a: any[]) => any>;
+const { json_edit_plan, json_edit } = __ops;
 
 export interface ValidateOptions {
   detailed?: boolean;

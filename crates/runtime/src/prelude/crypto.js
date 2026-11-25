@@ -6,7 +6,7 @@
 // PKCS#8 (private) / SEC1 points or SPKI (public); JWK is assembled here.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
 
   const INTEGER_VIEWS = [
     Int8Array,

@@ -288,6 +288,44 @@ pub(crate) fn compile(
     }
 }
 
+/// The specifier of the op table's module (D253).
+pub const INTERNAL_OPS: &str = "runtime:internal/ops";
+
+/// Compiles [`INTERNAL_OPS`]: a synthetic module whose `default` export is the
+/// op table, read when the module is evaluated.
+pub(crate) fn internal_ops(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    registry: &Rc<RefCell<ModuleRegistry>>,
+) -> Result<ModuleId> {
+    v8::scope!(let scope, isolate);
+    let context = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let (Some(name), Some(export)) = (
+        v8::String::new(scope, INTERNAL_OPS),
+        v8::String::new(scope, "default"),
+    ) else {
+        return Err(Error::Internal("could not name the ops module".into()));
+    };
+    let module = v8::Module::create_synthetic_module(scope, name, &[export], internal_ops_steps);
+    let hash = module.get_identity_hash().get();
+    let global = v8::Global::new(scope, module);
+    Ok(registry
+        .borrow_mut()
+        .insert(global, hash, INTERNAL_OPS.to_string()))
+}
+
+fn internal_ops_steps<'s>(
+    context: v8::Local<'s, v8::Context>,
+    module: v8::Local<v8::Module>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    v8::callback_scope!(unsafe scope, context);
+    let table = crate::op::ops_table(scope, context).ok()?;
+    let export = v8::String::new(scope, "default")?;
+    module.set_synthetic_module_export(scope, export, table.into())?;
+    Some(v8::undefined(scope).into())
+}
+
 /// The import specifiers a compiled module requests, in source order — for
 /// `runtime` to resolve and load before instantiation.
 pub(crate) fn requests(

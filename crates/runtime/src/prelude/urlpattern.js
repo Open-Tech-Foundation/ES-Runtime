@@ -10,7 +10,7 @@
 // components come off `URL`, which a router's hot path already needs.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
 
   // Component order, matching the ops' wire shape.
   const COMPONENTS = [

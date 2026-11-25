@@ -7,7 +7,7 @@
 // and circular-reference guard.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
 
   const fnToString = Function.prototype.toString;
   const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;

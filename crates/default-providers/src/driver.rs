@@ -296,6 +296,7 @@ mod tests {
             Box::pin(async { Ok(Value::Number(42.0)) })
         }))
         .unwrap();
+        rt.expose_ops_for_testing();
 
         // An async op (settles on the first tick) and a 50ms timer.
         rt.eval(

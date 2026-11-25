@@ -22,7 +22,7 @@
 // Events are debounced per path by the host: one editor save is several
 // filesystem events, and rebuilding on each of them rebuilds three times.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // A live watcher: an async iterable of changes, whose watch set can be changed
 // while it is being iterated.

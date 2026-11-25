@@ -13,6 +13,29 @@ rules it follows.
 The decision and what was rejected are in
 [DECISIONS D228](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
 
+## Who can call an op
+
+Only the runtime's own JavaScript. The ops sit in one table, held on the global
+object under a V8 private key, which no JavaScript can name, list or reach
+through a proxy. The prelude receives the table as a function parameter, and
+the `runtime:` modules import it from `runtime:internal/ops` — an import the
+loader refuses from any module the runtime did not compile from its own source.
+
+Guest code therefore calls the Web APIs and `runtime:` modules, never an op. If
+it could reach the table, two things would follow, and both used to be true. A
+dependency could replace an op the standard APIs call, and every caller after
+it would get the replacement: `crypto.randomUUID()` all zeros, or
+`runtime:hashing`'s HMAC handing its key to a wrapper. And it could call an op
+with arguments no API would pass, so every check a wrapper makes would have to
+be made again in Rust. Deno keeps its ops behind `ext:` imports in the same
+way, and Node behind the loader's `internalBinding`.
+
+The capability check never depended on this: it is in Rust either way. What the
+private table protects is the integrity of the APIs built over it. A call costs
+what it did before: internal code reaches the table through a binding it
+captured, as it always did, and the call itself is unchanged. The decision is
+[DECISIONS D253](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
 ## Two kinds of op
 
 A **typed op** declares its Rust argument types, and each argument is read

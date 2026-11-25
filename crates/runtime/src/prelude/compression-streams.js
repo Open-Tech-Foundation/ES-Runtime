@@ -8,7 +8,7 @@
 (() => {
   "use strict";
 
-  const ops = globalThis.__ops;
+  const ops = __ops;
   const FORMATS = ["brotli", "deflate", "deflate-raw", "gzip"];
 
   function toBytes(chunk, iface) {

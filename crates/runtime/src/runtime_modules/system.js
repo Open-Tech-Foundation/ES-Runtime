@@ -19,7 +19,7 @@
 //   * `output()` is bounded. A child that writes without end hits `maxBuffer`
 //     and is killed, rather than growing the server's heap until it dies.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 const encoder = new TextEncoder();
 
 // A Secret from runtime:process (a masked env value). It stringifies to

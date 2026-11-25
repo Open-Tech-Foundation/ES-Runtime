@@ -67,7 +67,7 @@
 // so a `.only` left in a commit is visible in the tally rather than being a
 // suite that passes in a tenth of the time.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // What the command line asked of this file: `--test-name-pattern` and
 // `--test-skip-pattern`, matched against a test's full name.

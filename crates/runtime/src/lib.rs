@@ -584,6 +584,10 @@ pub struct Runtime {
     /// Shared by the initial graph load and dynamic `import()` so a module
     /// imported both statically and dynamically is the **same instance**.
     module_map: HashMap<String, ModuleId>,
+    /// The modules the runtime compiled from its own source — the `runtime:`
+    /// built-ins, baked or an embedder's. Only these may import the op table
+    /// (D253); a module's specifier is not proof, since a loader names modules.
+    builtin_ids: std::collections::HashSet<ModuleId>,
     /// The entry module's specifier, remembered so a relative `new Worker(url)`
     /// has the base URL a browser would take from the document. `import.meta.url`
     /// is the precise form (`new URL("./w.js", import.meta.url)`), and the one
@@ -657,6 +661,7 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
+            builtin_ids: std::collections::HashSet::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
             handle_refs: Rc::new(Cell::new(0)),
@@ -683,8 +688,10 @@ impl Runtime {
             entry_slot,
             handle_refs,
         )?;
-        runtime.engine.eval(&prelude::source())?;
-        runtime.engine.eval(&prelude::post_snapshot_source())?;
+        runtime.engine.eval_internal(&prelude::source())?;
+        runtime
+            .engine
+            .eval_internal(&prelude::post_snapshot_source())?;
         runtime.wire_telemetry(&providers);
         if runtime.is_isolate {
             runtime.engine.set_denial_note(ISOLATE_DENIAL);
@@ -843,7 +850,7 @@ impl Runtime {
                     Error::Engine(e) => e,
                     other => es_runtime_engine::Error::Internal(other.to_string()),
                 })?;
-                engine.eval(&prelude::source())?;
+                engine.eval_internal(&prelude::source())?;
                 Ok(())
             },
         )?)
@@ -851,7 +858,7 @@ impl Runtime {
 
     /// Restores a runtime from a [`build_snapshot`](Self::build_snapshot) blob.
     ///
-    /// The prelude and `__ops.<name>` shells come from the snapshot, so this only
+    /// The prelude and the op table's shells come from the snapshot, so this only
     /// rebinds the Rust op handlers — in the **same order** `build_snapshot` used,
     /// which [`builtins::install`] guarantees — and does not re-evaluate the
     /// prelude. Equivalent in behaviour to [`new`](Self::new), far cheaper.
@@ -885,6 +892,7 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
+            builtin_ids: std::collections::HashSet::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
             handle_refs: Rc::new(Cell::new(0)),
@@ -917,7 +925,9 @@ impl Runtime {
         runtime.engine.finish_baked_ops();
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
-        runtime.engine.eval(&prelude::post_snapshot_source())?;
+        runtime
+            .engine
+            .eval_internal(&prelude::post_snapshot_source())?;
         runtime.wire_telemetry(&providers);
         if runtime.is_isolate {
             runtime.engine.set_denial_note(ISOLATE_DENIAL);
@@ -944,7 +954,17 @@ impl Runtime {
         self.engine.heap_limit_exceeded()
     }
 
-    /// Registers a host op, callable from JS as `globalThis.__ops.<name>`.
+    /// Puts the op table on the global as `__ops`, for a test that calls an op
+    /// directly (D253). Tests only: the `test-hooks` feature, which only
+    /// dev-dependencies enable, is how another crate's tests reach it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    #[doc(hidden)]
+    pub fn expose_ops_for_testing(&mut self) {
+        self.engine.expose_ops_for_testing().expect("expose ops");
+    }
+
+    /// Registers a host op, callable from the runtime's own JavaScript as
+    /// `__ops.<name>` and from nowhere else (D253).
     pub fn register_op(&mut self, op: OpDecl) -> Result<()> {
         self.engine.register_op(op)?;
         Ok(())
@@ -975,7 +995,8 @@ impl Runtime {
                 "host module {specifier:?} is not in the runtime: namespace"
             )));
         }
-        if runtime_modules::source(specifier).is_some() {
+        if runtime_modules::source(specifier).is_some() || specifier.starts_with("runtime:internal")
+        {
             return Err(Error::ModuleLoad(format!(
                 "{specifier:?} is a built-in module and cannot be replaced"
             )));
@@ -1278,7 +1299,9 @@ impl Runtime {
             for req in requests {
                 let raw = req.specifier;
                 let is_json = req.import_type.as_deref() == Some("json");
-                let (target_id, newly_compiled) = if runtime_modules::is_builtin_scheme(&raw) {
+                let (target_id, newly_compiled) = if raw == es_runtime_engine::INTERNAL_OPS {
+                    self.resolve_internal_ops(referrer_id)?
+                } else if runtime_modules::is_builtin_scheme(&raw) {
                     // `runtime:` built-ins are served by the runtime itself — no
                     // loader, no FileSystem capability (their ops are gated).
                     self.resolve_builtin(&raw)?
@@ -1309,6 +1332,26 @@ impl Runtime {
             }
         }
         Ok(resolved)
+    }
+
+    /// Resolves `runtime:internal/ops`, the op table (D253), for `referrer` —
+    /// which must be a module the runtime compiled from its own source. Any
+    /// other importer is refused as if the module did not exist, since to it
+    /// none does.
+    fn resolve_internal_ops(&mut self, referrer: ModuleId) -> Result<(ModuleId, Option<String>)> {
+        if !self.builtin_ids.contains(&referrer) {
+            return Err(Error::ModuleLoad(format!(
+                "unknown built-in module {:?}",
+                es_runtime_engine::INTERNAL_OPS
+            )));
+        }
+        if let Some(&id) = self.module_map.get(es_runtime_engine::INTERNAL_OPS) {
+            return Ok((id, None));
+        }
+        let id = self.engine.internal_ops_module()?;
+        self.module_map
+            .insert(es_runtime_engine::INTERNAL_OPS.to_string(), id);
+        Ok((id, None))
     }
 
     /// Resolves a `runtime:` built-in to a compiled [`ModuleId`], compiling its
@@ -1342,8 +1385,15 @@ impl Runtime {
         if specifier == "runtime:context" {
             self.engine.enable_async_context();
         }
+        // The op table arrives as an import the runtime adds, on the first line
+        // so no line number moves (D253). The built-ins name it `__ops`.
+        let source = format!(
+            "import __ops from {:?}; {source}",
+            es_runtime_engine::INTERNAL_OPS
+        );
         let id = self.engine.compile_module(specifier, &source)?;
         self.module_map.insert(specifier.to_string(), id);
+        self.builtin_ids.insert(id);
         Ok((id, Some(specifier.to_string())))
     }
 
@@ -1396,6 +1446,13 @@ impl Runtime {
         referrer: &str,
         import_type: Option<&str>,
     ) -> Result<ModuleId> {
+        // The op table is a static import of the built-ins and nothing else
+        // (D253); a dynamic one is refused whoever asks.
+        if specifier == es_runtime_engine::INTERNAL_OPS {
+            return Err(Error::ModuleLoad(format!(
+                "unknown built-in module {specifier:?}"
+            )));
+        }
         // A dynamic import() of a `runtime:` built-in (e.g. `import("runtime:process")`).
         if runtime_modules::is_builtin_scheme(specifier) {
             let (id, _) = self.resolve_builtin(specifier)?;
@@ -2054,6 +2111,7 @@ mod tests {
     fn signal_ops_require_the_signals_capability() {
         let _g = v8_guard();
         let mut rt = signal_runtime(Arc::new(TestSignals::default()));
+        rt.expose_ops_for_testing();
         // Everything except the capability under test, so a denial can only be
         // Signals — not some other gate the op happens to trip first.
         let mut caps = CapabilitySet::all();
@@ -2072,6 +2130,7 @@ mod tests {
         // must not carry the privilege to suppress termination.
         let _g = v8_guard();
         let mut rt = signal_runtime(Arc::new(TestSignals::default()));
+        rt.expose_ops_for_testing();
         rt.set_capabilities(CapabilitySet::none().with(Capability::Env));
         let out = eval_async(
             &mut rt,
@@ -2645,6 +2704,7 @@ mod tests {
     fn copy_requires_both_file_capabilities() {
         let _g = v8_guard();
         let mut rt = runtime_with_memory_fs();
+        rt.expose_ops_for_testing();
 
         rt.set_capabilities(CapabilitySet::none().with(Capability::FileWrite));
         assert!(
@@ -2678,6 +2738,7 @@ mod tests {
     fn copying_a_file_onto_itself_is_refused() {
         let _g = v8_guard();
         let mut rt = runtime_with_memory_fs();
+        rt.expose_ops_for_testing();
         rt.set_capabilities(
             CapabilitySet::none()
                 .with(Capability::FileRead)
@@ -2703,6 +2764,7 @@ mod tests {
     fn the_new_fs_ops_are_gated_by_what_they_do() {
         let _g = v8_guard();
         let mut rt = runtime_with_memory_fs();
+        rt.expose_ops_for_testing();
 
         rt.set_capabilities(CapabilitySet::none().with(Capability::FileWrite));
         for read_op in ["__ops.fs_real_path('/a')", "__ops.fs_read_link('/a')"] {
@@ -2737,6 +2799,7 @@ mod tests {
         let _g = v8_guard();
         let fs = Arc::new(RecordingSyncFs::default());
         let mut rt = runtime_with_sync_fs(fs.clone());
+        rt.expose_ops_for_testing();
 
         // Deny-by-default: nothing granted, so even a read is refused.
         rt.set_capabilities(CapabilitySet::none());
@@ -2781,6 +2844,7 @@ mod tests {
         let _g = v8_guard();
         let fs = Arc::new(RecordingSyncFs::default());
         let mut rt = runtime_with_sync_fs(fs.clone());
+        rt.expose_ops_for_testing();
         rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
 
         for mode in [
@@ -2809,6 +2873,7 @@ mod tests {
     fn sync_fs_ops_without_a_provider_fail_cleanly() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.set_capabilities(
             CapabilitySet::none()
                 .with(Capability::FileRead)
@@ -3442,6 +3507,7 @@ mod tests {
     fn sync_op_is_callable_from_js() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.register_op(OpDecl::sync("add", |args| {
             let a = args.first().and_then(Value::as_number).unwrap_or(0.0);
             let b = args.get(1).and_then(Value::as_number).unwrap_or(0.0);
@@ -3455,6 +3521,7 @@ mod tests {
     fn capability_gated_op_denies_then_allows() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.register_op(
             OpDecl::sync("netcall", |_args| Ok(Value::Bool(true))).requires(Capability::Net),
         )
@@ -3471,6 +3538,7 @@ mod tests {
     fn async_op_resolves_across_a_tick() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         // Pending on the first poll, ready on the second — so this op takes the
         // registration path rather than the dispatcher's eager one, which is
         // what `async_ops_settled` counts.
@@ -3517,6 +3585,7 @@ mod tests {
     fn an_immediately_ready_async_op_settles_without_a_loop_turn() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.register_op(OpDecl::r#async("answer", |_args| -> AsyncOp {
             Box::pin(async { Ok(Value::Number(42.0)) })
         }))
@@ -3541,6 +3610,7 @@ mod tests {
     fn an_immediately_failing_async_op_rejects_its_promise() {
         let _g = v8_guard();
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.register_op(OpDecl::r#async("boom", |_args| -> AsyncOp {
             Box::pin(async { Err(OpError::type_error("no")) })
         }))
@@ -4436,6 +4506,7 @@ mod tests {
         let _g = v8_guard();
         let net = MockNet::ok("hello").with_trailers(vec![("grpc-status".into(), "0".into())]);
         let mut rt = runtime_with_net(Arc::new(net));
+        rt.expose_ops_for_testing();
         rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
         let out = eval_async(
             &mut rt,
@@ -5145,6 +5216,7 @@ mod tests {
         let _g = v8_guard();
         let net = Arc::new(EchoNet::new());
         let mut rt = runtime_with_net(net.clone());
+        rt.expose_ops_for_testing();
         rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
 
         const ITERS: usize = 20_000;
@@ -5939,6 +6011,7 @@ mod tests {
         // runs before the handler, so with nothing granted the denial code
         // surfaces; with FileRead granted, the missing-provider code does.
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         let out = eval_async(
             &mut rt,
             "try { await __ops.fs_read('/x'); return 'no-throw'; } \
@@ -5950,6 +6023,7 @@ mod tests {
         );
 
         let mut rt = runtime();
+        rt.expose_ops_for_testing();
         rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
         let out = eval_async(
             &mut rt,
@@ -6495,21 +6569,22 @@ mod tests {
             OpDecl::sync("guarded", |_args| Ok(Value::Bool(true))).requires(Capability::Net),
         )
         .unwrap();
-        // No Net capability granted. Guest attempts to subvert the gate.
+        // Even code holding the op table — which guest code does not (D253),
+        // so the test puts it back — is stopped by the gate, not by JS.
+        rt.expose_ops_for_testing();
         let out = eval_async(
             &mut rt,
-            "try { globalThis.__ops = { __fake: true }; } catch (e) {} \
-             const reassigned = globalThis.__ops.__fake === true; \
-             Object.prototype.granted = true; \
+            "Object.prototype.granted = true; \
              globalThis.fetch = () => 'pwned'; \
              let denied = false; \
              try { __ops.guarded(); } catch (e) { denied = e instanceof Error; } \
-             return `reassigned=${reassigned} denied=${denied}`;",
+             return `denied=${denied}`;",
         );
-        assert_eq!(out, Value::String("reassigned=false denied=true".into()));
+        assert_eq!(out, Value::String("denied=true".into()));
     }
 
-    /// Every op is callable by guest code — an `Isolate`'s too, which holds no
+    /// Guest code cannot call an op directly (D253), but it reaches every one
+    /// through the API that wraps it — an `Isolate`'s guest too, which holds no
     /// capability and so is stopped only by each op's own check. An op that
     /// requires nothing is therefore reachable by the least-trusted code this
     /// runtime runs, and each one has to be a deliberate choice: a pure
@@ -6556,24 +6631,116 @@ mod tests {
     }
 
     #[test]
-    fn op_table_binding_is_locked() {
+    fn guest_code_cannot_reach_or_replace_the_op_table() {
+        // D253. Before it, `globalThis.__ops` was the table itself, its entries
+        // writable: replacing `random_bytes` made `crypto.randomUUID()` all
+        // zeros, and wrapping `hash_hmac` captured `runtime:hashing`'s keys.
         let _g = v8_guard();
         let mut rt = runtime();
-        let out = rt
-            .eval(
-                "const before = globalThis.__ops; \
-                 let redefThrew = false; \
-                 try { Object.defineProperty(globalThis, '__ops', { value: {} }); } \
-                 catch (e) { redefThrew = true; } \
-                 const same = globalThis.__ops === before; \
-                 const hidden = !Object.keys(globalThis).includes('__ops'); \
-                 `same=${same} redefThrew=${redefThrew} hidden=${hidden}`",
-            )
-            .unwrap();
+        let source = "globalThis.visible = typeof globalThis.__ops;
+             globalThis.__ops = { random_bytes: (n) => new Uint8Array(n) };
+             const bytes = crypto.getRandomValues(new Uint8Array(32));
+             globalThis.random = bytes.some((b) => b !== 0);
+             try { await import('runtime:internal/ops'); globalThis.refused = 'imported'; }
+             catch (e) { globalThis.refused = e.message; }";
+        let state = run_module(&mut rt, source, MapLoader::new(&[]));
+        assert!(matches!(state, ModuleEvalState::Completed), "{state:?}");
+        let out = rt.eval("`${visible} ${random} ${refused}`").unwrap();
+        let Value::String(out) = out else {
+            panic!("{out:?}")
+        };
+        assert!(
+            out.starts_with("undefined true ") && out.contains("unknown built-in module"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_static_import_of_the_op_table_is_refused_too() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let err = block_on(rt.load_module_source(
+            ENTRY,
+            "import ops from 'runtime:internal/ops'; globalThis.got = ops;",
+            MapLoader::new(&[]),
+        ))
+        .expect_err("a guest module must not link to the op table");
+        assert!(err.to_string().contains("unknown built-in module"), "{err}");
+    }
+
+    /// An id is not authority (D50): an op that uses a handle checks this
+    /// agent minted it before anything else, so another agent's id — here, ids
+    /// this agent never minted — is refused as foreign rather than acted on.
+    /// End to end this was a worker naming its parent's resources through the
+    /// op table; guest code can no longer reach the table (D253), so the check
+    /// is held here, where a test can.
+    #[test]
+    fn every_handle_op_refuses_an_id_this_agent_did_not_mint() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        rt.expose_ops_for_testing();
+        let out = eval_async(
+            &mut rt,
+            "const calls = { \
+               http_respond: (id) => __ops.http_respond(id, 200, [], 'hijacked', null), \
+               ws_upgrade: (id) => __ops.ws_upgrade(id), \
+               http_request_headers: (id) => __ops.http_request_headers(id), \
+               http_request_peer: (id) => __ops.http_request_peer(id), \
+             }; \
+             const said = []; \
+             for (const [name, call] of Object.entries(calls)) { \
+               for (const id of [1, 2, 424242]) { \
+                 try { await call(id); said.push(`${name}(${id}) acted`); } \
+                 catch (e) { if (e.code !== 'ERR_FOREIGN_HANDLE') said.push(`${name}(${id}) ${e.code ?? e.message}`); } \
+               } \
+             } \
+             return said.join('; ');",
+        );
+        assert_eq!(out, Value::String(String::new()));
+
+        // A child process, with a command provider to ask — the ownership
+        // check comes after the provider lookup, so without one the refusal
+        // would be a different one.
+        let mut rt = command_runtime(TestCommands::with_stdout(&[]), &[]);
+        rt.set_capabilities(CapabilitySet::all());
+        rt.expose_ops_for_testing();
+        let out = eval_async(
+            &mut rt,
+            "const said = []; \
+             for (const id of [1, 2, 424242]) { \
+               try { await __ops.system_kill(id, 'SIGKILL'); said.push(`killed ${id}`); } \
+               catch (e) { said.push(e.code); } \
+             } \
+             return said.join(' ');",
+        );
         assert_eq!(
             out,
-            Value::String("same=true redefThrew=true hidden=true".into())
+            Value::String("ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE".into())
         );
+    }
+
+    #[test]
+    fn only_a_builtin_may_import_the_op_table() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // An embedder's module is a built-in, so it may; a name in the
+        // internal namespace cannot be registered at all.
+        rt.register_module("runtime:probe", "export const kind = typeof __ops;")
+            .unwrap();
+        assert!(
+            rt.register_module("runtime:internal/ops", "export default 1;")
+                .is_err()
+        );
+        assert!(rt.register_module("runtime:internal/other", "").is_err());
+        let state = run_module(
+            &mut rt,
+            "import { kind } from 'runtime:probe'; globalThis.kind = kind;",
+            MapLoader::new(&[]),
+        );
+        assert!(matches!(state, ModuleEvalState::Completed), "{state:?}");
+        assert_eq!(rt.eval("kind").unwrap(), Value::String("object".into()));
     }
 
     #[test]
@@ -6584,6 +6751,7 @@ mod tests {
         let mut rt = runtime();
         rt.register_op(OpDecl::sync("ping", |_args| Ok(Value::Number(7.0))))
             .unwrap();
+        rt.expose_ops_for_testing();
         let out = rt
             .eval(
                 "Array.prototype.push = function () { throw new Error('polluted'); }; \
@@ -7902,6 +8070,7 @@ mod tests {
     fn spawning_requires_the_run_capability() {
         let _g = v8_guard();
         let mut rt = command_runtime(TestCommands::with_stdout(&[]), &[]);
+        rt.expose_ops_for_testing();
         // Everything except the capability under test, so a denial can only be
         // Run — not some other gate the op happens to trip first.
         let mut caps = CapabilitySet::all();
@@ -7921,6 +8090,7 @@ mod tests {
         // runtime applies, so it must be asked for by name (D37).
         let _g = v8_guard();
         let mut rt = command_runtime(TestCommands::with_stdout(&[]), &[]);
+        rt.expose_ops_for_testing();
         let mut caps = CapabilitySet::none();
         for cap in [
             Capability::Env,

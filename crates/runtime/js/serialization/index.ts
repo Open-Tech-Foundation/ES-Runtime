@@ -14,7 +14,10 @@ import { BSON as BSONDefault } from "./bson.ts";
 import { JSON5 as JSON5Default, JSONC as JSONCDefault } from "./json.ts";
 import { Protobuf as ProtobufDefault } from "./protobuf/schema.ts";
 
-const ops = (globalThis as unknown as { __ops: Record<string, (...a: any[]) => any> }).__ops;
+// The op table: the runtime imports it into this module as `__ops`, and
+// nothing outside the runtime's own modules can (D253).
+declare const __ops: Record<string, (...a: any[]) => any>;
+const ops = __ops;
 const {
   xml_parse,
   xml_validate,

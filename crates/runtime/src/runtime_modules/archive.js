@@ -22,7 +22,7 @@
 // keeps the metadata, and reads only the bytes a caller asks for — in chunks
 // for stream() and entry by entry for files()/extract().
 
-const ops = globalThis.__ops;
+const ops = __ops;
 const FILE_BODY = globalThis.__internal.fileBody;
 const BLOB_BYTES = globalThis.__internal.bytes;
 

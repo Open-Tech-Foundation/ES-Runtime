@@ -27,8 +27,10 @@ through host-registered, capability-gated ops.
 
 ## 2. Trust boundaries
 
-1. **The op boundary (JS → Rust).** Guest JS calls `globalThis.__ops.<name>`,
-   which dispatches (in Rust) to a host handler. Every call is checked against
+1. **The op boundary (JS → Rust).** The runtime's own JavaScript — the prelude
+   and the `runtime:` modules — calls `__ops.<name>`, which dispatches (in Rust)
+   to a host handler. Guest code cannot reach the op table (D253); it calls the
+   APIs that wrap it. Every call is checked against
    the capability set *before* the handler runs (capability-check-first).
 2. **The capability gate.** Deny-by-default `CapabilitySet` in `OpState`; only
    the embedder grants capabilities. No ambient authority, no JS-reachable
@@ -56,7 +58,7 @@ through host-registered, capability-gated ops.
 | | Privilege escalation via prototype/global tampering | Boundary is in Rust; capability check in `OpState` | ☑ tested |
 | | Unbounded pending async ops | `max_pending_ops` bound → `RangeError` | ☑ tested |
 | The op ABI (`__ops`) | Direct raw-op calls with bad arguments | Handlers validate marshaled args, return typed `OpError`s | ☑ |
-| | Forging / replacing `globalThis.__ops` | Binding locked (`harden.js`); dispatch + op-id validation in Rust | ☑ tested |
+| | Reaching, replacing or wrapping an op | Table held under a V8 private key; internal code gets it as a parameter or a `runtime:internal/ops` import only built-ins may make (D253); dispatch + op-id validation in Rust | ☑ tested |
 | Marshaling (`Value`) | Malformed/edge-case values from JS | Defensive marshaling; primitives + copied bytes only | ☑ |
 | | A host op handler **panics** | `catch_unwind` around op/timer/reject callbacks → JS exception, not an unwind across V8 | ☑ tested (assumes `panic = "unwind"`) |
 | Workers | A worker granted more than its parent holds | `child_capabilities` intersects the request with the spawning agent's set; `"inherit"` is that set, not a bypass | ☑ tested |

@@ -9,7 +9,7 @@
 (() => {
   "use strict";
 
-  const ops = globalThis.__ops;
+  const ops = __ops;
   const encoder = new TextEncoder();
 
   const CONNECTING = 0;

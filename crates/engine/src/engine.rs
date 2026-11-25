@@ -260,9 +260,33 @@ pub trait Engine {
     /// exception is [`Error::Execution`] — never an unwind across the boundary.
     fn eval(&mut self, source: &str) -> Result<Value>;
 
-    /// Registers a host op callable from JS as `globalThis.__ops.<name>`
-    /// (ARCHITECTURE.md §4).
+    /// Registers a host op on the op table, where internal code calls it as
+    /// `__ops.<name>` (ARCHITECTURE.md §4). Guest code cannot reach the table
+    /// (D253): see [`eval_internal`](Self::eval_internal) and
+    /// [`internal_ops_module`](Self::internal_ops_module).
     fn register_op(&mut self, op: OpDecl) -> Result<()>;
+
+    /// Runs `source` — the runtime's own JavaScript, never a guest's — as the
+    /// body of a function whose one parameter, `__ops`, is the op table (D253).
+    ///
+    /// This is how the prelude reaches the ops: the table is not on the global
+    /// object, so a bare `__ops` in prelude source resolves to this parameter,
+    /// and every closure the source creates keeps it. Declarations at the top
+    /// of `source` are local to that function, not globals. The function's
+    /// return value is discarded.
+    fn eval_internal(&mut self, source: &str) -> Result<()>;
+
+    /// Compiles `runtime:internal/ops`: a synthetic module whose `default`
+    /// export is the op table (D253). The `runtime:` modules import it; the
+    /// caller must let nothing else resolve to it. Each call compiles a new
+    /// module, so the caller keeps the id.
+    fn internal_ops_module(&mut self) -> Result<ModuleId>;
+
+    /// Puts the op table on the global object as `__ops`, as it was before
+    /// D253, for a test that calls an op directly. Never in a release build:
+    /// the feature exists for tests and nothing enables it otherwise.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn expose_ops_for_testing(&mut self) -> Result<()>;
 
     /// Marks the end of the ops the snapshot baked JS shells for.
     ///
@@ -1074,6 +1098,84 @@ impl Engine for V8Engine {
         }
     }
 
+    fn eval_internal(&mut self, source: &str) -> Result<()> {
+        enum Outcome {
+            Ok,
+            Compile(String),
+            Execution(String),
+            Internal(String),
+            Terminated,
+        }
+        let interrupt = self.interrupt.clone();
+        let outcome = {
+            v8::scope!(let scope, &mut self.isolate);
+            let context = v8::Local::new(scope, &self.context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            v8::tc_scope!(let scope, scope);
+            match (
+                crate::op::ops_table(scope, context),
+                v8::String::new(scope, source),
+                v8::String::new(scope, "__ops"),
+            ) {
+                (Ok(table), Some(code), Some(param)) => {
+                    let mut src = v8::script_compiler::Source::new(code, None);
+                    match v8::script_compiler::compile_function(
+                        scope,
+                        &mut src,
+                        &[param],
+                        &[],
+                        v8::script_compiler::CompileOptions::NoCompileOptions,
+                        v8::script_compiler::NoCacheReason::NoReason,
+                    ) {
+                        Some(function) => {
+                            let receiver = v8::undefined(scope).into();
+                            let ran = function.call(scope, receiver, &[table.into()]);
+                            if interrupt.is_execution_terminating() {
+                                Outcome::Terminated
+                            } else if ran.is_some() {
+                                Outcome::Ok
+                            } else {
+                                Outcome::Execution(describe_exception(scope, "execution failed"))
+                            }
+                        }
+                        None if interrupt.is_execution_terminating() => Outcome::Terminated,
+                        None => Outcome::Compile(describe_exception(scope, "compilation failed")),
+                    }
+                }
+                (Err(err), _, _) => Outcome::Internal(err.to_string()),
+                _ => Outcome::Internal("source string exceeds V8's maximum length".into()),
+            }
+        };
+        match outcome {
+            Outcome::Ok => Ok(()),
+            Outcome::Compile(message) => Err(Error::Compile { message }),
+            Outcome::Execution(message) => Err(Error::Execution { message }),
+            Outcome::Internal(message) => Err(Error::Internal(message)),
+            Outcome::Terminated => {
+                self.isolate.cancel_terminate_execution();
+                Err(Error::Terminated {
+                    reason: "execution terminated".into(),
+                })
+            }
+        }
+    }
+
+    fn internal_ops_module(&mut self) -> Result<ModuleId> {
+        crate::module::internal_ops(&mut self.isolate, &self.context, &self.modules)
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn expose_ops_for_testing(&mut self) -> Result<()> {
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let table = crate::op::ops_table(scope, context)?;
+        let key = v8::String::new(scope, "__ops")
+            .ok_or_else(|| Error::Internal("could not name __ops".into()))?;
+        context.global(scope).set(scope, key.into(), table.into());
+        Ok(())
+    }
+
     fn register_op(&mut self, op: OpDecl) -> Result<()> {
         let op_id = self.op_state.borrow_mut().add_op(
             op.name.clone(),
@@ -1538,8 +1640,12 @@ mod tests {
         assert_eq!(within_half(0, 262 << 20), None);
     }
 
+    /// An engine whose tests call ops directly, so the op table is on the
+    /// global for them (D253).
     fn engine() -> V8Engine {
-        V8Engine::new(Limits::default()).expect("engine construction")
+        let mut engine = V8Engine::new(Limits::default()).expect("engine construction");
+        engine.expose_ops_for_testing().expect("expose ops");
+        engine
     }
 
     fn gc_count(engine: &V8Engine) -> u64 {
@@ -1862,6 +1968,80 @@ mod tests {
         );
     }
 
+    /// An engine with one op, `ping`, and the op table where D253 keeps it:
+    /// off the global.
+    fn engine_with_ping() -> V8Engine {
+        let mut engine = V8Engine::new(Limits::default()).expect("engine");
+        engine
+            .register_op(crate::OpDecl::sync("ping", |_| {
+                Ok(Value::String("pong".into()))
+            }))
+            .expect("register");
+        engine
+    }
+
+    #[test]
+    fn guest_code_cannot_reach_the_op_table() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine_with_ping();
+        // Not a global, not under any name or symbol reflection finds.
+        let found = engine
+            .eval(
+                "[typeof globalThis.__ops, \
+                  Object.getOwnPropertyNames(globalThis).filter((k) => k.includes('ops')).length, \
+                  Object.getOwnPropertySymbols(globalThis).length, \
+                  Reflect.ownKeys(globalThis).some((k) => typeof k === 'string' && k.startsWith('es_runtime'))].join()",
+            )
+            .unwrap();
+        assert_eq!(found, Value::String("undefined,0,0,false".into()));
+    }
+
+    #[test]
+    fn internal_code_gets_the_op_table_as_its_parameter() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine_with_ping();
+        engine
+            .eval_internal("globalThis.viaPrelude = () => __ops.ping();")
+            .unwrap();
+        assert_eq!(
+            engine.eval("viaPrelude()").unwrap(),
+            Value::String("pong".into())
+        );
+        // Declarations stay local to the internal function.
+        engine.eval_internal("const secret = __ops;").unwrap();
+        assert_eq!(
+            engine.eval("typeof secret").unwrap(),
+            Value::String("undefined".into())
+        );
+        // Failures come back typed, as `eval`'s do.
+        assert!(matches!(
+            engine.eval_internal("function ("),
+            Err(Error::Compile { .. })
+        ));
+        assert!(matches!(
+            engine.eval_internal("throw new Error('x')"),
+            Err(Error::Execution { .. })
+        ));
+    }
+
+    #[test]
+    fn the_internal_ops_module_exports_the_op_table() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine_with_ping();
+        let table = engine.internal_ops_module().unwrap();
+        let user = engine
+            .compile_module(
+                "file:///m.js",
+                "import ops from 'runtime:internal/ops'; globalThis.got = ops.ping();",
+            )
+            .unwrap();
+        let mut resolved = HashMap::new();
+        resolved.insert((user, crate::INTERNAL_OPS.to_string()), table);
+        engine.instantiate_module(user, &resolved).unwrap();
+        engine.evaluate_module(user).unwrap();
+        assert_eq!(engine.eval("got").unwrap(), Value::String("pong".into()));
+    }
+
     #[test]
     fn bytes_round_trip_through_an_op() {
         use crate::OpDecl;
@@ -2075,6 +2255,7 @@ mod tests {
         let _v8 = crate::v8_test_guard();
         let limits = Limits::default().with_max_pending_ops(2);
         let mut engine = V8Engine::new(limits).expect("engine");
+        engine.expose_ops_for_testing().expect("expose ops");
         // An op whose promise never settles, so each call stays pending.
         engine
             .register_op(OpDecl::r#async("pend", |_args| {

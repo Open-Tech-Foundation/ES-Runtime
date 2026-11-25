@@ -13,6 +13,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **Guest code can no longer reach the op table (D253).** `globalThis.__ops`
+  held every op, with writable entries the standard APIs looked up at each
+  call. Any code in a program, a dependency included, could replace one
+  under everything built on it: replacing `random_bytes` made
+  `crypto.randomUUID()` all zeros, and wrapping `hash_hmac` read
+  `runtime:hashing`'s keys and passwords. Calling an op directly also skipped
+  every check its API makes. The table now sits under a V8 private key. The
+  runtime's own JavaScript gets it as a parameter, or through an import only
+  built-in modules may make. Speed is unchanged: op cost, async crossing,
+  isolate start and process startup were measured before and after.
+
 - **A deeply nested `blob:` URL no longer crashes the process
   (RUSTSEC-2026-0592).** Before 2.5.9, the `url` crate recursed once per
   `blob:` when computing an origin. So `new URL("blob:".repeat(100000) +

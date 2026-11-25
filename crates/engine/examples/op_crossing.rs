@@ -135,6 +135,11 @@ fn engine_rows() {
         }))
         .expect("typed_out");
     engine.eval(SETUP).expect("setup");
+    // The op table is out of guest reach (D253); this measurement puts it where
+    // its loops can call it, as internal code would hold it.
+    engine
+        .eval_internal("globalThis.__ops = __ops;")
+        .expect("expose the op table");
 
     let mut time = |name: &str, call: &str| {
         if !wanted(name) {

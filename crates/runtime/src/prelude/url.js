@@ -16,7 +16,7 @@
 // reads back as "" (WHATWG) and the delimiter is at index u[..]-1 when present.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
   // Fragment-local: URL and URLSearchParams keep each other in sync through
   // these, and nothing outside this fragment needs them.
   const ATTACH = Symbol("URLSearchParams attach");

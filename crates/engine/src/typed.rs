@@ -563,6 +563,7 @@ mod tests {
 
     fn engine(ops: Vec<OpDecl>) -> V8Engine {
         let mut engine = V8Engine::new(Limits::default()).expect("engine");
+        engine.expose_ops_for_testing().expect("expose ops");
         for op in ops {
             engine.register_op(op).expect("register");
         }

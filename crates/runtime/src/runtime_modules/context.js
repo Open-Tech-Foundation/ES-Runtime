@@ -35,7 +35,7 @@
 // value neither of them parses. Everything about what a mapping *is* lives
 // here.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // Host mapping accessors, installed by the engine (see `async_context.rs`).
 // Captured at load so that reassigning the globals cannot reach this module.

@@ -78,23 +78,14 @@ fn a_first_read_after_the_response_is_a_type_error() {
     }
 }
 
-/// The head ops take a request id, and an id is not authority: one this agent
-/// was never handed is refused as foreign, not answered (D50).
+/// The head ops take a request id, and an id is not authority (D50). Guest
+/// code cannot call them directly (D253); the ownership check behind them is
+/// held in-process (`runtime` crate,
+/// `every_handle_op_refuses_an_id_this_agent_did_not_mint`).
 #[test]
-fn a_request_id_this_agent_was_not_handed_is_refused() {
-    let out = esrun(
-        "for (const op of ['http_request_headers', 'http_request_peer']) { \
-           try { __ops[op](424242); console.log(op, 'answered'); } \
-           catch (e) { console.log(op, e.code); } \
-         }",
-    );
-    assert_eq!(
-        lines(&out),
-        [
-            "http_request_headers ERR_FOREIGN_HANDLE",
-            "http_request_peer ERR_FOREIGN_HANDLE"
-        ]
-    );
+fn the_head_ops_are_not_reachable_from_guest_code() {
+    let out = esrun("console.log(typeof globalThis.__ops);");
+    assert_eq!(lines(&out), ["undefined"]);
 }
 
 /// Every header arrives, in order, with repeats kept — the conversion moved,

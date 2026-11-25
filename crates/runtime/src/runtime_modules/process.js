@@ -2,7 +2,7 @@
 // the WinterTC CLI-API proposal. An ES module (not a global), backed by ops
 // gated on Capability::Env. Values are snapshotted when the module evaluates.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 
 // Secret masking (DECISIONS D30): env values whose key matches a secret-bearing
 // convention are exposed as a `Secret` rather than a raw string, so they redact

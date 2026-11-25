@@ -10,7 +10,7 @@
 // pumped out chunk-by-chunk with backpressure (chunked transfer-encoding) —
 // neither is materialized unless the handler asks (e.g. `request.text()`).
 
-const ops = globalThis.__ops;
+const ops = __ops;
 // Builds a Request from the host-validated absolute URL without re-parsing it.
 const makeServerRequest = globalThis.__serverRequest;
 

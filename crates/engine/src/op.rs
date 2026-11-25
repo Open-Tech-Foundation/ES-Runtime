@@ -968,25 +968,47 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
     std::borrow::Cow::Owned(refs)
 }
 
-/// Installs op `op_id` as `globalThis.__ops.<name>`, creating the `__ops`
-/// holder object on first use.
-pub(crate) fn install_op(
-    scope: &mut v8::PinScope,
-    context: v8::Local<v8::Context>,
+/// The name of the private key the op table is held under (D253).
+const OPS_KEY: &str = "es_runtime.ops";
+
+/// The op table: the object every op's JS function is a property of.
+///
+/// It is held on the global object under a V8 *private* key, which JavaScript
+/// cannot name, enumerate, reflect on or reach through a proxy, so guest code
+/// can neither call an op directly nor replace one the prelude and the
+/// `runtime:` modules call (D253). Internal code receives the table instead:
+/// prelude source as the `__ops` parameter of
+/// [`Engine::eval_internal`](crate::Engine::eval_internal), and `runtime:`
+/// modules as the default export of `runtime:internal/ops`. A private key, not a
+/// Rust-side handle, so the table survives a snapshot like the rest of the
+/// global. Created on first use.
+pub(crate) fn ops_table<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Context>,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let global = context.global(scope);
+    let name = string(scope, OPS_KEY)?;
+    let key = v8::Private::for_api(scope, Some(name));
+    if let Some(existing) = global.get_private(scope, key)
+        && let Ok(table) = v8::Local::<v8::Object>::try_from(existing)
+    {
+        return Ok(table);
+    }
+    let table = v8::Object::new(scope);
+    global
+        .set_private(scope, key, table.into())
+        .ok_or_else(|| Error::Internal("could not install the op table".into()))?;
+    Ok(table)
+}
+
+/// Installs op `op_id` as `<name>` on the [op table](ops_table).
+pub(crate) fn install_op<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Context>,
     name: &str,
     op_id: i32,
 ) -> Result<()> {
-    let global = context.global(scope);
-    let ops_key = string(scope, "__ops")?;
-    let existing = global.get(scope, ops_key.into());
-    let ops_obj: v8::Local<v8::Object> = match existing {
-        Some(v) if v.is_object() => v.try_into().expect("checked is_object"),
-        _ => {
-            let obj = v8::Object::new(scope);
-            global.set(scope, ops_key.into(), obj.into());
-            obj
-        }
-    };
+    let ops_obj = ops_table(scope, context)?;
 
     let data = v8::Integer::new(scope, op_id);
     let func = v8::Function::builder(op_dispatch)

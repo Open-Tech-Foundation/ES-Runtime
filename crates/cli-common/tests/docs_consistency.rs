@@ -287,8 +287,9 @@ fn every_runtime_module_the_docs_name_exists() {
                     .map(str::to_string)
             })
             .collect();
-    // esdev's own (D71).
-    known.extend(["build", "watch", "test"].map(String::from));
+    // esdev's own (D71), and the op table's module, which only the built-ins
+    // may import (D253).
+    known.extend(["build", "watch", "test", "internal"].map(String::from));
     let mut found = Vec::new();
     for p in docs().iter().filter(|p| !is_history(p)) {
         let text = std::fs::read_to_string(p).unwrap();

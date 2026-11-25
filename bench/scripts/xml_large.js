@@ -13,9 +13,14 @@ for (let i = 0; i < 5000; i++) {
 }
 xmlDoc += `\n</catalog>`;
 
+// esrun's parser through its public API — guest code has no op table to call
+// (D253), and the wrapper is part of what a program pays anyway.
 let esrunParser = null;
-if (typeof globalThis !== 'undefined' && globalThis.__ops && globalThis.__ops.xml_parse) {
-  esrunParser = globalThis.__ops.xml_parse;
+try {
+  const { XML } = await import("runtime:serialization");
+  esrunParser = (xml) => XML.parse(xml);
+} catch {
+  // Not esrun.
 }
 const isEsrun = typeof esrunParser === "function";
 const isLlrt = typeof process !== 'undefined' && process.release?.name === 'llrt';

@@ -15,7 +15,7 @@
 // need no capability; a file() source needs FileRead and a file() destination
 // FileWrite, exactly as reading or writing that file would.
 
-const ops = globalThis.__ops;
+const ops = __ops;
 const FILE_BODY = globalThis.__internal.fileBody;
 const BLOB_BYTES = globalThis.__internal.bytes;
 

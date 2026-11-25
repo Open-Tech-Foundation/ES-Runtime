@@ -9,27 +9,18 @@
 //
 // The load-bearing integrity guarantee does not live in JS at all: the op table
 // and the capability set live in the engine's Rust `OpState`. No amount of guest
-// tampering — prototype pollution, reassigning globals, forging `__ops` — can
-// grant a capability or dispatch an op the host did not register and gate. What
+// tampering — prototype pollution, reassigning globals — can grant a capability
+// or dispatch an op the host did not register and gate, and guest code cannot
+// reach the op table at all (D253). What
 // this step adds is defense-in-depth around the JS surface.
 (() => {
   "use strict";
 
-  // Lock the op-table *binding*: guest code can neither replace nor delete
-  // `globalThis.__ops` (which could otherwise confuse later host op
-  // registration). The object itself stays extensible so the host can keep
-  // registering ops onto it.
-  const ops = globalThis.__ops;
-  if (ops !== undefined) {
-    Object.defineProperty(globalThis, "__ops", {
-      value: ops,
-      writable: false,
-      configurable: false,
-      enumerable: false,
-    });
-  }
+  // The op table is not here to lock: it is held under a V8 private key no
+  // JavaScript can name, and reaches the prelude as its `__ops` parameter and
+  // the `runtime:` modules as an import nothing else may make (D253).
 
-  // Same for the internal slot-key table: guest code must not be able to swap
+  // Lock the internal slot-key table's binding: guest code must not be able to swap
   // it for one whose symbols it controls, which would let it forge a Blob's
   // backing-bytes slot. Locked, not deleted — `runtime:http` is imported lazily
   // and reads `__internal.parts` long after the prelude has run.

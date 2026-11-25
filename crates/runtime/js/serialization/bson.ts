@@ -3,9 +3,10 @@
 // builtins those types' prototypes on every call (see crates/engine/src/bson.rs
 // for the payload each one carries).
 
-type Ops = Record<string, (...a: any[]) => any>;
+// The op table: the runtime imports it into this module as `__ops`, and
+// nothing outside the runtime's own modules can (D253).
+declare const __ops: Record<string, (...a: any[]) => any>;
 const g = globalThis as unknown as {
-  __ops: Ops;
   __bson_encode: (value: unknown, types: readonly unknown[]) => Uint8Array;
   __bson_decode: (
     bytes: Uint8Array | ArrayBuffer,
@@ -13,7 +14,7 @@ const g = globalThis as unknown as {
   ) => Record<string, unknown>;
 };
 // Captured now: the globals are hidden, not locked (harden.js).
-const { bson_validate, bson_decimal128_parse, bson_decimal128_string } = g.__ops;
+const { bson_validate, bson_decimal128_parse, bson_decimal128_string } = __ops;
 const bsonEncode = g.__bson_encode;
 const bsonDecode = g.__bson_decode;
 

@@ -134,7 +134,8 @@ mod tests {
                 let n = args.remove(0).as_number().unwrap_or(0.0);
                 Ok(Value::Number(n * 2.0))
             }))?;
-            engine.eval("globalThis.twice = (x) => __ops.double(x);")?;
+            // Internal code, as the prelude is: the table is its parameter.
+            engine.eval_internal("globalThis.twice = (x) => __ops.double(x);")?;
             Ok(())
         })
         .expect("build snapshot");

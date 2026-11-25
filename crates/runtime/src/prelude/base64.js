@@ -3,7 +3,7 @@
 // result signals invalid input, surfaced as the spec's InvalidCharacterError.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
 
   globalThis.btoa = (data) => {
     const out = ops.base64_encode(String(data));

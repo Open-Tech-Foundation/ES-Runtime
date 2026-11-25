@@ -5,7 +5,7 @@
 // build on TransformStream in encoding-streams.js.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
   // UTF-8's one-shot decode, read in place by the engine rather than copied
   // across the op boundary — see `engine/src/text.rs`. Captured here, before any
   // guest code runs, like every other builtin the prelude leans on.

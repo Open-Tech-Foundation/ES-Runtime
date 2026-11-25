@@ -38,8 +38,8 @@ const events = createEvents();
 const tree = createTree(events);
 const parse = createParsing(
   tree,
-  (source, context) => globalThis.__ops.dom_parse_fragment(source, context),
-  (source) => globalThis.__ops.dom_parse_document(source),
+  (source, context) => __ops.dom_parse_fragment(source, context),
+  (source) => __ops.dom_parse_document(source),
 );
 const selectors = createSelectors(tree);
 const colors = createColors(color);
@@ -74,7 +74,7 @@ ranges.install();
 const sheets = createSheets({
   colors,
   tree,
-  parse: (text) => globalThis.__ops.dom_parse_stylesheet(text),
+  parse: (text) => __ops.dom_parse_stylesheet(text),
   selectors,
   css,
   mediaMatches,

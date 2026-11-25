@@ -18,3 +18,8 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Lets a test put the op table back on the global object as `__ops`, to call an
+# op directly (D253). Enabled only by dev-dependencies; never in a release.
+test-hooks = []

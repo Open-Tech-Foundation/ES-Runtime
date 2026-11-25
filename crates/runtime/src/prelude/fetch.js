@@ -4,7 +4,7 @@
 // only apply in browsers are out of scope for a server-side runtime.
 (() => {
   "use strict";
-  const ops = globalThis.__ops;
+  const ops = __ops;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const BODY = Symbol("bodyState");

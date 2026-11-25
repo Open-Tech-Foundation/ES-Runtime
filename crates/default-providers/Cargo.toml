@@ -71,6 +71,8 @@ windows-sys = { version = "0.61.2", features = [
 rustix = { workspace = true, features = ["fs", "process", "termios"] }
 
 [dev-dependencies]
+# A test that calls an op directly puts the op table back on the global (D253).
+es-runtime = { workspace = true, features = ["test-hooks"] }
 # Never shipped: the `hyper` and `hyper-h1` rows of `examples/http_floor.rs`
 # (hyper's own HTTP/1.1 server and its version-detecting builder, the measured
 # baseline), and the HTTP/2 client the server tests drive ours with — an

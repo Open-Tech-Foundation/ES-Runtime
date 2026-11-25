@@ -5,7 +5,7 @@
 // lazy, Blob-like handle; write() takes any web body; whole-file + stream reads,
 // no sync variants, no callbacks. Stream-to-disk is write(dest, stream).
 
-const ops = globalThis.__ops;
+const ops = __ops;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 

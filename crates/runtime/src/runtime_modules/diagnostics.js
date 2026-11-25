@@ -38,7 +38,7 @@
 
 import { currentTask } from "runtime:context";
 
-const ops = globalThis.__ops;
+const ops = __ops;
 // The enclosing-span accessor, installed by the engine. A span made current here
 // is carried across every `await` by `runtime:context`'s propagation, which is
 // what lets an op six continuations deep still nest under the request that

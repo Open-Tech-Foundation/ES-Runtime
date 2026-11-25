@@ -297,14 +297,23 @@ compete for the same isolate.
 **The security boundary is in Rust, not in JavaScript.** The op table and the
 capability set live in the engine's `OpState`; every capability-gated op is
 checked there before dispatch. Consequently, no amount of guest JS tampering —
-polluting `Object`/`Array.prototype`, reassigning or deleting globals, or trying
-to forge `globalThis.__ops` — can grant a capability or dispatch an op the host
-did not register and gate. This is covered by tests (`capability_gate_survives_js_tampering`,
-`op_table_binding_is_locked`, `op_dispatch_survives_prototype_pollution`).
+polluting `Object`/`Array.prototype`, reassigning or deleting globals — can
+grant a capability or dispatch an op the host did not register and gate.
+
+**Guest code cannot reach the op table at all.** It is held on the global
+object under a V8 private key, which no JavaScript can name, enumerate or reach
+through a proxy. The prelude receives it as a function parameter, and the
+`runtime:` modules import it from `runtime:internal/ops`, which only a module
+the runtime compiled from its own source may import (D253). So a dependency
+cannot replace an op the standard APIs call — making `crypto.randomUUID()`
+predictable, or wrapping `runtime:hashing`'s HMAC to read its key — and cannot
+call an op with arguments its API would never pass. Covered by tests
+(`guest_code_cannot_reach_or_replace_the_op_table`,
+`a_static_import_of_the_op_table_is_refused_too`,
+`capability_gate_survives_js_tampering`, `op_dispatch_survives_prototype_pollution`).
 
 As defense-in-depth on the JS surface, `harden.js` (the last prelude fragment)
-locks the `globalThis.__ops` binding (non-writable/non-configurable, while the
-object stays extensible so the host can still register ops) and freezes the
+locks the bindings of the globals the engine calls by name and freezes the
 runtime's plain namespace objects (`console`; `crypto`/`performance` are frozen
 at definition).
 
