@@ -5174,3 +5174,13 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 - *Leak detection on the `ops` target.* V8 keeps pointers where LeakSanitizer does not look (its microtask-queue buffer is the first reported), so the target runs with it off; without ASan, 1,200 rebuilds held RSS flat at 29 MB.
 
 **Consequences:** measured before and after on the same machine, from the NVMe disk: `bench/op-cost.js` rows within ±3% either way, `bench/async-crossing.js` 8.9 → 8.8 µs, `bench/isolate-start.js` cold 660 → 656 µs and prepared 42 → 39 µs, and startup 8.0 ms both (hyperfine, 40 runs). The cross-agent hijack tests D50 added are now two layers: end to end, a worker cannot name an op at all; in process, `every_handle_op_refuses_an_id_this_agent_did_not_mint` holds the ownership check behind them. The fuzzer's first runs — 332,000 inputs in 190 s, then 29,000 in 60 s — found no panic.
+
+### D254 — An unreferenced timer can still settle a pending top-level `await` · *Accepted (2026-11-25)* · *amends D248*
+
+**Context:** D248 made a top-level `await` that nothing can settle an error, and counted an unreferenced timer as nothing, "as it does for staying alive". That conflated two questions. `unrefTimer` says a timer is no reason to keep the program running; it does not say the timer cannot run. While the entry module is pending the program is running anyway, so such a timer still fires and can settle the await. The packages' unit tests found it: the MQTT and NATS connections race each read against an unreferenced deadline timer (so an idle client never pins the process), and a handshake test awaiting that deadline failed with "never settled" — 4 suites in `tsr ci`'s `test:protocol`, which D248 had not been run against. Measured: Deno 2.9.7 waits for the timer and, if the await is still pending once it has fired, then reports it (`error: Top-level await promise never resolved`, exit 1, after the timer's 3 s); Node 26.13 reports it at once (exit 13); Bun 1.4.5 hangs.
+
+**Decision:** stalled means the entry module is pending, nothing holds the loop open, **and** nothing pending could run JavaScript — no async op and no active timer, referenced or not (`Engine::has_unsettled_work`). Deno's behaviour, and esrun's before D248 for the case that settles.
+
+**Rejected:** Node's — an unreferenced deadline guarding a read would make every such client a failure the moment it waits on the network alone, which is what the deadline exists to allow.
+
+**Consequences:** a program whose await depends on an unreferenced timer runs to the end; one whose await nothing can settle still fails, once the last timer has fired. `crates/runtime-cli/tests/limits.rs` holds both.

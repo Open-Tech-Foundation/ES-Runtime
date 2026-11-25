@@ -234,17 +234,34 @@ fn an_await_nothing_can_settle_is_an_error() {
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
-/// An unreferenced timer is not a reason to stay (`unrefTimer`), so it cannot
-/// be what settles the await either.
+/// An unreferenced timer does not keep a program alive, but it can still settle
+/// the await, so the program waits for it (D254) — as Deno 2.9 does, where
+/// Node 26 reports the await unsettled and Bun 1.4 hangs. A timeout raced
+/// against a read is exactly this, and is what the protocol packages do.
 #[test]
-fn an_unreferenced_timer_does_not_count_as_something_that_can_settle_it() {
+fn an_unreferenced_timer_can_still_settle_the_await() {
     let out = esrun(
         &[],
         "import { unrefTimer } from 'runtime:process'; \
-         unrefTimer(setTimeout(() => {}, 60000)); await new Promise(() => {});",
+         await new Promise((r) => unrefTimer(setTimeout(r, 50))); console.log('settled');",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "settled\n");
+}
+
+/// …and once it has fired with the await still pending, nothing is left: the
+/// failure comes then, not before.
+#[test]
+fn an_await_left_pending_after_the_last_timer_fires_is_an_error() {
+    let started = std::time::Instant::now();
+    let out = esrun(
+        &[],
+        "import { unrefTimer } from 'runtime:process'; \
+         unrefTimer(setTimeout(() => {}, 300)); await new Promise(() => {});",
     );
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert!(stderr(&out).contains("never settled"), "{}", stderr(&out));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
 }
 
 /// A server is something that can: the program keeps serving, until here the

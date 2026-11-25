@@ -509,6 +509,12 @@ impl OpState {
         self.timers.contains_key(&id)
     }
 
+    /// Whether anything is still pending that could run JavaScript when it
+    /// completes — an async op or an active timer, referenced or not.
+    pub(crate) fn has_unsettled_work(&self) -> bool {
+        !self.pending_async.is_empty() || !self.timers.is_empty()
+    }
+
     /// Whether any active timer holds the event loop open.
     pub(crate) fn has_referenced_timers(&self) -> bool {
         self.timers.values().any(|timer| timer.referenced)

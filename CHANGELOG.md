@@ -45,6 +45,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An unreferenced timer can settle a pending top-level `await` again
+  (D254).** D248 reported such an await as "never settled" even though the
+  timer would still fire. That broke the MQTT and NATS clients, which race each
+  read against an unreferenced deadline. esrun now waits for the timer, as
+  Deno does, and reports an await that nothing settles only once the last
+  timer has fired.
+
 - **`connect()` without a driver names all four built-ins** — `sqlite`,
   `postgres`, `mysql` and `mongodb`; it named two.
 

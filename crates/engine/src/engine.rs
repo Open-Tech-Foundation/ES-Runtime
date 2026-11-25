@@ -329,6 +329,11 @@ pub trait Engine {
     /// and not let go with `unrefTimer`.
     fn has_referenced_timers(&self) -> bool;
 
+    /// Whether anything pending could still run JavaScript: an async op or an
+    /// active timer, *including* the ones that do not hold the loop open. Not
+    /// "is the program alive" but "can a waiting promise still settle" (D254).
+    fn has_unsettled_work(&self) -> bool;
+
     /// Attaches a debugger to this isolate, speaking the Chrome DevTools
     /// Protocol over `transport` (DECISIONS.md D59).
     ///
@@ -1260,6 +1265,10 @@ impl Engine for V8Engine {
 
     fn has_referenced_timers(&self) -> bool {
         self.op_state.borrow().has_referenced_timers()
+    }
+
+    fn has_unsettled_work(&self) -> bool {
+        self.op_state.borrow().has_unsettled_work()
     }
 
     fn run_microtasks(&mut self) {

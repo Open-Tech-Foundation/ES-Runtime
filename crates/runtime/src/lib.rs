@@ -1672,7 +1672,12 @@ impl Runtime {
     /// promise it waits on. Microtasks are drained every tick, so such a
     /// module stays pending for as long as the process lives.
     pub fn module_eval_stalled(&self) -> bool {
-        self.module_eval_pending && !self.has_work_besides_the_entry()
+        // Not the keep-alive set: an unreferenced timer does not keep a
+        // program alive, but the pending entry module does, and the timer can
+        // still settle it — so it is waiting, not stalled (D254).
+        self.module_eval_pending
+            && !self.has_work_besides_the_entry()
+            && !self.engine.has_unsettled_work()
     }
 
     /// Pending work other than the entry module's own evaluation.
