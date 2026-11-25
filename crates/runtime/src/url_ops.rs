@@ -473,6 +473,20 @@ mod tests {
         );
     }
 
+    /// RUSTSEC-2026-0592: `url` before 2.5.9 recursed once per `blob:` in a
+    /// `blob:blob:…` URL's origin, and guest code reaches that through
+    /// `new URL(u).origin` — 100 000 of them aborted the whole process with a
+    /// stack overflow. The standard looks one level in: a `blob:` whose path
+    /// is itself a `blob:` URL has an opaque origin.
+    #[test]
+    fn a_deeply_nested_blob_url_has_an_opaque_origin() {
+        let href = format!("{}https://a.test/", "blob:".repeat(100_000));
+        let url = Url::parse(&href).expect("parse");
+        assert_eq!(url.origin().ascii_serialization(), "null");
+        let one = Url::parse("blob:https://a.test/x").expect("parse");
+        assert_eq!(one.origin().ascii_serialization(), "https://a.test");
+    }
+
     #[test]
     fn sparse_url_slices_to_empty_components() {
         let s = slices("https://example.com/");

@@ -13,6 +13,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **A deeply nested `blob:` URL no longer crashes the process
+  (RUSTSEC-2026-0592).** Before 2.5.9, the `url` crate recursed once per
+  `blob:` when computing an origin. So `new URL("blob:".repeat(100000) +
+  "https://a.test/").origin` aborted esrun with a stack overflow, and a server
+  that read the origin of a URL from a request could be stopped by one request.
+  The crate is upgraded, and the origin is now the opaque `"null"` the URL
+  standard specifies.
+
 - **An op with no capability check cannot be added unreviewed.** Every op is
   callable by guest code, an `Isolate`'s included, so the 261 that check no
   capability are now a reviewed list (`crates/runtime/src/ungated_ops.txt`)

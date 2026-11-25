@@ -85,7 +85,7 @@ tempfile = "3.27.0"
 # implementation, and the `sqlite:` scheme keeps the choice swappable.
 turso_core = { version = "0.8.3", default-features = false, features = ["fs", "encryption", "json", "uuid", "time"] }
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
-url = "2.5.8"
+url = "2.5.9"
 # URLPattern, used by `runtime` for the URLPattern global. Same reasoning as
 # `url`: the standard's parser is large and exacting, so it is delegated to a
 # maintained implementation rather than reimplemented in the JS prelude.
