@@ -1909,7 +1909,7 @@ class MongoCursor {
           await this.#endImplicit();
           throw e;
         }
-        this.#take(reply.cursor, reply.cursor.firstBatch);
+        this.#take(reply, "firstBatch");
         if (this._id === 0n) await this.#endImplicit();
         continue;
       }
@@ -1925,14 +1925,29 @@ class MongoCursor {
         },
         this.#commandOptions,
       );
-      this.#take(reply.cursor, reply.cursor.nextBatch);
+      this.#take(reply, "nextBatch");
       if (this._id === 0n) await this.#endImplicit();
     }
     return this._buffer[this._at++];
   }
 
-  #take(cursor, batch) {
-    this._id = typeof cursor.id === "bigint" ? cursor.id : BigInt(cursor.id ?? 0);
+  /// Takes the batch a cursor reply carries. A reply is the server's, so its
+  /// shape is checked rather than trusted: one without a cursor, a batch that
+  /// is not an array or an id that is not an integer is a broken server, and
+  /// says so as a `DbError`.
+  #take(reply, key) {
+    const cursor = reply?.cursor;
+    const batch = cursor?.[key];
+    const id = cursor?.id ?? 0;
+    if (
+      cursor === null ||
+      typeof cursor !== "object" ||
+      (batch !== undefined && !Array.isArray(batch)) ||
+      !(typeof id === "bigint" || Number.isSafeInteger(id))
+    ) {
+      throw new DbError(`the server's reply has no usable cursor (${key})`, { code: DbErrorCode.Backend });
+    }
+    this._id = BigInt(id);
     // The namespace is `db.collection`, and a collection may contain dots.
     const ns = String(cursor.ns ?? "");
     this._getMoreCollection = ns.slice(ns.indexOf(".") + 1);

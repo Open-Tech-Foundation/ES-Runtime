@@ -72,6 +72,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **The MongoDB driver checks a cursor reply before reading it.** A reply with
+  no `cursor`, a batch that is not an array or a cursor id that is not an
+  integer failed with `TypeError: Cannot read properties of undefined`; it is
+  now a `DbError` (`ERR_DB_BACKEND`) saying the server's reply has no usable
+  cursor. Found by the new `db_wire` fuzz target.
+
 - **An `Isolate` that fails no longer keeps its slot.** An isolate ended by
   its CPU or memory limit, or by a module that threw, stopped reading from
   its host before the host said it was gone, and that last read is what frees
