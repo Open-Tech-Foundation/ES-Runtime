@@ -146,6 +146,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Documentation
 
+- **The comparison page is re-measured on current runtimes.** esrun 0.49, Node
+  26.13 (the current LTS), Bun 1.4.5 and Deno 2.9.7. A new
+  `bench/compare/features.sh` calls each API the capability tables list on each
+  runtime, and those rows say so. It corrected the page in five places: Node 26
+  has Temporal and an experimental `node:ffi`; Node's `.wasm` imports and WASI,
+  and Deno's WASI, are experimental; Deno has a raw QUIC API behind
+  `--unstable-net`; and Deno's web `Worker` has no `unref()`. The image table
+  was re-run too and only its versions changed.
+
 - **The site is the one API reference; `docs/API.md` is gone (D252).** Two
   copies of the reference had drifted in both directions. What only the repo
   copy had moved to the site first: a new [error codes](/api/errors) page,

@@ -18,11 +18,14 @@ Dev tooling lives in [`esdev`](/esdev), never in production.
 **Runtimes measured** — unless a section names its own versions, as the later
 ones do, each was checked against:
 
-- esrun 0.38.0
-- Node.js 24.21.0 (LTS)
-- Bun 1.4.2
+- esrun 0.49.0
+- Node.js 26.13.0 (LTS)
+- Bun 1.4.5
 - Deno 2.9.7
-- esdev 0.17.0 (development binary)
+- esdev 0.29.0 (development binary)
+
+Rows marked **probed** are produced by `bench/compare/features.sh`, which calls
+each API on each runtime (2026-11-25); the rest cite the runtime's own docs.
 
 **Legend**
 
@@ -38,14 +41,19 @@ What the production binary loads and runs. Transforms live in
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| JSON module imports (probed) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Temporal API | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Temporal API (probed) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
+| `.wasm` ES module imports (probed) | <Yes /> | <Partial /> | <No /> | <Yes /> |
+| WASI preview 1 (probed) | <Yes /> | <Partial /> | <Partial /> | <Partial /> |
 
-**On the Temporal row.** Node 26+ only — the LTS (24) measured here has none.
+**On the Temporal row.** Node has it from 26, the current LTS; 24 has none.
+
+**On the `.wasm` and WASI rows.** Node warns both are experimental. Deno's WASI
+is `node:wasi`, and warns the same. Bun's ran the probe, but its compatibility
+page lists `node:wasi` as partial: no `getImportObject()`, and `stdin`/`stdout`
+options ignored.
 
 ## Development binary (`esdev`)
 
@@ -84,13 +92,13 @@ The server, the protocols it speaks, and the socket surface around it.
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | HTTP/3 server (QUIC) | <No /> | <No /> | <Partial /> | <No /> |
-| Cookie parse / serialize API | <Yes /> | <No /> | <Yes /> | <Partial /> |
-| Signed / sealed cookies | <Yes /> | <No /> | <No /> | <Partial /> |
-| CSRF tokens | <Yes /> | <No /> | <Yes /> | <No /> |
-| Webhook signing (Standard Webhooks) | <Yes /> | <No /> | <No /> | <No /> |
-| TOTP two-factor codes | <Yes /> | <No /> | <No /> | <No /> |
+| Cookie parse / serialize API (probed) | <Yes /> | <No /> | <Yes /> | <Partial /> |
+| Signed / sealed cookies (probed) | <Yes /> | <No /> | <No /> | <Partial /> |
+| CSRF tokens (probed) | <Yes /> | <No /> | <Yes /> | <No /> |
+| Webhook signing (Standard Webhooks) (probed) | <Yes /> | <No /> | <No /> | <No /> |
+| TOTP two-factor codes (probed) | <Yes /> | <No /> | <No /> | <No /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
-| UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| UDP datagram sockets (probed) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Connected UDP sockets | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 
@@ -104,9 +112,10 @@ connection that sends nothing; Deno holds it open. Node is <Partial /> — its
 [HTTP server comparison](/docs/internals/http/comparison).
 
 **On the HTTP/3 row.** Only Bun serves it (experimental, hence <Partial />).
-No `node:quic` on Node LTS; Deno 2.9 exposes no QUIC API at all. QUIC is a
-new UDP transport with its own TLS stack — a new listener, not a flag — so
-esrun has none yet.
+Node 26 has no `node:quic`. Deno 2.9 has a raw QUIC API, `Deno.QuicEndpoint`,
+behind `--unstable-net`, but `Deno.serve` does not speak HTTP/3. QUIC is a new
+UDP transport with its own TLS stack — a new listener, not a flag — so esrun
+has none yet.
 
 **On the cookie row.** esrun and Bun ship `Cookie`/`CookieMap`; Deno's is a
 stdlib package, Node has none. Unlike Bun's, esrun's **throws** on cookies a
@@ -115,21 +124,21 @@ See [Cookies](/docs/http/basics#cookies).
 
 **On the signed / sealed row.** esrun signs (HMAC-SHA256) and seals (AES-256-GCM)
 with key rotation and a server-checked expiry. Deno only signs, through the
-unstable `@std/http/unstable-signed-cookie`; Bun 1.4.3 and Node 24 have neither.
+unstable `@std/http/unstable-signed-cookie`; Bun 1.4.5 and Node 26 have neither.
 
 **On the CSRF row.** esrun and Bun ship `CSRF.generate`/`verify` with the same
 shape. esrun requires the secret and the session ID, and checks `Sec-Fetch-Site`
 and `Origin` when given the request; Bun makes both optional. Deno's `@std/http`
-1.1.4 and Node 24 have none. See [CSRF](/docs/http/basics#csrf).
+1.1.4 and Node 26 have none. See [CSRF](/docs/http/basics#csrf).
 
 **On the webhook row.** esrun signs and verifies Standard Webhooks, HMAC (`v1`)
 and Ed25519 (`v1a`), byte-compatible with the spec's reference library. Bun
-1.4.3, Node 24 and Deno's `@std/http` and `@std/crypto` have no webhook API.
+1.4.5, Node 26 and Deno's `@std/http` and `@std/crypto` have no webhook API.
 See [Webhooks](/docs/guides/webhooks).
 
 **On the TOTP row.** esrun generates and checks RFC 6238 codes, writes
 `otpauth://` URIs and makes backup codes, matching the `otpauth` library's codes
-and URIs. Bun 1.4.3, Node 24 and Deno's `@std/crypto` have no TOTP API; Deno's
+and URIs. Bun 1.4.5, Node 26 and Deno's `@std/crypto` have no TOTP API; Deno's
 `@std/encoding` has base32 only. See
 [Two-factor sign-in](/docs/guides/hashing#two-factor-sign-in).
 
@@ -173,14 +182,14 @@ Concurrency, isolation between workers, durable state, and self-exports.
 | Workers / multi-thread | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Per-worker capabilities | <Yes /> | <No /> | <No /> | <Partial /> |
-| `worker.unref()` | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| `worker.unref()` (probed) | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
 | Worker queue depth (backpressure signal) | <Yes /> | <No /> | <No /> | <No /> |
 | Durable workers (addressable state, alarms) | <Yes /> | <No /> | <No /> | <No /> |
 | Built-in OpenTelemetry export | <Yes /> | <No /> | <No /> | <Yes /> |
 
-**On the worker rows.** Deno's web `Worker` has no `unref()` or memory limit
-(`node:worker_threads` has both); Bun accepts `resourceLimits` but never
-enforces it, per its own compatibility table.
+**On the worker rows.** Deno's web `Worker` has no `unref()` or memory limit;
+its `node:worker_threads` has both, hence <Partial />. Bun's compatibility page
+says its `Worker` ignores `resourceLimits`.
 
 **On the durable workers row.** Addressable instances with storage, alarms and
 hibernating WebSockets — the Durable Objects model, self-hosted. The other
@@ -216,11 +225,11 @@ Porting means leaving those behind: [From Node.js](/docs/migration/node).
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Partial /> | <Partial /> |
-| FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
-| Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| FFI (dlopen) (probed) | <No /> | <Partial /> | <Yes /> | <Yes /> |
+| Native addons (N-API) (probed) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 
-**On these rows.** Node LTS has no `node:ffi` at all; Bun (`bun:ffi`) and
-Deno (`Deno.dlopen`) do. Both report incomplete `node:` coverage (Bun lists partial modules, Deno passes 75%+ of
+**On these rows.** Node 26 has `node:ffi`, and warns it is experimental; Bun
+(`bun:ffi`) and Deno (`Deno.dlopen`) have stable FFI. Both report incomplete `node:` coverage (Bun lists partial modules, Deno passes 75%+ of
 Node's suite).
 
 ## Permission models
@@ -249,8 +258,8 @@ Deno's `createImageBitmap`, and [sharp](https://sharp.pixelplumbing.com) for
 Node, which has none. Every cell was produced by **running** the operation,
 not by reading docs.
 
-`bench/images/features/features.py`, Linux x86-64: esrun 0.42.0, sharp 0.35.5
-on Node 24.21.0, Bun 1.4.3, Deno 2.9.7 (2026-10-23). Bun's AVIF/TIFF follow
+`bench/images/features/features.py`, Linux x86-64: esrun 0.49.0, sharp 0.35.5
+on Node 26.13.0, Bun 1.4.5, Deno 2.9.7 (2026-11-25). Bun's AVIF/TIFF follow
 the OS codecs, so macOS/Windows differ.
 
 ### Decoding

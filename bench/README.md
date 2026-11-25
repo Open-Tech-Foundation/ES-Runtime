@@ -26,6 +26,11 @@ disagree. The site's numbers come from it through
 lists on all four and judges the files they write with Pillow. Its output is
 the table on that page.
 
+`bench/compare/features.sh` runs `probe.mjs` on esrun, Node.js, Bun and Deno:
+it calls each API the comparison page's capability tables list and prints
+yes, no or experimental (Node's `ExperimentalWarning`). The rows marked
+*probed* on that page come from it.
+
 ## The PDF benchmark
 
 `bench/pdf/run.sh` extracts the text of a 200-page report, merges it with
