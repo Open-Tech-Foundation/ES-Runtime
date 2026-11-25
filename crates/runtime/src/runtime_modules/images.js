@@ -12,6 +12,11 @@
 // would read a file without passing the filesystem provider. Bytes in and out
 // need no capability; a file() source needs FileRead and a file() destination
 // FileWrite, exactly as reading or writing that file would.
+//
+// Every terminal takes `{ signal }`, and `timeout()` puts a deadline on the
+// chain (D255). A call with a signal registers an id with the host before it
+// awaits anything; an abort cancels that id, and the host's run stops itself
+// at its next check rather than keeping a worker busy to the end.
 
 const ops = __ops;
 const FILE_BODY = globalThis.__internal.fileBody;
@@ -30,6 +35,9 @@ const FILTERS = new Set([
   "lanczos3",
 ]);
 const CHANNELS = { red: 0, green: 1, blue: 2, alpha: 3 };
+const INTERPOLATORS = new Set(["nearest", "bilinear", "bicubic"]);
+// sharp's interpolators Pixels does not implement, by sharp's string values.
+const UNSUPPORTED_INTERPOLATORS = new Set(["lbb", "nohalo", "vsqbs"]);
 
 // sharp's nine crop gravities and their aliases. Saliency strategies
 // ("attention", "entropy") are refused by name in resize: Pixels crops to a
@@ -107,6 +115,8 @@ const CHROMA = new Set(["4:2:0", "4:4:4"]);
 // ignored, so a program ported from sharp learns at the call, not from the file.
 const UNSUPPORTED_OPTIONS = {
   png: ["progressive", "quality", "effort"],
+  gif: ["reuse", "progressive"],
+  webp: ["minSize", "mixed"],
   avif: ["lossless"],
   raw: ["premultiplied"],
   create: ["noise", "pageHeight"],
@@ -130,6 +140,18 @@ function fail(result) {
 function settle(result) {
   if ("error" in result) throw fail(result);
   return result.ok;
+}
+
+// Each call with a signal gets its own id, filed with the host for as long
+// as the call runs. The ids are this agent's; no other agent can name them.
+let nextCancel = 1;
+
+function signalOf(options, what) {
+  const { signal } = optionsObject(options, what);
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw new TypeError(`${what}: signal must be an AbortSignal`);
+  }
+  return signal;
 }
 
 function optionsObject(options, what) {
@@ -183,6 +205,12 @@ function openOptions(options) {
       throw new RangeError("page must be a non-negative integer");
     }
     open.page = o.page;
+  }
+  if (o.pages !== undefined) {
+    if (!Number.isInteger(o.pages) || (o.pages < 1 && o.pages !== -1)) {
+      throw new RangeError("pages must be a positive integer, or -1 for all");
+    }
+    open.pages = o.pages;
   }
   if (o.raw !== undefined) open.raw = layout(o.raw, "raw", [1, 2, 3, 4]);
   return open;
@@ -324,6 +352,30 @@ function paletteOptions(o, what) {
   return out;
 }
 
+// sharp's `loop` and `delay` for an animated output.
+function timing(o) {
+  const out = {};
+  const loop = integer(o.loop, "loop", 0, 65535);
+  if (loop !== undefined) out.loop = loop;
+  if (o.delay !== undefined) {
+    const ms = (value) => integer(value, "delay", 0, 0xffffffff);
+    if (Array.isArray(o.delay)) {
+      if (o.delay.length === 0) throw new RangeError("delay must not be an empty array");
+      out.delay = o.delay.map(ms);
+    } else {
+      out.delay = ms(o.delay);
+    }
+  }
+  return out;
+}
+
+function interpolator(value) {
+  if (value === undefined) return "bicubic";
+  if (UNSUPPORTED_INTERPOLATORS.has(value)) throw new TypeError(`interpolator ${JSON.stringify(value)} is not supported`);
+  if (!INTERPOLATORS.has(value)) throw new TypeError("interpolator must be nearest, bilinear or bicubic");
+  return value;
+}
+
 // Copies an option object, leaving out what is undefined.
 function defined(object) {
   return Object.fromEntries(Object.entries(object).filter(([, v]) => v !== undefined));
@@ -387,9 +439,10 @@ export class Image {
   /**
    * `input` is a Uint8Array, an ArrayBuffer, any view, a Blob, or a
    * runtime:fs `file()`. Options: `maxPixels` (268 MP), `autoOrient` (true),
-   * `toSrgb` (true), `animated` (false), `page` (0: the first page of a
-   * multi-page TIFF). JPEG, PNG, WebP, AVIF, GIF, TIFF and JPEG XL are
-   * read.
+   * `toSrgb` (true), `animated` (false: every frame of a GIF, WebP or JPEG
+   * XL animation), `pages` (frames to read, -1 all; more than one implies
+   * `animated`) and `page` (0: the first frame, or a multi-page TIFF's
+   * page). JPEG, PNG, WebP, AVIF, GIF, TIFF and JPEG XL are read.
    */
   constructor(input, options) {
     if (input === DERIVE) {
@@ -444,17 +497,46 @@ export class Image {
     return overlay;
   }
 
-  #call(kind, ...rest) {
+  // Runs the op for `kind` and settles its result. With a signal, the call
+  // files an id with the host (the op's last argument) and an abort cancels
+  // it; a run the host cancelled rejects with the signal's reason, or as a
+  // timeout when it was the chain's deadline.
+  async #run(kind, signal, ...rest) {
+    signal?.throwIfAborted();
+    if (signal === undefined) return this.#settled(await this.#call(kind, undefined, rest, undefined), undefined);
+    const id = nextCancel++;
+    const onAbort = () => ops.image_cancel(id);
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return this.#settled(await this.#call(kind, signal, rest, id), signal);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  #settled(result, signal) {
+    if (result.error === "cancelled") {
+      if (signal?.aborted) throw signal.reason;
+      throw new DOMException(`image processing timeout: ${result.message}`, "TimeoutError");
+    }
+    return settle(result);
+  }
+
+  #call(kind, signal, rest, cancel) {
     const fromFile = this.#source.path !== undefined;
     const name = `image_${kind}${fromFile ? "_file" : ""}`;
-    const invoke = (source, steps) => ops[name](source, this.#open, steps, ...rest);
+    const invoke = (source, steps) => ops[name](source, this.#open, steps, ...rest, cancel);
     if (!this.#steps.some((step) => step[0] === "composite")) {
       return invoke(fromFile ? this.#source.path : this.#source.bytes, this.#steps);
     }
     const pending = [];
     const steps = this.#snapshotSteps(pending);
     const source = fromFile ? this.#source.path : this.#source.bytes.slice();
-    return Promise.all(pending).then(() => invoke(source, steps));
+    // An abort while the overlays are read has no run to cancel yet.
+    return Promise.all(pending).then(() => {
+      signal?.throwIfAborted();
+      return invoke(source, steps);
+    });
   }
 
   #encoding() {
@@ -514,12 +596,79 @@ export class Image {
     ]);
   }
 
-  /** Rotate clockwise by a multiple of 90 degrees. */
-  rotate(degrees) {
-    if (!Number.isInteger(degrees) || degrees % 90 !== 0) {
-      throw new RangeError("rotate takes a multiple of 90 degrees");
+  /**
+   * Rotate clockwise by `angle` degrees. Multiples of 90 are exact quarter
+   * turns; any other angle resamples onto the rotated image's bounding box,
+   * filling the uncovered corners with `background` (default opaque black;
+   * a translucent one adds alpha).
+   */
+  rotate(angle, options) {
+    if (typeof angle !== "number" || !Number.isFinite(angle)) {
+      throw new TypeError("rotate takes a finite angle in degrees");
     }
-    return this.#with(["rotate", ((degrees % 360) + 360) % 360]);
+    const o = optionsObject(options, "rotate");
+    const background = o.background === undefined ? [0, 0, 0, 255] : colour(o.background, "background");
+    return this.#with(["rotate", ((angle % 360) + 360) % 360, background]);
+  }
+
+  /**
+   * Transform by a 2×2 `matrix` (four numbers, or two rows of two) in one
+   * resample, onto the transformed bounding box. Options: `background`
+   * (default opaque black), the input offsets `idx`/`idy`, the output
+   * offsets `odx`/`ody`, and `interpolator` ("nearest", "bilinear" or
+   * "bicubic", the default).
+   */
+  affine(matrix, options) {
+    const flat = Array.isArray(matrix) && matrix.length === 2 && Array.isArray(matrix[0]) && Array.isArray(matrix[1])
+      ? [...matrix[0], ...matrix[1]]
+      : matrix;
+    if (!Array.isArray(flat) || flat.length !== 4) {
+      throw new TypeError("affine takes a matrix of four numbers, or two rows of two");
+    }
+    const m = flat.map((v) => finite(v, "matrix"));
+    if (m[0] * m[3] - m[1] * m[2] === 0) throw new RangeError("affine matrix must not be singular");
+    const o = optionsObject(options, "affine");
+    return this.#with([
+      "affine",
+      m,
+      o.background === undefined ? [0, 0, 0, 255] : colour(o.background, "background"),
+      finite(o.idx ?? 0, "idx"),
+      finite(o.idy ?? 0, "idy"),
+      finite(o.odx ?? 0, "odx"),
+      finite(o.ody ?? 0, "ody"),
+      interpolator(o.interpolator),
+    ]);
+  }
+
+  /**
+   * Frame `index` of an animation (counted from the first frame opened),
+   * with every step so far applied, as a still. Steps after it run once.
+   */
+  frame(index) {
+    return this.#with(["frame", offset(index, "index")]);
+  }
+
+  /**
+   * Every frame of an animation, with every step so far applied, stacked
+   * top to bottom into one still (sharp's result for a format of one
+   * image). Steps after it see the whole sheet. A still is unchanged.
+   */
+  stackFrames() {
+    return this.#with(["stackFrames"]);
+  }
+
+  /**
+   * Stop each terminal call that runs longer than `seconds`, counted from
+   * the call; it rejects with a `TimeoutError`. 0 removes the deadline.
+   */
+  timeout(options) {
+    const { seconds } = optionsObject(options, "timeout");
+    if (typeof seconds !== "number" || !(seconds >= 0) || !Number.isFinite(seconds)) {
+      throw new RangeError("timeout seconds must be a non-negative number");
+    }
+    const open = { ...this.#open, timeout: seconds * 1000 };
+    if (seconds === 0) delete open.timeout;
+    return new Image(DERIVE, [this.#source, open, this.#steps, this.#output, this.#keep]);
   }
 
   /** Mirror top to bottom. */
@@ -818,9 +967,11 @@ export class Image {
   /**
    * Encode as WebP: lossy at `quality` (default 80), or `lossless`, or
    * `nearLossless`; `effort` 0–6 (default 4) and lossy `alphaQuality` 0–100.
+   * An animation takes `loop` and `delay`, as `gif()`.
    */
   webp(options) {
     const o = optionsObject(options, "webp");
+    refuseUnsupported("webp", o);
     return this.#with(
       null,
       defined({
@@ -830,6 +981,7 @@ export class Image {
         nearLossless: o.nearLossless === undefined ? undefined : Boolean(o.nearLossless),
         effort: integer(o.effort, "effort", 0, 6),
         alphaQuality: integer(o.alphaQuality, "alphaQuality", 0, 100),
+        ...timing(o),
       }),
     );
   }
@@ -852,9 +1004,32 @@ export class Image {
     );
   }
 
-  /** Encode as a single-frame GIF of `colours` (2–256) with `dither` (0–1). */
+  /**
+   * Encode as GIF of `colours` (2–256) with `dither` (0–1). An animation
+   * keeps its frames: `loop` (0 is forever) and `delay` (milliseconds, one
+   * number or one per frame) replace the source's timing, and
+   * `interFrameMaxError` (0–32), `interPaletteMaxError` (0–256) and
+   * `keepDuplicateFrames` steer how frames are written.
+   */
   gif(options) {
-    return this.#with(null, { format: "gif", ...paletteOptions(optionsObject(options, "gif"), "gif") });
+    const o = optionsObject(options, "gif");
+    refuseUnsupported("gif", o);
+    const error = (value, what, max) => {
+      if (value === undefined) return undefined;
+      if (typeof value !== "number" || !(value >= 0 && value <= max)) throw new RangeError(`${what} must be from 0 to ${max}`);
+      return value;
+    };
+    return this.#with(
+      null,
+      defined({
+        format: "gif",
+        ...paletteOptions(o, "gif"),
+        ...timing(o),
+        interFrameMaxError: error(o.interFrameMaxError, "interFrameMaxError", 32),
+        interPaletteMaxError: error(o.interPaletteMaxError, "interPaletteMaxError", 256),
+        keepDuplicateFrames: o.keepDuplicateFrames === undefined ? undefined : Boolean(o.keepDuplicateFrames),
+      }),
+    );
   }
 
   /** Encode as TIFF. */
@@ -872,24 +1047,31 @@ export class Image {
     return this.#with(null, { format: "raw", depth: depth(o.depth) });
   }
 
-  /** Encode as JPEG XL: lossy at `quality` (default 80), or `lossless`. */
+  /**
+   * Encode as JPEG XL: lossy at `quality` (default 80), or `lossless`. An
+   * animation takes `loop` and `delay`, as `gif()`.
+   */
   jxl(options) {
     const o = optionsObject(options, "jxl");
     refuseUnsupported("jxl", o);
-    return this.#with(null, defined({ format: "jxl", quality: quality(o.quality), lossless: Boolean(o.lossless) }));
+    return this.#with(
+      null,
+      defined({ format: "jxl", quality: quality(o.quality), lossless: Boolean(o.lossless), ...timing(o) }),
+    );
   }
 
   /**
    * The image at this point in the chain, read from headers without
    * decoding pixels: `width`, `height`, `pixelFormat`, `channels` and
-   * `hasAlpha` as the chain leaves it, `trimOffsetLeft`/`trimOffsetTop`
+   * `hasAlpha` as the chain leaves it, `frames` (1 for a still),
+   * `trimOffsetLeft`/`trimOffsetTop`
    * after a trim, and what the source says about itself under sharp's
    * names — `format`, `animation`, `pages`, `orientation`, `density`,
    * `isProgressive`, `isPalette`, `icc`, `exif`, `xmp` and the rest. A
    * field the file does not state is absent.
    */
-  async metadata() {
-    return settle(await this.#call("metadata"));
+  async metadata(options) {
+    return this.#run("metadata", signalOf(options, "metadata"));
   }
 
   /**
@@ -898,18 +1080,22 @@ export class Image {
    * `isOpaque`, `entropy`, `sharpness` and the `dominant` colour. Runs the
    * chain.
    */
-  async stats() {
-    return settle(await this.#call("stats"));
+  async stats(options) {
+    return this.#run("stats", signalOf(options, "stats"));
   }
 
-  /** The encoded image. Without a format method, in the source's format. */
-  async bytes() {
-    return settle(await this.#call("encode", this.#encoding())).bytes;
+  /**
+   * The encoded image. Without a format method, in the source's format; an
+   * animation must be written as GIF, WebP or JPEG XL, or made a still with
+   * `frame()` or `stackFrames()`. Every terminal takes `{ signal }`.
+   */
+  async bytes(options) {
+    return (await this.#run("encode", signalOf(options, "bytes"), this.#encoding())).bytes;
   }
 
   /** The encoded image as a Blob whose `type` is its media type. */
-  async blob() {
-    const { bytes, format } = settle(await this.#call("encode", this.#encoding()));
+  async blob(options) {
+    const { bytes, format } = await this.#run("encode", signalOf(options, "blob"), this.#encoding());
     return new Blob([bytes], { type: MIME[format] });
   }
 
@@ -918,11 +1104,11 @@ export class Image {
    * of bytes written. The format is the one chained, or the source's — never
    * the destination's extension.
    */
-  async write(destination) {
+  async write(destination, options) {
     if (!isFile(destination)) {
       throw new TypeError("write takes a file() from runtime:fs");
     }
-    return settle(await this.#call("write", this.#encoding(), destination[FILE_BODY]()));
+    return this.#run("write", signalOf(options, "write"), this.#encoding(), destination[FILE_BODY]());
   }
 
   get [Symbol.toStringTag]() {

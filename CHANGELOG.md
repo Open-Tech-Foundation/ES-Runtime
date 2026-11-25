@@ -43,6 +43,25 @@ namespace) is unstable and may change between minor releases until the API freez
   capability are now a reviewed list (`crates/runtime/src/ungated_ops.txt`)
   that a test holds them to (D247).
 
+### Added
+
+- **`runtime:images` processes animations, rotates by any angle, and can be
+  stopped (D255).** It moves to otf-pixels 0.6.0. `animated: true` (or
+  sharp's `pages`, with `page` as the first frame) applies every step to
+  every frame of a GIF, WebP or JPEG XL animation, and `gif()`, `webp()` and
+  `jxl()` write every frame, with sharp's `loop` and `delay`; `gif()` also
+  takes `interFrameMaxError`, `interPaletteMaxError` and
+  `keepDuplicateFrames`. Writing an animation to a format of one image is
+  `ERR_IMAGE_FORMAT_UNSUPPORTED` rather than sharp's silent stacking: chain
+  `frame(index)` for one frame or `stackFrames()` for all of them stacked.
+  `metadata()` adds `frames`. `rotate(angle, { background })` takes any
+  angle, and `affine(matrix, { background, idx, idy, odx, ody,
+  interpolator })` is new. Every terminal takes `{ signal }`: an abort stops
+  the host's run at its next check and rejects with the signal's reason.
+  sharp's `timeout({ seconds })` rejects with a `TimeoutError`. Until now,
+  `animated: true` on an animation failed with
+  `ERR_IMAGE_FORMAT_UNSUPPORTED`, and `rotate` took multiples of 90 only.
+
 ### Fixed
 
 - **An unreferenced timer can settle a pending top-level `await` again

@@ -13,15 +13,14 @@ await probe(args[0], args[1], args[2], {
   fit: (b, fit) => png(new Image(b).resize(100, 100, { fit, background: "#00000000" })),
   crop: (b) => png(new Image(b).crop({ left: 10, top: 10, width: 20, height: 20 })),
   rotate: (b) => png(new Image(b).rotate(90)),
-  // Any other angle is a RangeError: the probe reports it, features.py judges it.
   rotateFree: (b) => png(new Image(b).rotate(45)),
   blur: (b) => png(new Image(b).blur(2)),
   composite: (b) => png(new Image(b).composite([{ input: b }])),
   text: () => {
     throw Object.assign(new Error("no text overlay"), { code: "UNSUPPORTED_BY_PROBE" });
   },
-  // GIF output is a single frame even for an animated input.
-  animatedGif: (b) => new Image(b).resize(16).gif().bytes(),
+  // sharp's form: `animated` keeps every frame.
+  animatedGif: (b) => new Image(b, { animated: true }).resize(16).gif().bytes(),
   progressiveJpeg: (b) => new Image(b).jpeg({ progressive: true }).bytes(),
   extend: (b) => png(new Image(b).extend(8)),
   trim: (b) => png(new Image(b).trim()),

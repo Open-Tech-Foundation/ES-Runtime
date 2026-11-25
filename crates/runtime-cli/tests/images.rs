@@ -259,24 +259,126 @@ console.log("ok");
     );
 }
 
-/// An animation is reported and processed as its first frame; asking for every
-/// frame is refused until Pixels can deliver them, so the option keeps its
-/// meaning.
+/// An animation is its first frame unless `animated` (or `pages`) asks for
+/// every frame; then each step applies to each frame, GIF, WebP and JPEG XL
+/// write them all, and a format of one image needs `frame()` or
+/// `stackFrames()` rather than stacking silently (D255).
 #[test]
-fn animation_is_reported_and_animated_is_refused() {
+fn animation_is_processed_frame_by_frame() {
     let source = format!(
         r#"
 import {{ Image }} from "runtime:images";
 const bytes = {};
+const meta = async (image) => new Image(await image.bytes()).metadata();
 eq((await new Image(bytes).metadata()).animation, {{ frames: 2, loop: 0, durations: [100, 200] }}, "animation");
+eq((await new Image(bytes).metadata()).frames, 1, "a still unless asked");
 eq((await new Image(await new Image(bytes).png().bytes()).metadata()).width, 8, "first frame");
-await rejects(new Image(bytes, {{ animated: true }}).bytes(), (e) => eq(e.code, "ERR_IMAGE_FORMAT_UNSUPPORTED", "code"), "animated");
+
+const anim = new Image(bytes, {{ animated: true }});
+eq((await anim.metadata()).frames, 2, "animated");
+const small = await meta(anim.resize(4));
+eq([small.format, small.width, small.animation], ["gif", 4, {{ frames: 2, loop: 0, durations: [100, 200] }}], "every frame resized, timing kept");
+eq((await meta(anim.gif({{ loop: 3, delay: 50 }}))).animation, {{ frames: 2, loop: 3, durations: [50, 50] }}, "loop and delay");
+eq((await meta(anim.gif({{ delay: [10, 20] }}))).animation.durations, [10, 20], "delay per frame");
+for (const format of ["webp", "jxl"]) {{
+  const m = await meta(anim[format]({{ loop: 2 }}));
+  eq([m.format, m.animation.frames, m.animation.loop], [format, 2, 2], format);
+}}
+
+await rejects(anim.png().bytes(), (e) => eq(e.code, "ERR_IMAGE_FORMAT_UNSUPPORTED", "code"), "no silent strip");
+eq([(await meta(anim.frame(1).png())).height, (await meta(anim.frame(1).png())).frames], [8, 1], "one frame");
+const sheet = await meta(anim.stackFrames().png());
+eq([sheet.width, sheet.height], [8, 16], "stacked");
+await rejects(anim.frame(2).bytes(), (e) => eq(e.name, "RangeError", "past the last frame"), "frame(2)");
+
+eq((await new Image(bytes, {{ pages: -1 }}).metadata()).frames, 2, "pages -1 is animated");
+eq((await new Image(bytes, {{ pages: 1 }}).metadata()).frames, 1, "pages 1");
+eq((await new Image(bytes, {{ page: 1, pages: 1 }}).metadata()).frames, 1, "page 1");
+
+await rejects(new Image(bytes).gif({{ loop: 1 }}).bytes(), (e) => eq(e.name, "RangeError", "loop on a still"), "still loop");
+await rejects(anim.gif({{ delay: [1, 2, 3] }}).bytes(), (e) => eq(e.name, "RangeError", "delays"), "wrong length");
+throws(() => anim.gif({{ reuse: true }}), (e) => eq(e.name, "TypeError", "reuse"), "reuse");
+throws(() => anim.webp({{ mixed: true }}), (e) => eq(e.name, "TypeError", "mixed"), "mixed");
+throws(() => anim.gif({{ interFrameMaxError: 33 }}), (e) => eq(e.name, "RangeError", "range"), "interFrameMaxError");
+throws(() => new Image(bytes, {{ pages: 0 }}), (e) => eq(e.name, "RangeError", "pages"), "pages 0");
 console.log("ok");
 "#,
         bytes_literal("animated.gif")
     );
     assert_eq!(
         run("images_anim.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// `rotate` takes any angle and `affine` any non-singular matrix, under
+/// sharp's option names.
+#[test]
+fn rotation_by_any_angle_and_affine() {
+    let source = format!(
+        r##"
+import {{ Image }} from "runtime:images";
+const image = new Image({});
+const size = async (i) => {{ const m = await i.metadata(); return [m.width, m.height]; }};
+eq(await size(image.rotate(90)), [32, 32], "quarter turn");
+const [w] = await size(image.rotate(45, {{ background: "#ffffff00" }}));
+if (!(w > 32 && w <= 46)) throw new Error(`45°: bounding box ${{w}}`);
+eq(await size(image.affine([[2, 0], [0, 1]])), [64, 32], "affine rows");
+eq(await size(image.affine([1, 0, 0, 0.5], {{ interpolator: "nearest" }})), [32, 16], "affine flat");
+eq((await new Image(await image.rotate(-30).png().bytes()).metadata()).format, "png", "encodes");
+throws(() => image.rotate(NaN), (e) => eq(e.name, "TypeError", "nan"), "rotate NaN");
+throws(() => image.affine([1, 2, 2, 4]), (e) => eq(e.name, "RangeError", "singular"), "singular");
+throws(() => image.affine([1, 0, 0, 1], {{ interpolator: "nohalo" }}), (e) => eq(e.name, "TypeError", "nohalo"), "nohalo");
+console.log("ok");
+"##,
+        bytes_literal("alpha.png")
+    );
+    assert_eq!(
+        run("images_rotate.mjs", &source, &["--deny-all"]).trim(),
+        "ok"
+    );
+}
+
+/// An abort stops the host's run and rejects with the signal's reason; a
+/// chain's `timeout` rejects with a `TimeoutError`; an aborted signal
+/// rejects before any work.
+#[test]
+fn a_signal_or_a_timeout_stops_the_run() {
+    let source = r##"
+import { Image } from "runtime:images";
+const small = new Image({ create: { width: 4, height: 4, channels: 3, background: "#000" } });
+// Many cheap tiles, so a stopped run settles at once. Its full time sets the
+// pace, so the test holds in debug and release builds alike.
+const heavy = new Image({ create: { width: 4000, height: 4000, channels: 3, background: "#808080" } }).resize(3999, 3999).raw();
+let started = Date.now();
+await heavy.bytes();
+const full = Date.now() - started;
+
+const controller = new AbortController();
+const reason = new Error("client went away");
+setTimeout(() => controller.abort(reason), Math.floor(full / 20));
+started = Date.now();
+await rejects(heavy.bytes({ signal: controller.signal }), (e) => eq(e === reason, true, "the signal's reason"), "abort");
+const took = Date.now() - started;
+if (took > full / 2) throw new Error(`abort took ${took} ms of a ${full} ms run`);
+
+await rejects(heavy.timeout({ seconds: full / 20000 }).bytes(), (e) => {
+  eq(e.name, "TimeoutError", "timeout name");
+  eq(e.message.includes("timeout"), true, "message says timeout");
+}, "timeout");
+
+await rejects(small.metadata({ signal: AbortSignal.abort() }), (e) => eq(e.name, "AbortError", "aborted"), "already aborted");
+throws(() => small.timeout({ seconds: -1 }), (e) => eq(e.name, "RangeError", "seconds"), "negative");
+
+// A signal that never aborts changes nothing.
+for (let i = 0; i < 3; i++) eq((await small.metadata({ signal: new AbortController().signal })).width, 4, "metadata");
+eq((await small.png().blob({ signal: new AbortController().signal })).type, "image/png", "blob");
+eq((await small.timeout({ seconds: 30 }).png().bytes()).length > 0, true, "a timeout not reached");
+await rejects(small.bytes({ signal: "no" }), (e) => eq(e.name, "TypeError", "not a signal"), "bad signal");
+console.log("ok");
+"##;
+    assert_eq!(
+        run("images_cancel.mjs", source, &["--deny-all"]).trim(),
         "ok"
     );
 }
@@ -296,7 +398,7 @@ await rejects(new Image(png, {{ maxPixels: 100 }}).metadata(), (e) => eq(e.code,
 await rejects(new Image(png).crop({{ left: 30, top: 0, width: 10, height: 10 }}).bytes(), (e) => eq(e.name, "RangeError", "crop"), "crop");
 throws(() => new Image("photo.jpg"), (e) => eq(e.name, "TypeError", "path string"), "path string");
 throws(() => new Image(new SharedArrayBuffer(8)), (e) => eq(e.name, "TypeError", "shared"), "shared");
-throws(() => new Image(png).rotate(45), (e) => eq(e.name, "RangeError", "rotate"), "rotate");
+throws(() => new Image(png).rotate("45"), (e) => eq(e.name, "TypeError", "rotate"), "rotate");
 throws(() => new Image(png).png({{ progressive: true }}), (e) => eq(e.name, "TypeError", "png progressive"), "png progressive");
 throws(() => new Image(png).avif({{ lossless: true }}), (e) => eq(e.name, "TypeError", "avif lossless"), "avif lossless");
 throws(() => new Image(png).webp({{ effort: 7 }}), (e) => eq(e.name, "RangeError", "webp effort"), "webp effort");

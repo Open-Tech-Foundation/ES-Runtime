@@ -298,11 +298,11 @@ the OS codecs, so macOS/Windows differ.
 | Resize: `outside` | <Yes /> | <Yes /> | <No /> | <No /> |
 | Crop | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Rotate 90° | <Yes /> | <Yes /> | <Yes /> | <No /> |
-| Rotate 45° (any angle) | <No /> | <Yes /> | <No /> | <No /> |
+| Rotate 45° (any angle) | <Yes /> | <Yes /> | <No /> | <No /> |
 | Blur | <Yes /> | <Yes /> | <No /> | <No /> |
 | Composite | <Yes /> | <Yes /> | <No /> | <No /> |
 | Text overlay | <No /> | <Yes /> | <No /> | <No /> |
-| Animated output keeps frames | <No /> | <Yes /> | <No /> | <No /> |
+| Animated output keeps frames | <Yes /> | <Yes /> | <No /> | <No /> |
 | Progressive JPEG | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Extend the canvas | <Yes /> | <Yes /> | <No /> | <No /> |
 | Trim a border | <Yes /> | <Yes /> | <No /> | <No /> |
@@ -326,7 +326,7 @@ the OS codecs, so macOS/Windows differ.
 
 - **Formats:** the six everywhere on esrun/sharp; JPEG XL in and out on esrun only (sharp's prebuilt libvips has no libjxl); Bun follows the OS; Deno writes PNG/JPEG only (WebP/AVIF/JXL requests return PNG per spec).
 - **HEIC:** esrun `ERR_IMAGE_FORMAT_UNSUPPORTED` — convert to AVIF/JPEG; Bun <Partial />, `img.heic({ quality: 80 })` on macOS/Windows; sharp here lacks the HEVC plugin; Deno none.
-- **Operations:** sharp's compositing with its blend modes, `extend`/`trim`, `convolve`, raw pixels in and out, blank canvases, `stats()`, encoder options and metadata keeping — no free rotation, text or multi-frame output. For those, use sharp.
+- **Operations:** sharp's compositing with its blend modes, `extend`/`trim`, `convolve`, any-angle `rotate` and `affine`, animated GIF/WebP/JPEG XL in and out, raw pixels in and out, blank canvases, `stats()`, encoder options and metadata keeping — no text overlay. For that, use sharp.
 - **Safety:** 400 MP bomb refused at header by all but Deno; sharp skips EXIF unless asked and its errors carry no code; Deno decode blocks the loop.
 - **Speed:** [Benchmarks](/docs/benchmarks#images).
 

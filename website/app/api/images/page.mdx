@@ -1,6 +1,6 @@
 ---
 title: runtime:images
-description: Decode, resize, composite and encode JPEG, PNG, WebP, AVIF, GIF, TIFF and JPEG XL — Bun's Image chain, off the event loop.
+description: Decode, resize, composite and encode JPEG, PNG, WebP, AVIF, GIF, TIFF and JPEG XL, animations included — Bun's Image chain, off the event loop, cancellable.
 ---
 
 import { Callout } from "@opentf/afw-docs";
@@ -40,8 +40,9 @@ from a name.
 | `maxPixels` | `268402689` | Over this many pixels fails at the header with `ERR_IMAGE_TOO_MANY_PIXELS`, before allocation. Applies with nothing set; pass a number to lower or raise it. |
 | `autoOrient` | `true` | Apply the orientation the file declares (EXIF, or AVIF's `irot`/`imir`); `metadata()` reports the upright size. |
 | `toSrgb` | `true` | Convert an embedded matrix/TRC ICC profile to sRGB. Off, keep the pixels and write the profile to outputs. |
-| `animated` | `false` | Every frame. Not yet supported: an animation with this set fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Unset, an animation is its first frame. |
-| `page` | `0` | The page to open of a multi-page TIFF. Past the end, or past 0 for any other format, is a `RangeError` from the terminal. |
+| `animated` | `false` | Every frame of a GIF, WebP or JPEG XL animation: each transform applies to each frame. Unset, an animation is its first frame. See [Animation](#animation). |
+| `pages` | `1` | How many frames to read from `page` on; `-1` for all. More than one implies `animated`. On a TIFF anything but 1 fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. |
+| `page` | `0` | The first frame of an animation, or the page to open of a multi-page TIFF. Past the end, or past 0 for a format of one image, is a `RangeError` from the terminal. |
 | `raw` | — | Read `input` as raw pixels: `{ width, height, channels, depth? }`, packed rows with no header. `channels` is 1 (grey), 2 (grey and alpha), 3 (RGB) or 4 (RGBA); `depth` is `"uchar"` (default), `"ushort"` or `"float"`, and grey with alpha is 8-bit only. Bytes not exactly the layout's length are a `RangeError` from the terminal; `maxPixels` applies. `premultiplied` is a `TypeError`. |
 
 `new Image({ create: { width, height, channels, background } })` makes a
@@ -58,7 +59,8 @@ Each returns a new `Image` and leaves the original unchanged.
 | --- | --- |
 | `resize(width, height?, options?)` | Scale to a size. See [Resize options](#resize-options). |
 | `crop({ left, top, width, height })` | Keep a region. Outside the image is a `RangeError` from the terminal. |
-| `rotate(degrees)` | Clockwise, a multiple of 90. |
+| `rotate(angle, { background? })` | Clockwise by any angle in degrees. Multiples of 90 are exact; any other angle resamples onto the rotated image's bounding box, the uncovered corners filled with `background` (default opaque black; a translucent one adds alpha). |
+| `affine(matrix, options?)` | Transform by a 2×2 `matrix`, `[a, b, c, d]` or `[[a, b], [c, d]]`, onto the transformed bounding box: scale, shear, mirror or rotate in one resample. Options: `background` (opaque black), `idx`/`idy` and `odx`/`ody` (input and output offsets, 0), `interpolator` `"nearest"`, `"bilinear"` or `"bicubic"` (default). A singular matrix is a `RangeError`; sharp's `"lbb"`, `"nohalo"` and `"vsqbs"` are a `TypeError`. |
 | `flip()` / `flop()` | Mirror top to bottom / left to right. |
 | `modulate({ brightness?, saturation?, hue?, lightness? })` | Multipliers (`1` unchanged); `hue` in degrees; `lightness` added (`0` unchanged). |
 | `blur(sigma)` | Gaussian, `sigma` in pixels. |
@@ -79,6 +81,9 @@ Each returns a new `Image` and leaves the original unchanged.
 | `extend(n \| { top?, right?, bottom?, left?, extendWith?, background? })` | Grow the canvas by `n` on every side, or by each margin given. `extendWith` fills the margin with `"background"` (default), `"copy"` (the edge, repeated), `"repeat"` or `"mirror"`; `background` defaults to opaque black, and a translucent one adds alpha. |
 | `trim({ background?, threshold?, lineArt? })` | Cut away a border near `background` (default: the top-left pixel's colour), within `threshold` (default `10`). `lineArt` keeps one-pixel lines. The chain before it runs in memory, so trim after shrinking. `margin` is a `TypeError`. |
 | `composite(overlays)` | Draw images over this one. See [Composite](#composite). |
+| `frame(index)` | Frame `index` of an animation (counted from `page`), every transform so far applied, as a still. Past the last frame is a `RangeError` from the terminal. |
+| `stackFrames()` | Every frame of an animation, every transform so far applied, stacked top to bottom into one still. A still is unchanged. |
+| `timeout({ seconds })` | Stop each terminal call that runs longer than `seconds`, counted from the call; it rejects with a `TimeoutError`. `0` removes the deadline. See [Cancelling](#cancelling). |
 
 A colour is `"#rgb"`, `"#rgba"`, `"#rrggbb"`, `"#rrggbbaa"`, or
 `{ r, g, b, alpha }` with `alpha` from 0 to 1.
@@ -155,12 +160,38 @@ destination's extension.
 | --- | --- | --- |
 | `jpeg(options?)` | `quality` 1–100 (80); `progressive`; `chromaSubsampling` `"4:2:0"` or `"4:4:4"` | Baseline unless `progressive`. Chroma is 4:2:0 below quality 90 and 4:4:4 from it unless given. Transparency is composited over black. |
 | `png(options?)` | `compressionLevel` 0–9; `palette`; `colours` (or `colors`) 2–256 (256); `dither` 0–1 (1), or a boolean | 8- or 16-bit, as the pixels are. `colours` or `dither` implies `palette`. `progressive`, `quality` and `effort` are a `TypeError`. |
-| `webp(options?)` | `quality` 1–100 (80); `lossless`; `nearLossless`; `effort` 0–6 (4); `alphaQuality` 0–100 (100) | Lossy by default. `nearLossless` is lossless with small changes `quality` allows. |
+| `webp(options?)` | `quality` 1–100 (80); `lossless`; `nearLossless`; `effort` 0–6 (4); `alphaQuality` 0–100 (100); `loop`, `delay` | Lossy by default. `nearLossless` is lossless with small changes `quality` allows. An animation keeps its frames. `minSize` and `mixed` are a `TypeError`. |
 | `avif(options?)` | `quality` 1–100 (80); `chromaSubsampling` (`"4:2:0"`); `effort` 0–9 (4) | 8-bit. Unlike sharp, 4:2:0 by default. `lossless` is a `TypeError`. |
-| `gif(options?)` | `colours` (or `colors`) 2–256; `dither` 0–1, or a boolean | One frame, palette-quantized. |
+| `gif(options?)` | `colours` (or `colors`) 2–256; `dither` 0–1, or a boolean; `loop`, `delay`; `interFrameMaxError` 0–32 (0); `interPaletteMaxError` 0–256 (3); `keepDuplicateFrames` | Palette-quantized. An animation keeps its frames, each holding only what changed. `reuse` and `progressive` are a `TypeError`. |
 | `tiff()` | — | |
 | `raw(options?)` | `depth` `"uchar"` (default), `"ushort"` or `"float"` | Packed pixels, no header, in the image's channels. `metadata()` of the same chain gives the width, height and channels. The `Blob` type is `application/octet-stream`. |
-| `jxl(options?)` | `quality` 1–100 (80); `lossless` | JPEG XL. Lossy (VarDCT) by default; an image with alpha is written lossless. `distance` and `effort` are a `TypeError`. |
+| `jxl(options?)` | `quality` 1–100 (80); `lossless`; `loop`, `delay` | JPEG XL. Lossy (VarDCT) by default; an image with alpha is written lossless. An animation keeps its frames. `distance` and `effort` are a `TypeError`. |
+
+`loop` is how many times an animation plays, 0 (forever) to 65535, and
+`delay` how long each frame shows in milliseconds: one number for every
+frame, or an array of one per frame. Unset, the source's timing is kept. On a
+still, or with an array whose length is not the frame count, they are a
+`RangeError` from the terminal.
+
+## Animation
+
+With `animated: true` (or `pages` above 1), every transform applies to each
+frame of a GIF, WebP or JPEG XL animation, and `gif()`, `webp()` and `jxl()`
+write every frame. A format of one image (JPEG, PNG, AVIF, TIFF, raw) cannot
+hold an animation: writing one fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`.
+Say which still is wanted: `frame(index)` for one frame, or `stackFrames()`
+for all of them stacked, which is what sharp writes in that case.
+
+```js
+const anim = new Image(upload, { animated: true }).resize(200);
+const preview = await anim.webp({ loop: 0 }).bytes(); // every frame
+const poster = await anim.frame(0).jpeg().bytes();    // one still
+```
+
+`trim` cuts the box holding every frame's content, and `stats()` covers
+every frame. An animated `composite` overlay is a `RangeError`; pass its
+`frame(0)`. An animation of more than 10,000 frames, or of more than 2³²
+pixels across its frames, fails with `ERR_IMAGE_TOO_MANY_PIXELS` when opened.
 
 ## Metadata in the output
 
@@ -179,24 +210,42 @@ data and location from uploads. The ICC profile is always kept.
 
 | Method | Resolves to |
 | --- | --- |
-| `metadata()` | The image at this point in the chain, read from headers without decoding pixels. See [Metadata](#metadata). |
-| `stats()` | sharp's pixel statistics of the result: `channels` (each `{ min, max, sum, squaresSum, mean, stdev, minX, minY, maxX, maxY }`, alpha included), `isOpaque`, `entropy`, `sharpness` and the `dominant` sRGB colour `{ r, g, b }`. It runs the chain. |
-| `bytes()` | The encoded image, a `Uint8Array`. |
-| `blob()` | A `Blob` whose `type` is the format's media type (`image/webp`, `image/jxl`, …). |
-| `write(destination)` | Encodes into `destination`, a `runtime:fs` `file()`, and resolves to the number of bytes written. A path string is a `TypeError`. |
+| `metadata({ signal? })` | The image at this point in the chain, read from headers without decoding pixels. See [Metadata](#metadata). |
+| `stats({ signal? })` | sharp's pixel statistics of the result: `channels` (each `{ min, max, sum, squaresSum, mean, stdev, minX, minY, maxX, maxY }`, alpha included), `isOpaque`, `entropy`, `sharpness` and the `dominant` sRGB colour `{ r, g, b }`. It runs the chain. |
+| `bytes({ signal? })` | The encoded image, a `Uint8Array`. |
+| `blob({ signal? })` | A `Blob` whose `type` is the format's media type (`image/webp`, `image/jxl`, …). |
+| `write(destination, { signal? })` | Encodes into `destination`, a `runtime:fs` `file()`, and resolves to the number of bytes written. A path string is a `TypeError`. |
+
+## Cancelling
+
+Every terminal takes an `AbortSignal`. When it aborts, the run stops at its
+next check, between tiles, rows, codec blocks and frames, and the call
+rejects with `signal.reason`; a signal already aborted rejects before any
+work. `timeout({ seconds })` sets a deadline instead, or as well, and a run
+past it rejects with a `TimeoutError` `DOMException`. A request handler can
+pass its own signal, so the work stops when the client goes away:
+
+```js
+const thumb = await new Image(await request.bytes())
+  .resize(400)
+  .webp()
+  .timeout({ seconds: 5 })
+  .bytes({ signal: request.signal });
+```
 
 ## Metadata
 
 `metadata()` reports `width`, `height`, `pixelFormat`, `channels` and
 `hasAlpha` as the chain leaves them: `new Image(x).resize(400).metadata()`
-reports the resized size. Everything else is what the source file says about
+reports the resized size. `frames` is how many frames the chain produces
+there: 1 for a still, and after `frame()` or `stackFrames()`. Everything else is what the source file says about
 itself, under sharp's names, and a field the file does not state is absent.
 
 | Field | Description |
 | --- | --- |
 | `format` | The source's: `"jpeg"`, `"png"`, `"webp"`, `"avif"`, `"gif"`, `"tiff"`, `"jxl"`, or `"raw"` for raw and created input. |
 | `pixelFormat` | `"gray8"`, `"gray16"`, `"graya8"`, `"rgb8"`, `"rgba8"`, `"rgb16"`, `"rgba16"`, `"rgbf32"` or `"rgbaf32"`. |
-| `animation` | `{ frames, loop, durations }` (milliseconds per frame), or `null` for a still. |
+| `animation` | What the source holds: `{ frames, loop, durations }` (milliseconds per frame), or `null` for a still. |
 | `pages` | Pages in the source document; 1 except for TIFF. |
 | `trimOffsetLeft`, `trimOffsetTop` | After a `trim`: minus the left and top of the box kept, as sharp reports them. |
 | `orientation` | The EXIF orientation, 1–8. |
@@ -217,6 +266,8 @@ itself, under sharp's names, and a field the file does not state is absent.
 | `ERR_IMAGE_FORMAT_UNSUPPORTED` | An unknown format, or a valid file using something not implemented. |
 | `ERR_IMAGE_TOO_MANY_PIXELS` | Over `maxPixels`. |
 | `TypeError` / `RangeError` | A bad argument; from the method, or from the terminal when only the image shows it. |
+| `signal.reason` | The terminal's `signal` aborted. |
+| `TimeoutError` (`DOMException`) | The run passed the chain's `timeout`. |
 
 Reading or writing a `file()` fails with the [`runtime:fs`](/api/fs) errors.
 

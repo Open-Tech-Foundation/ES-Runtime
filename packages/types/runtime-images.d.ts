@@ -34,11 +34,13 @@ declare module "runtime:images" {
     /** Convert an embedded ICC profile to sRGB. Default true. */
     toSrgb?: boolean;
     /**
-     * Ask for every frame. Not yet supported: an animated input with this set
-     * fails with `ERR_IMAGE_FORMAT_UNSUPPORTED`. Default false.
+     * Every frame of a GIF, WebP or JPEG XL animation: each step applies to
+     * each frame. Default false: an animation is its first frame.
      */
     animated?: boolean;
-    /** The page to open of a multi-page TIFF. Default 0. */
+    /** Frames to read from `page` on; -1 for all. More than one implies `animated`. Default 1. */
+    pages?: number;
+    /** The first frame of an animation, or the page of a multi-page TIFF. Default 0. */
     page?: number;
     /** Read the input as raw pixels in this layout. */
     raw?: RawOptions;
@@ -175,6 +177,22 @@ declare module "runtime:images" {
     dither?: number | boolean;
   }
 
+  /** sharp's timing for an animated output; unset, the source's is kept. */
+  export interface AnimationOptions {
+    /** How many times it plays, 0 (forever) to 65535. */
+    loop?: number;
+    /** Milliseconds per frame: one for every frame, or one per frame. */
+    delay?: number | number[];
+  }
+
+  /** What a terminal takes. */
+  export interface TerminalOptions {
+    /** Aborting stops the run and rejects with `signal.reason`. */
+    signal?: AbortSignal;
+  }
+
+  export type Interpolator = "nearest" | "bilinear" | "bicubic";
+
   export type PixelFormat =
     | "gray8"
     | "gray16"
@@ -199,6 +217,8 @@ declare module "runtime:images" {
     pixelFormat: PixelFormat;
     channels: number;
     hasAlpha: boolean;
+    /** Frames the chain produces at this point: 1 for a still. */
+    frames: number;
     /** What an animated file holds, or null for a still. */
     animation: { frames: number; loop: number; durations: number[] } | null;
     /** How many pages the source document holds. Always 1 except for TIFF. */
@@ -271,8 +291,27 @@ declare module "runtime:images" {
     resize(width: number | null, height?: number | null, options?: ResizeOptions): Image;
     /** Keep a region. `left` and `top` default to 0. */
     crop(region: { left?: number; top?: number; width: number; height: number }): Image;
-    /** Rotate clockwise by a multiple of 90 degrees. */
-    rotate(degrees: number): Image;
+    /** Rotate clockwise by any angle; uncovered corners are `background` (default opaque black). */
+    rotate(angle: number, options?: { background?: Colour }): Image;
+    /** Transform by a 2×2 matrix onto the transformed bounding box. */
+    affine(
+      matrix: [number, number, number, number] | [[number, number], [number, number]],
+      options?: {
+        background?: Colour;
+        idx?: number;
+        idy?: number;
+        odx?: number;
+        ody?: number;
+        /** Default `"bicubic"`. */
+        interpolator?: Interpolator;
+      },
+    ): Image;
+    /** One frame of an animation, every step so far applied, as a still. */
+    frame(index: number): Image;
+    /** Every frame of an animation stacked top to bottom into one still. */
+    stackFrames(): Image;
+    /** Reject each terminal call that runs past `seconds` with a `TimeoutError`; 0 removes it. */
+    timeout(options: { seconds: number }): Image;
     /** Mirror top to bottom. */
     flip(): Image;
     /** Mirror left to right. */
@@ -329,15 +368,17 @@ declare module "runtime:images" {
 
     jpeg(options?: { quality?: number; progressive?: boolean; chromaSubsampling?: ChromaSubsampling }): Image;
     png(options?: { compressionLevel?: number; palette?: boolean } & PaletteOptions): Image;
-    webp(options?: {
-      quality?: number;
-      lossless?: boolean;
-      nearLossless?: boolean;
-      /** 0–6, default 4. */
-      effort?: number;
-      /** 0–100, default 100. */
-      alphaQuality?: number;
-    }): Image;
+    webp(
+      options?: {
+        quality?: number;
+        lossless?: boolean;
+        nearLossless?: boolean;
+        /** 0–6, default 4. */
+        effort?: number;
+        /** 0–100, default 100. */
+        alphaQuality?: number;
+      } & AnimationOptions,
+    ): Image;
     avif(options?: {
       quality?: number;
       /** Default `"4:2:0"`. */
@@ -345,22 +386,31 @@ declare module "runtime:images" {
       /** 0–9, default 4. */
       effort?: number;
     }): Image;
-    gif(options?: PaletteOptions): Image;
+    gif(
+      options?: PaletteOptions &
+        AnimationOptions & {
+          /** 0–32, default 0. */
+          interFrameMaxError?: number;
+          /** 0–256, default 3. */
+          interPaletteMaxError?: number;
+          keepDuplicateFrames?: boolean;
+        },
+    ): Image;
     tiff(): Image;
-    jxl(options?: { quality?: number; lossless?: boolean }): Image;
+    jxl(options?: { quality?: number; lossless?: boolean } & AnimationOptions): Image;
     /** Packed pixels, no header; `metadata()` gives the layout. Default depth `"uchar"`. */
     raw(options?: { depth?: RawDepth }): Image;
 
     /** The image at this point in the chain, from its header. */
-    metadata(): Promise<ImageMetadata>;
+    metadata(options?: TerminalOptions): Promise<ImageMetadata>;
     /** Pixel statistics of the result; runs the chain. */
-    stats(): Promise<ImageStats>;
+    stats(options?: TerminalOptions): Promise<ImageStats>;
     /** The encoded image; without a format method, in the source's format. */
-    bytes(): Promise<Uint8Array<ArrayBuffer>>;
+    bytes(options?: TerminalOptions): Promise<Uint8Array<ArrayBuffer>>;
     /** The encoded image as a Blob of the format's media type. */
-    blob(): Promise<Blob>;
+    blob(options?: TerminalOptions): Promise<Blob>;
     /** Encode into a `runtime:fs` file; resolves to the bytes written. */
-    write(destination: FsFile): Promise<number>;
+    write(destination: FsFile, options?: TerminalOptions): Promise<number>;
   }
 
   const images: { Image: typeof Image };

@@ -3299,6 +3299,8 @@ The day before, the same reasoning had been taken one step further and an out-of
 
 *(Update 2026-10-21: Pixels 0.5.0 brought `composite`, `extend`, `trim`, the encoder options, metadata keeping, JPEG XL and `stats()`; D181 exposes them.)*
 
+*(Update 2026-11-25: Pixels 0.6.0 brought animation, any-angle rotation, `affine` and cancellation; D255 exposes them, and `animated: true` now processes every frame.)*
+
 ### D160 — `runtime:serialization` reads and writes YAML with its own parser · *Accepted (2026-10-13)*
 
 **Context:** `YAML` was backed by `serde_yaml` 0.9, which is deprecated and depends on `unsafe-libyaml`, a c2rust translation of libyaml into unsafe Rust. Its repository was archived on 2024-03-25, and RUSTSEC-2024-0449 now fails `cargo deny` with no safe upgrade. The suggested replacements are other crates (saphyr, noyalib). Bun ships its own YAML 1.2 parser and says it passes the official yaml-test-suite.
@@ -5184,3 +5186,29 @@ Deno runs every `crypto.subtle` data operation through `spawn_blocking` (`ext/cr
 **Rejected:** Node's — an unreferenced deadline guarding a read would make every such client a failure the moment it waits on the network alone, which is what the deadline exists to allow.
 
 **Consequences:** a program whose await depends on an unreferenced timer runs to the end; one whose await nothing can settle still fails, once the last timer has fired. `crates/runtime-cli/tests/limits.rs` holds both.
+
+### D255 — `runtime:images` on otf-pixels 0.6: animation, any-angle rotation, `affine`, and cancellation · *Accepted (2026-11-25)* · *amends D159, D181*
+
+**Context:** otf-pixels 0.6.0 (2026-11-25) added what D159 and D181 listed as missing because Pixels lacked it: a multi-frame pipeline (ADR-0020) that reads and writes animated GIF, WebP and JPEG XL, with sharp's `loop`, `delay`, `interFrameMaxError`, `interPaletteMaxError` and `keepDuplicateFrames`; rotation by any angle with sharp's `background`; sharp's `affine`; and cooperative cancellation (ADR-0021), a `Cancel` that stops a running pipeline within milliseconds, from any thread or at a deadline. D159 made `animated: true` an error on animated input so that code written against it would keep its meaning once frames arrived. Bun's `Image` (bun.com/docs/runtime/image, read 2026-11-25) has none of these: no animation, `rotate` by multiples of 90 only, no `affine`, no signal or timeout. sharp has all of them; its cancellation is `timeout({ seconds })`.
+
+**Decision:**
+
+- **`animated`, `pages` and `page` take sharp's meaning.** `animated: true` processes every frame of a GIF, WebP or JPEG XL animation: each step chained on applies to each frame. `pages` is how many frames (`-1` all; anything but 1 implies `animated`, as sharp's `animated` is `pages: -1`), `page` the first. On a TIFF `page` stays the page D159 gave it, and `pages` other than 1 is refused: Pixels reads one TIFF page at a time.
+- **No silent strip.** sharp writes an animation to a format of one image (PNG, JPEG, AVIF, TIFF, raw) as its frames stacked into one tall image. Here that is `ERR_IMAGE_FORMAT_UNSUPPORTED`, as Pixels has it, and the program says which still it wants: `frame(index)` for one frame with every step so far applied, or `stackFrames()` for sharp's stacked result. Both are chain steps; the steps after them run once, on the still.
+- **Animated output under sharp's option names.** `gif()`, `webp()` and `jxl()` take `loop` (0 is forever) and `delay` (milliseconds, one number for every frame or an array of one per frame); unset, the source's timing is kept. `gif()` also takes `interFrameMaxError` (0–32), `interPaletteMaxError` (0–256) and `keepDuplicateFrames`. `loop` or `delay` on a still, or a `delay` array of the wrong length, is a `RangeError` from the terminal.
+- **`metadata()` adds `frames`:** how many frames the chain produces at that point, 1 for a still and after `frame()` or `stackFrames()`. `animation` keeps D159's meaning, what the source file holds.
+- **`rotate(angle, { background })` takes any finite angle,** sharp's shape. Multiples of 90 stay exact quarter turns; any other angle resamples onto the rotated image's bounding box, the uncovered corners filled with `background` (opaque black, sharp's default), a translucent one adding alpha.
+- **`affine(matrix, { background, idx, idy, odx, ody, interpolator })`,** sharp's shape: a 2×2 matrix as four numbers or two rows, `interpolator` `"nearest"`, `"bilinear"` or `"bicubic"` (the default, as in sharp).
+- **Cancellation is an `AbortSignal` on every terminal, plus sharp's `timeout({ seconds })` on the chain.** `metadata({ signal })`, `stats({ signal })`, `bytes({ signal })`, `blob({ signal })` and `write(destination, { signal })` reject with `signal.reason` when it aborts, and the host's run stops at its next check rather than keeping a worker busy to the end. `timeout` puts a deadline on each terminal call, measured from the call, and a run past it rejects with a `TimeoutError` `DOMException` (whose message says "timeout", which is what sharp's users test for). An already aborted signal rejects before any work starts.
+- **The abort reaches the host by an id the call registers.** The terminal op takes a per-agent id from `images.js` and, before it awaits anything, files its `Cancel` under it; `image_cancel(id)` cancels it; the entry is removed when the call settles, by a guard, whichever way it settles. D159's "nothing is held between calls" holds: the entry lives exactly as long as the call. The ids are the agent's own (D253: guest code cannot reach the op table), so no agent can cancel another's work.
+- **What Pixels lacks is refused by name:** `gif({ reuse, progressive })`, `webp({ minSize, mixed })`, `jxl({ distance, effort })` as before, and the `"lbb"`, `"nohalo"` and `"vsqbs"` interpolators.
+
+**Rejected:**
+- **Stacking frames when the output holds one image, for parity with sharp.** An upload server that turns animations into PNG thumbnails would silently produce images many times taller than asked, with every frame decoded. Pixels refuses for that reason, and the binding keeps the refusal.
+- **Only `timeout`, as sharp has.** A request handler already has an `AbortSignal` for the client going away; making it pass through a deadline instead would leave the work running after the response is gone.
+- **Dropping the op's future on abort, as `fetch` does.** The work runs on the blocking pool, which a dropped future does not stop; the run must be told.
+- **The timeout clock starting when the decoder opens, as sharp's does.** It would leave the time spent reading a `file()` and waiting for a worker unbounded, which is the latency a deadline exists to bound.
+
+**Consequences:** the binary links otf-pixels 0.6.0. Pixels' animation limits apply at their defaults (10,000 frames, 2³² pixels across all frames), beside `maxPixels` per frame. The comparison page's animation and rotation rows change for esrun.
+
+**Not here:** text overlay, `withExif`, HEIC, multi-page TIFF as frames, and `sharpen({ sigma, ... })`, as before.

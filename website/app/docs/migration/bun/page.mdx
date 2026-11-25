@@ -227,7 +227,11 @@ defaults; and the error codes `ERR_IMAGE_DECODE_FAILED`,
   GIF `colours` and `dither`.
 - `gif()`, `tiff()` and `jxl()` output, and JPEG XL input.
 - AVIF and TIFF on Linux, where Bun has neither.
-- The `toSrgb` and `animated` options.
+- Animated GIF, WebP and JPEG XL, in and out: `animated`, `pages`, `frame()`,
+  `stackFrames()`, and `loop`/`delay` on the output.
+- `rotate(angle, { background })` by any angle, and `affine`.
+- `{ signal }` on every terminal, and `timeout({ seconds })`.
+- The `toSrgb` option.
 
 ### 8. Archives (`Bun.Archive`)
 

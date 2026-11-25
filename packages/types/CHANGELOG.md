@@ -13,6 +13,14 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- `runtime:images`: animations (`animated` and `pages` options, `frame()`,
+  `stackFrames()`, `loop`/`delay` on `gif()`, `webp()` and `jxl()`, GIF's
+  `interFrameMaxError`, `interPaletteMaxError` and `keepDuplicateFrames`,
+  `metadata().frames`), `rotate(angle, { background })` by any angle,
+  `affine()`, `timeout()`, and `{ signal }` on every terminal (runtime D255).
+
 ### Changed
 
 - `Isolate.prepare` documents what a prepared isolate costs and that a count

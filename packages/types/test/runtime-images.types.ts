@@ -96,3 +96,32 @@ image.jpeg({ chromaSubsampling: "4:2:2" });
 image.write("out.png");
 
 void use;
+
+async function animate() {
+  const anim = new Image(new Uint8Array(0), { animated: true, pages: -1, page: 0 });
+  const frames: number = (await anim.metadata()).frames;
+  await anim
+    .gif({ loop: 0, delay: [100, 200], interFrameMaxError: 4, keepDuplicateFrames: true })
+    .bytes();
+  await anim.webp({ delay: 50 }).bytes({ signal: AbortSignal.timeout(1000) });
+  await anim.jxl({ loop: 2 }).write(file("out.jxl"), { signal: new AbortController().signal });
+  await anim.frame(0).rotate(12.5, { background: "#fff0" }).png().blob();
+  await anim
+    .stackFrames()
+    .affine(
+      [
+        [1, 0.3],
+        [0, 1],
+      ],
+      { interpolator: "nearest", odx: 2 },
+    )
+    .timeout({ seconds: 5 })
+    .stats({ signal: undefined });
+  return frames;
+}
+// @ts-expect-error — sharp's nohalo is not an interpolator Pixels has.
+image.affine([1, 0, 0, 1], { interpolator: "nohalo" });
+// @ts-expect-error — a terminal's signal is an AbortSignal.
+image.bytes({ signal: "stop" });
+
+void animate;

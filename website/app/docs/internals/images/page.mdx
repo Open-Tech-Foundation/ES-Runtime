@@ -30,6 +30,21 @@ rather than each starting a pool of their own.
 Nothing is held between calls: there is no image handle to free, and an image
 passed to a worker is plain data.
 
+## Stopping a run
+
+A run occupies a pool thread until it finishes, and a thread cannot be stopped
+from outside, so the run stops itself. A terminal given a signal files a
+cancellation flag with the host for exactly as long as the call lasts; an
+abort raises it, and the run checks it before each tile, each decoded row,
+inside every buffering codec's loops, and between frames. A chain's `timeout`
+is the same flag with a deadline, counted from the terminal call, so the time
+spent reading a `file()` and waiting for a free thread is inside it.
+
+How soon a run stops is one unit of that work away: a tile of the most
+expensive step, or a codec block. Cheap steps stop at once; a large blur
+kernel, whose every tile is costly, stops after that tile. Without a signal
+or a timeout there is no flag, and nothing is checked.
+
 ## Memory
 
 Opening an image reads its header only. `maxPixels` is checked there, so an
@@ -47,6 +62,12 @@ has seen the pixels, so the chain before it runs when the pipeline is built and
 its result is held whole; a `resize` placed before it keeps that result small.
 A progressive JPEG output holds the image's quantized coefficients, two bytes
 per sample, until the last scan is written, where baseline streams.
+
+An animation is held in memory compressed, and each pass over its frames
+decodes it afresh: one frame at a time is in pixels, and each frame's tiles
+are dropped once it is written. Opening one checks Pixels' animation limits
+(10,000 frames, 2³² pixels across every frame) before any frame is decoded.
+`stackFrames()` holds the whole sheet, as `trim` holds its input.
 
 A `composite` overlay is a pipeline of its own, joined to the base's graph.
 Its encoded bytes cross to the host with the base's, and a `file()` overlay is

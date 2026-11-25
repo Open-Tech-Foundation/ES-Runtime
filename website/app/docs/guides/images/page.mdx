@@ -91,12 +91,28 @@ const { width, height, format, animation } = await new Image(bytes).metadata();
 const { width: w } = await new Image(bytes).resize(400).metadata();   // 400
 ```
 
-An animated GIF or WebP is processed as its first frame; `animation` says how
-many frames there were, so you can decide to keep the original instead.
+An animated GIF, WebP or JPEG XL is processed as its first frame unless you
+ask for every frame; `animation` says how many there are.
+
+## Animations
+
+`animated: true` applies every step to every frame, and GIF, WebP and JPEG XL
+output keep them all:
+
+```js
+const anim = new Image(upload, { animated: true }).resize(320);
+const small = await anim.webp({ loop: 0 }).bytes();   // every frame, resized
+const poster = await anim.frame(0).jpeg().bytes();    // the first frame, as a still
+```
+
+A JPEG, PNG or AVIF holds one image, so writing an animation to one is an
+`ERR_IMAGE_FORMAT_UNSUPPORTED` error rather than a silent change of shape:
+choose `frame(index)`, or `stackFrames()` for a sprite sheet. `gif()`,
+`webp()` and `jxl()` take `loop` and `delay` to change the timing.
 
 ## Beyond thumbnails
 
-`resize` is one step among several — `crop`, `rotate` (multiples of 90°),
+`resize` is one step among several — `crop`, `rotate` (any angle), `affine`,
 `flip`/`flop`, `modulate`, `blur`, `sharpen`, `flatten`, `grayscale` and
 `extractChannel` all chain the same way — and `blob()` returns the result as
 a `Blob` typed with the format's media type:
@@ -187,9 +203,21 @@ const archived = await new Image(file("raw/photo.jpg")).keepMetadata().avif().by
 `metadata()` reports what a file carries: `exif`, `xmp`, `icc`, `density`,
 `orientation` and more.
 
+## Stopping work
+
+Pass the request's signal to the terminal, and the work stops when the client
+goes away; `timeout()` bounds it in any case:
+
+```js
+const thumb = await new Image(await request.bytes())
+  .resize(400)
+  .webp()
+  .timeout({ seconds: 5 })
+  .bytes({ signal: request.signal });
+```
+
 ## Current limitations
 
-Text rendering, rotation between the right angles, multi-frame output and a
-HEIC codec are not there yet. What that means next to sharp, `Bun.Image` and Deno's
+Text rendering and a HEIC codec are not there yet. What that means next to sharp, `Bun.Image` and Deno's
 `createImageBitmap` is measured row by row on the
 [comparison page](/docs/comparison).

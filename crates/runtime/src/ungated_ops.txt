@@ -105,6 +105,7 @@ http_respond
 http_response_body_close
 http_response_body_push
 http_set_secure_context           # new TLS credentials for a server the agent already owns (D200)
+image_cancel                      # raises a flag in this agent's own table, filed by its own running image call (D255)
 image_encode
 image_metadata
 image_stats

@@ -18,17 +18,27 @@
 //! (`malformed`, `unsupported`, …) rather than rejecting, so `images.js` maps
 //! it to the module's `ERR_IMAGE_*` codes and its error classes in one place.
 //! Filesystem failures reject as `runtime:fs` ones do.
+//!
+//! A call `images.js` gave a signal or a timeout carries a Pixels [`Cancel`]
+//! (D255): the op files it under the call's id before it awaits anything,
+//! `image_cancel` cancels it, and a guard removes it when the call settles.
+//! The run stops itself at its next check and settles as `cancelled`.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Cursor;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{FileSystem, ProviderError, TaskSpawner};
 use otf_pixels::{
-    Background, Blend, Channel, ChannelLayout, ChromaSubsampling, Density, EncodeOptions, Extend,
-    ExtendWith, Filter, Fit, Format, Image, ImageDescriptor, Kernel, Limits, Modulate, OpenOptions,
-    Overlay, PixelFormat, PixelsError, Position, ResizeOptions, ResolutionUnit, SampleKind, Trim,
+    AffineOptions, Background, Blend, Cancel, Channel, ChannelLayout, ChromaSubsampling, Codec,
+    Density, EncodeOptions, Extend, ExtendWith, Filter, Fit, Format, Image, ImageDescriptor,
+    Interpolator, Kernel, Limits, Modulate, OpenOptions, Overlay, PixelFormat, PixelsError,
+    Position, ResizeOptions, ResolutionUnit, RotateOptions, SampleKind, TiffCodec, Trim,
 };
 
 use crate::Result;
@@ -47,6 +57,13 @@ struct Open {
     options: OpenOptions,
     limits: Limits,
     decode: Decode,
+    /// sharp's `page`: a TIFF's page, or an animation's first frame. Which
+    /// one is known only from the bytes, so it is applied at open.
+    page: u32,
+    /// sharp's `pages`: `None` unset, `Some(None)` all (`-1`), else a count.
+    pages: Option<Option<u32>>,
+    /// sharp's `timeout`: a deadline on each run, from the terminal call.
+    timeout: Option<Duration>,
 }
 
 impl Default for Open {
@@ -55,7 +72,38 @@ impl Default for Open {
             options: OpenOptions::default(),
             limits: Limits::default(),
             decode: Decode::Encoded,
+            page: 0,
+            pages: None,
+            timeout: None,
         }
+    }
+}
+
+impl Open {
+    /// The open options for `bytes`: `page` and `pages` go to a TIFF's page
+    /// or to an animation's frames, by what the leading bytes are.
+    fn options_for(&self, bytes: &[u8]) -> std::result::Result<OpenOptions, PixelsError> {
+        let mut options = self.options;
+        if TiffCodec.probe(bytes) {
+            if matches!(self.pages, Some(count) if count != Some(1)) {
+                return Err(PixelsError::unsupported(
+                    "a multi-page TIFF is read one page at a time; pass `page` without `pages`",
+                ));
+            }
+            return Ok(options.with_page(self.page));
+        }
+        if let Some(count) = self.pages {
+            // sharp's `animated` is `pages: -1`: more than one frame is animated.
+            if count != Some(1) {
+                options = options.with_animated(true);
+            }
+            return Ok(options.with_frames(self.page, count));
+        }
+        Ok(if self.page > 0 {
+            options.with_frames(self.page, None)
+        } else {
+            options
+        })
     }
 }
 
@@ -99,7 +147,18 @@ enum Step {
         width: u32,
         height: u32,
     },
-    Rotate(i32),
+    Rotate {
+        degrees: f64,
+        background: [u8; 4],
+    },
+    Affine {
+        matrix: [f64; 4],
+        options: AffineOptions,
+    },
+    /// One frame of an animation, as a still.
+    Frame(u32),
+    /// Every frame stacked top to bottom into one still.
+    StackFrames,
     Flip,
     Flop,
     Modulate {
@@ -173,6 +232,72 @@ struct Output {
     options: EncodeOptions,
     xmp: Option<Vec<u8>>,
     density: Option<f64>,
+    /// sharp's `loop` and `delay`, for an animated output.
+    loop_count: Option<u32>,
+    delay: Option<Delay>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Delay {
+    Every(u32),
+    Each(Vec<u32>),
+}
+
+/// The `Cancel` of each running call that has a signal, by the id
+/// `images.js` gave it. One table per agent.
+type Cancels = Rc<RefCell<HashMap<u64, Cancel>>>;
+
+/// Removes a call's entry when the call settles, however it settles.
+struct Filed {
+    cancels: Cancels,
+    id: Option<u64>,
+}
+
+impl Drop for Filed {
+    fn drop(&mut self) {
+        if let Some(id) = self.id {
+            self.cancels.borrow_mut().remove(&id);
+        }
+    }
+}
+
+/// The call's `Cancel`: a deadline if the chain set `timeout`, a flag the
+/// signal can raise if `id` is given, both, or neither. Filed before the
+/// call awaits anything, so an abort right after the call still lands.
+fn file_cancel(
+    cancels: &Cancels,
+    id: Option<&Value>,
+    timeout: Option<Duration>,
+) -> std::result::Result<(Cancel, Filed), OpError> {
+    let id = match id {
+        None | Some(Value::Undefined | Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_number()
+                .filter(|n| n.fract() == 0.0 && *n >= 0.0)
+                .ok_or_else(|| OpError::type_error("an image cancel id must be an integer"))?
+                as u64,
+        ),
+    };
+    let cancel = match (timeout, id) {
+        (Some(timeout), _) => Cancel::after(timeout),
+        (None, Some(_)) => Cancel::new(),
+        (None, None) => Cancel::never(),
+    };
+    if let Some(id) = id {
+        let mut table = cancels.borrow_mut();
+        if table.contains_key(&id) {
+            return Err(OpError::type_error("an image cancel id is already in use"));
+        }
+        table.insert(id, cancel.clone());
+    }
+    Ok((
+        cancel,
+        Filed {
+            cancels: cancels.clone(),
+            id,
+        },
+    ))
 }
 
 /// Registers the `runtime:images` ops.
@@ -181,6 +306,19 @@ pub(crate) fn install(
     fs: Option<Arc<dyn FileSystem>>,
     spawner: Option<Arc<dyn TaskSpawner>>,
 ) -> Result<()> {
+    let cancels: Cancels = Rc::default();
+    {
+        let cancels = cancels.clone();
+        engine.register_op(OpDecl::sync("image_cancel", move |args| {
+            if let Some(id) = args.first().and_then(Value::as_number)
+                && let Some(cancel) = cancels.borrow().get(&(id as u64))
+            {
+                cancel.cancel();
+            }
+            Ok(Value::Undefined)
+        }))?;
+    }
+
     // (name, source is a file, what it reports)
     type Report = fn(&Image) -> std::result::Result<Value, PixelsError>;
     for (name, from_file, report) in [
@@ -189,15 +327,18 @@ pub(crate) fn install(
         ("image_stats", false, stats),
         ("image_stats_file", true, stats),
     ] {
-        let (fs, spawner) = (fs.clone(), spawner.clone());
+        let (fs, spawner, cancels) = (fs.clone(), spawner.clone(), cancels.clone());
         let mut decl = OpDecl::r#async(name, move |mut args| {
             let (fs, spawner) = (fs.clone(), spawner.clone());
-            let parsed = parse_common(&mut args, from_file);
+            let parsed = parse_common(&mut args, from_file).and_then(|common| {
+                let filed = file_cancel(&cancels, args.get(3), common.1.timeout)?;
+                Ok((common, filed))
+            });
             Box::pin(async move {
-                let (source, open, steps) = parsed?;
+                let ((source, open, steps), (cancel, _filed)) = parsed?;
                 let bytes = read_source(&fs, source).await?;
                 let result = offload(spawner, move || {
-                    pipeline(bytes, open, steps).and_then(|image| report(&image))
+                    pipeline(bytes, open, steps, &cancel).and_then(|image| report(&image))
                 })
                 .await?;
                 Ok(result.unwrap_or_else(failure))
@@ -215,9 +356,11 @@ pub(crate) fn install(
         ("image_write", false, true),
         ("image_write_file", true, true),
     ] {
-        let (fs, spawner) = (fs.clone(), spawner.clone());
+        let (fs, spawner, cancels) = (fs.clone(), spawner.clone(), cancels.clone());
         let mut decl = OpDecl::r#async(name, move |mut args| {
             let (fs, spawner) = (fs.clone(), spawner.clone());
+            // (source, open, steps, output, [destination,] cancel id)
+            let cancel_at = if to_file { 5 } else { 4 };
             let parsed = parse_common(&mut args, from_file).and_then(|common| {
                 let output = parse_output(args.get(3))?;
                 let dest = if to_file {
@@ -225,12 +368,14 @@ pub(crate) fn install(
                 } else {
                     None
                 };
-                Ok((common, output, dest))
+                let filed = file_cancel(&cancels, args.get(cancel_at), common.1.timeout)?;
+                Ok((common, output, dest, filed))
             });
             Box::pin(async move {
-                let ((source, open, steps), output, dest) = parsed?;
+                let ((source, open, steps), output, dest, (cancel, _filed)) = parsed?;
                 let bytes = read_source(&fs, source).await?;
-                let encoded = offload(spawner, move || encode(bytes, open, steps, output)).await?;
+                let encoded =
+                    offload(spawner, move || encode(bytes, open, steps, output, &cancel)).await?;
                 let encoded = match encoded {
                     Ok(encoded) => encoded,
                     Err(error) => return Ok(failure(error)),
@@ -278,13 +423,20 @@ async fn read_source(
 
 /// Opens `bytes` and applies `steps`. Errors are carried to the terminal by
 /// Pixels itself, so only opening can fail here.
+///
+/// `cancel` is attached to the image the run starts from, before any step,
+/// because `trim`, `stackFrames` and overlays run work while being applied.
 fn pipeline(
     bytes: Vec<u8>,
     open: Open,
     steps: Vec<Step>,
+    cancel: &Cancel,
 ) -> std::result::Result<Image, PixelsError> {
-    let mut image = match open.decode {
-        Decode::Encoded => Image::from_stream_with(Cursor::new(bytes), open.options)?,
+    let image = match open.decode {
+        Decode::Encoded => {
+            let options = open.options_for(&bytes)?;
+            Image::from_stream_with(Cursor::new(bytes), options)?
+        }
         Decode::Raw(layout) => Image::from_raw(layout.descriptor(&open.limits)?, bytes)?,
         Decode::Create { layout, fill } => {
             let descriptor = layout.descriptor(&open.limits)?;
@@ -294,13 +446,18 @@ fn pipeline(
             Image::from_raw(descriptor, pixels)?
         }
     };
+    let mut image = if cancel.is_never() {
+        image
+    } else {
+        image.with_cancel(cancel)
+    };
     for step in steps {
-        image = apply(image, step)?;
+        image = apply(image, step, cancel)?;
     }
     Ok(image)
 }
 
-fn apply(image: Image, step: Step) -> std::result::Result<Image, PixelsError> {
+fn apply(image: Image, step: Step, cancel: &Cancel) -> std::result::Result<Image, PixelsError> {
     Ok(match step {
         Step::Resize {
             width,
@@ -321,7 +478,16 @@ fn apply(image: Image, step: Step) -> std::result::Result<Image, PixelsError> {
             width,
             height,
         } => image.crop(left, top, width, height),
-        Step::Rotate(degrees) => image.rotate(degrees),
+        Step::Rotate {
+            degrees,
+            background,
+        } => image.rotate_with(
+            degrees,
+            RotateOptions::default().with_background(background),
+        ),
+        Step::Affine { matrix, options } => image.affine(matrix, options),
+        Step::Frame(index) => image.frame(index),
+        Step::StackFrames => image.into_strip(),
         Step::Flip => image.flip(),
         Step::Flop => image.flop(),
         Step::Modulate {
@@ -386,11 +552,15 @@ fn apply(image: Image, step: Step) -> std::result::Result<Image, PixelsError> {
             let overlays = overlays
                 .into_iter()
                 .map(|overlay| {
-                    let mut placed =
-                        Overlay::new(pipeline(overlay.bytes, overlay.open, overlay.steps)?)
-                            .with_blend(overlay.blend)
-                            .with_gravity(overlay.gravity)
-                            .tiled(overlay.tile);
+                    let mut placed = Overlay::new(pipeline(
+                        overlay.bytes,
+                        overlay.open,
+                        overlay.steps,
+                        cancel,
+                    )?)
+                    .with_blend(overlay.blend)
+                    .with_gravity(overlay.gravity)
+                    .tiled(overlay.tile);
                     if let Some((x, y)) = overlay.offset {
                         placed = placed.at(x, y);
                     }
@@ -421,8 +591,9 @@ fn encode(
     open: Open,
     steps: Vec<Step>,
     output: Output,
+    cancel: &Cancel,
 ) -> std::result::Result<(Vec<u8>, Format), PixelsError> {
-    let mut image = pipeline(bytes, open, steps)?;
+    let mut image = pipeline(bytes, open, steps, cancel)?;
     let format = match output.format {
         Some(format) => format,
         None => image.metadata()?.format,
@@ -432,6 +603,14 @@ fn encode(
     }
     if let Some(dpi) = output.density {
         image = image.with_density(Some(Density::dpi(dpi)));
+    }
+    if let Some(count) = output.loop_count {
+        image = image.with_loop_count(count);
+    }
+    match output.delay {
+        Some(Delay::Every(ms)) => image = image.with_frame_duration(ms),
+        Some(Delay::Each(ms)) => image = image.with_frame_durations(ms),
+        None => {}
     }
     if format == Format::Raw {
         let layout = image.descriptor()?.pixel.layout();
@@ -495,6 +674,7 @@ fn metadata(image: &Image) -> std::result::Result<Value, PixelsError> {
         field("hasAlpha", Value::Bool(meta.pixel.has_alpha())),
         field("animation", animation),
         field("pages", num(image.pages())),
+        field("frames", num(image.frame_count())),
     ];
     // sharp reports where the trimmed image's origin lies in it: negated.
     if let Some((left, top)) = image.trim_offset() {
@@ -670,7 +850,18 @@ fn parse_open(value: Option<&Value>) -> std::result::Result<Open, OpError> {
             ("toSrgb", Value::Bool(b)) => *options = options.with_to_srgb(*b),
             ("animated", Value::Bool(b)) => *options = options.with_animated(*b),
             ("page", Value::Number(n)) => {
-                *options = options.with_page(n.max(0.0).clamp(0.0, f64::from(u32::MAX)) as u32);
+                open.page = n.clamp(0.0, f64::from(u32::MAX)) as u32;
+            }
+            ("pages", Value::Number(n)) => {
+                open.pages = Some(if *n < 0.0 {
+                    None
+                } else {
+                    Some(n.clamp(1.0, f64::from(u32::MAX)) as u32)
+                });
+            }
+            // A deadline past what a `Duration` holds is no deadline.
+            ("timeout", Value::Number(ms)) if *ms > 0.0 => {
+                open.timeout = Duration::try_from_secs_f64(ms / 1000.0).ok();
             }
             ("raw", Value::Object(raw)) => open.decode = Decode::Raw(parse_layout(raw, "raw")?),
             ("create", Value::Object(create)) => {
@@ -781,7 +972,48 @@ fn parse_step(value: &Value) -> std::result::Result<Step, OpError> {
             width: int(3),
             height: int(4),
         },
-        "rotate" => Step::Rotate(num(1) as i32),
+        "rotate" => {
+            let degrees = num(1);
+            if !degrees.is_finite() {
+                return Err(OpError::range_error("rotate takes a finite angle"));
+            }
+            Step::Rotate {
+                degrees,
+                background: rgba(parts.get(2)).unwrap_or([0, 0, 0, 255]),
+            }
+        }
+        "affine" => {
+            let matrix = match parts.get(1) {
+                Some(Value::Array(items)) if items.len() == 4 => {
+                    let n = |i: usize| items[i].as_number().filter(|n| n.is_finite());
+                    match (n(0), n(1), n(2), n(3)) {
+                        (Some(a), Some(b), Some(c), Some(d)) => [a, b, c, d],
+                        _ => return Err(OpError::type_error("affine takes four finite numbers")),
+                    }
+                }
+                _ => return Err(OpError::type_error("affine takes four finite numbers")),
+            };
+            let interpolator = match parts.get(7).and_then(Value::as_str).unwrap_or("bicubic") {
+                "nearest" => Interpolator::Nearest,
+                "bilinear" => Interpolator::Bilinear,
+                "bicubic" => Interpolator::Bicubic,
+                other => {
+                    return Err(OpError::type_error(format!(
+                        "unknown interpolator {other:?}: nearest, bilinear or bicubic"
+                    )));
+                }
+            };
+            Step::Affine {
+                matrix,
+                options: AffineOptions::default()
+                    .with_background(rgba(parts.get(2)).unwrap_or([0, 0, 0, 255]))
+                    .with_input_offset(num(3), num(4))
+                    .with_output_offset(num(5), num(6))
+                    .with_interpolator(interpolator),
+            }
+        }
+        "frame" => Step::Frame(int(1)),
+        "stackFrames" => Step::StackFrames,
         "flip" => Step::Flip,
         "flop" => Step::Flop,
         "modulate" => Step::Modulate {
@@ -1127,6 +1359,36 @@ fn parse_output(value: Option<&Value>) -> std::result::Result<Output, OpError> {
                     }
                 });
             }
+            ("interFrameMaxError", Value::Number(n)) => {
+                *options = options
+                    .with_inter_frame_max_error(*n as f32)
+                    .map_err(invalid)?;
+            }
+            ("interPaletteMaxError", Value::Number(n)) => {
+                *options = options
+                    .with_inter_palette_max_error(*n as f32)
+                    .map_err(invalid)?;
+            }
+            ("keepDuplicateFrames", Value::Bool(b)) => {
+                *options = options.with_keep_duplicate_frames(*b);
+            }
+            ("loop", Value::Number(n)) => {
+                output.loop_count = Some(n.clamp(0.0, f64::from(u32::MAX)) as u32);
+            }
+            ("delay", Value::Number(ms)) => {
+                output.delay = Some(Delay::Every(ms.clamp(0.0, f64::from(u32::MAX)) as u32));
+            }
+            ("delay", Value::Array(each)) => {
+                output.delay = Some(Delay::Each(
+                    each.iter()
+                        .map(|v| {
+                            v.as_number()
+                                .map(|ms| ms.clamp(0.0, f64::from(u32::MAX)) as u32)
+                                .ok_or_else(|| OpError::type_error("a delay is a number"))
+                        })
+                        .collect::<std::result::Result<_, _>>()?,
+                ));
+            }
             ("keepExif", Value::Bool(b)) => *options = options.with_keep_exif(*b),
             ("keepXmp", Value::Bool(b)) => *options = options.with_keep_xmp(*b),
             ("xmp", Value::Bytes(bytes)) => output.xmp = Some(bytes.clone()),
@@ -1174,24 +1436,48 @@ pub(crate) fn fuzz_decode(bytes: &[u8]) {
     // anything is allocated, which keeps every iteration cheap; the refusal at
     // the header is itself what the limit exists for.
     let limits = Limits::default().with_max_pixels(1 << 16);
-    let open = Open {
-        options: OpenOptions::default().with_limits(limits),
-        limits,
-        decode: Decode::Encoded,
-    };
-    let Ok(image) = pipeline(bytes.to_vec(), open, Vec::new()) else {
-        return;
-    };
-    let _ = metadata(&image);
-    let _ = stats(&image);
-    if let Ok(meta) = image.metadata() {
-        let _ = image.output(meta.format, EncodeOptions::default()).bytes();
+    // Few frames, so an animation is walked and re-encoded whole every
+    // iteration without one input costing the run.
+    let limits = limits.with_max_frames(8);
+    for animated in [false, true] {
+        let open = Open {
+            options: OpenOptions::default()
+                .with_limits(limits)
+                .with_animated(animated),
+            limits,
+            ..Open::default()
+        };
+        let Ok(image) = pipeline(bytes.to_vec(), open, Vec::new(), &Cancel::never()) else {
+            continue;
+        };
+        let _ = metadata(&image);
+        let _ = stats(&image);
+        if let Ok(meta) = image.metadata() {
+            let _ = image.output(meta.format, EncodeOptions::default()).bytes();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(
+        bytes: Vec<u8>,
+        open: Open,
+        steps: Vec<Step>,
+    ) -> std::result::Result<Image, PixelsError> {
+        pipeline(bytes, open, steps, &Cancel::never())
+    }
+
+    fn run_encode(
+        bytes: Vec<u8>,
+        open: Open,
+        steps: Vec<Step>,
+        output: Output,
+    ) -> std::result::Result<(Vec<u8>, Format), PixelsError> {
+        encode(bytes, open, steps, output, &Cancel::never())
+    }
 
     fn png(width: u32, height: u32) -> Vec<u8> {
         let pixels = vec![200_u8; (width * height * 4) as usize];
@@ -1250,7 +1536,10 @@ mod tests {
         );
         assert_eq!(
             step(vec![s("rotate"), Value::Number(270.0)]),
-            Step::Rotate(270)
+            Step::Rotate {
+                degrees: 270.0,
+                background: [0, 0, 0, 255],
+            }
         );
         assert_eq!(step(vec![s("grayscale")]), Step::Grayscale);
         assert_eq!(
@@ -1400,26 +1689,26 @@ mod tests {
             Step::RemoveAlpha,
         ];
         for step in steps {
-            let out = pipeline(image.clone(), Open::default(), vec![step.clone()]);
+            let out = run(image.clone(), Open::default(), vec![step.clone()]);
             assert!(out.is_ok(), "{step:?}");
         }
     }
 
     #[test]
     fn pages_defaults_to_one() {
-        let image = pipeline(png(4, 4), Open::default(), vec![]).unwrap();
+        let image = run(png(4, 4), Open::default(), vec![]).unwrap();
         assert_eq!(image.pages(), 1);
         let open = parse_open(Some(&Value::Object(vec![(
             "page".to_string(),
             Value::Number(1.0),
         )])))
         .unwrap();
-        assert!(pipeline(png(4, 4), open, vec![]).is_err());
+        assert!(run(png(4, 4), open, vec![]).is_err());
     }
 
     #[test]
     fn resizes_with_one_side_given() {
-        let (out, _) = encode(
+        let (out, _) = run_encode(
             png(40, 20),
             Open::default(),
             vec![step(vec![
@@ -1439,13 +1728,13 @@ mod tests {
 
     #[test]
     fn grayscale_keeps_alpha() {
-        let image = pipeline(png(4, 4), Open::default(), vec![Step::Grayscale]).unwrap();
+        let image = run(png(4, 4), Open::default(), vec![Step::Grayscale]).unwrap();
         assert_eq!(image.metadata().unwrap().pixel, PixelFormat::GrayA8);
     }
 
     #[test]
     fn failures_carry_the_stable_code() {
-        let error = encode(
+        let error = run_encode(
             b"not an image".to_vec(),
             Open::default(),
             vec![],
@@ -1602,7 +1891,7 @@ mod tests {
 
     #[test]
     fn extend_trim_and_composite_apply() {
-        let image = pipeline(
+        let image = run(
             png(4, 4),
             Open::default(),
             vec![Step::Extend {
@@ -1619,7 +1908,7 @@ mod tests {
             ),
             (10, 8)
         );
-        let bordered = encode(
+        let bordered = run_encode(
             png(4, 4),
             Open::default(),
             vec![Step::Extend {
@@ -1631,7 +1920,7 @@ mod tests {
         )
         .unwrap()
         .0;
-        let trimmed = pipeline(
+        let trimmed = run(
             bordered,
             Open::default(),
             vec![Step::Trim {
@@ -1643,7 +1932,7 @@ mod tests {
         .unwrap();
         assert_eq!(trimmed.metadata().unwrap().width, 4);
         assert_eq!(trimmed.trim_offset(), Some((2, 2)));
-        let composed = pipeline(
+        let composed = run(
             png(8, 8),
             Open::default(),
             vec![Step::Composite(vec![OverlayStep {
@@ -1662,7 +1951,7 @@ mod tests {
 
     #[test]
     fn metadata_and_stats_report_sharp_fields() {
-        let image = pipeline(png(4, 4), Open::default(), vec![]).unwrap();
+        let image = run(png(4, 4), Open::default(), vec![]).unwrap();
         let Value::Object(fields) = metadata(&image).unwrap() else {
             panic!()
         };
@@ -1714,14 +2003,18 @@ mod tests {
             ..Output::default()
         };
         let pixels = vec![1, 2, 3, 4, 5, 6];
-        let (out, format) = encode(pixels.clone(), open.clone(), vec![], output.clone()).unwrap();
+        let (out, format) =
+            run_encode(pixels.clone(), open.clone(), vec![], output.clone()).unwrap();
         assert_eq!((out, format), (pixels, Format::Raw));
         // Widened on the way out: two bytes a sample.
         let wide = Output {
             depth: Some(SampleKind::U16),
             ..output
         };
-        assert_eq!(encode(vec![9; 6], open, vec![], wide).unwrap().0.len(), 12);
+        assert_eq!(
+            run_encode(vec![9; 6], open, vec![], wide).unwrap().0.len(),
+            12
+        );
         assert!(parse_open(Some(&raw(2.0, 1.0, 5.0, "uchar"))).is_err());
         assert!(parse_open(Some(&raw(0.0, 1.0, 1.0, "uchar"))).is_err());
         assert!(parse_open(Some(&raw(2.0, 1.0, 1.0, "double"))).is_err());
@@ -1746,7 +2039,7 @@ mod tests {
             ]),
         )])))
         .unwrap();
-        let canvas = encode(
+        let canvas = run_encode(
             Vec::new(),
             create,
             vec![],
@@ -1762,7 +2055,7 @@ mod tests {
         // The limit applies to a raw source, as it does at a file's header.
         let mut limited = parse_open(Some(&raw(2.0, 2.0, 1.0, "uchar"))).unwrap();
         limited.limits = Limits::default().with_max_pixels(3);
-        let error = pipeline(vec![0; 4], limited, vec![]).unwrap_err();
+        let error = run(vec![0; 4], limited, vec![]).unwrap_err();
         assert_eq!(error.code().as_str(), "limit_exceeded");
     }
 
@@ -1782,7 +2075,7 @@ mod tests {
         ));
         assert!(convolve(2.0, 1.0, vec![1.0, 1.0]).is_err());
         assert!(convolve(3.0, 3.0, vec![1.0; 4]).is_err());
-        let image = pipeline(
+        let image = run(
             png(4, 4),
             Open::default(),
             vec![convolve(3.0, 3.0, vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]).unwrap()],
@@ -1798,9 +2091,318 @@ mod tests {
             Value::Number(100.0),
         )])))
         .unwrap();
-        let error = pipeline(png(20, 20), open, vec![])
+        let error = run(png(20, 20), open, vec![])
             .and_then(|i| i.metadata())
             .unwrap_err();
         assert_eq!(error.code().as_str(), "limit_exceeded");
+    }
+
+    /// Two 8x8 frames, 100 and 200 ms, looping forever.
+    const ANIMATED_GIF: &[u8] =
+        include_bytes!("../../runtime-cli/tests/fixtures/images/animated.gif");
+
+    fn animated() -> Open {
+        parse_open(Some(&object(vec![("animated", Value::Bool(true))]))).unwrap()
+    }
+
+    #[test]
+    fn parses_rotate_affine_and_frame_steps() {
+        assert_eq!(
+            step(vec![
+                s("rotate"),
+                Value::Number(30.5),
+                rgba_value([1, 2, 3, 4])
+            ]),
+            Step::Rotate {
+                degrees: 30.5,
+                background: [1, 2, 3, 4],
+            }
+        );
+        let Step::Affine { matrix, options } = step(vec![
+            s("affine"),
+            Value::Array(
+                vec![2.0, 0.5, 0.0, 1.0]
+                    .into_iter()
+                    .map(Value::Number)
+                    .collect(),
+            ),
+            Value::Null,
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::Number(3.0),
+            Value::Number(4.0),
+            s("nearest"),
+        ]) else {
+            panic!("not affine")
+        };
+        assert_eq!(matrix, [2.0, 0.5, 0.0, 1.0]);
+        assert_eq!(options.background(), [0, 0, 0, 255]);
+        assert_eq!(options.input_offset(), (1.0, 2.0));
+        assert_eq!(options.output_offset(), (3.0, 4.0));
+        assert_eq!(options.interpolator(), Interpolator::Nearest);
+        assert_eq!(step(vec![s("frame"), Value::Number(3.0)]), Step::Frame(3));
+        assert_eq!(step(vec![s("stackFrames")]), Step::StackFrames);
+
+        for bad in [
+            vec![s("rotate"), Value::Number(f64::NAN)],
+            vec![s("affine"), Value::Array(vec![Value::Number(1.0)])],
+            vec![
+                s("affine"),
+                Value::Array(vec![Value::Number(1.0); 4]),
+                Value::Null,
+                Value::Number(0.0),
+                Value::Number(0.0),
+                Value::Number(0.0),
+                Value::Number(0.0),
+                s("nohalo"),
+            ],
+        ] {
+            assert!(parse_step(&Value::Array(bad)).is_err());
+        }
+    }
+
+    fn rgba_value(c: [u8; 4]) -> Value {
+        Value::Array(c.iter().map(|&b| Value::Number(f64::from(b))).collect())
+    }
+
+    #[test]
+    fn rotation_by_any_angle_and_affine_apply() {
+        let rotated = run(
+            png(20, 10),
+            Open::default(),
+            vec![step(vec![s("rotate"), Value::Number(90.0)])],
+        )
+        .and_then(|i| i.descriptor())
+        .unwrap();
+        assert_eq!(
+            (rotated.width, rotated.height),
+            (10, 20),
+            "quarter turn is exact"
+        );
+
+        let tilted = run(
+            png(20, 20),
+            Open::default(),
+            vec![step(vec![s("rotate"), Value::Number(45.0)])],
+        )
+        .and_then(|i| i.descriptor())
+        .unwrap();
+        assert!(
+            tilted.width > 20 && tilted.width <= 29,
+            "bounding box: {}",
+            tilted.width
+        );
+
+        let stretched = run(
+            png(20, 10),
+            Open::default(),
+            vec![step(vec![
+                s("affine"),
+                Value::Array(
+                    vec![2.0, 0.0, 0.0, 1.0]
+                        .into_iter()
+                        .map(Value::Number)
+                        .collect(),
+                ),
+            ])],
+        )
+        .and_then(|i| i.descriptor())
+        .unwrap();
+        assert_eq!((stretched.width, stretched.height), (40, 10));
+    }
+
+    #[test]
+    fn page_and_pages_go_to_frames_or_a_tiff_page() {
+        let parse = |fields: Vec<(&str, Value)>| parse_open(Some(&object(fields))).unwrap();
+        let gif = parse(vec![("page", Value::Number(1.0))])
+            .options_for(ANIMATED_GIF)
+            .unwrap();
+        assert_eq!(
+            (gif.first_frame, gif.frame_count, gif.animated),
+            (1, None, false)
+        );
+
+        let all = parse(vec![("pages", Value::Number(-1.0))])
+            .options_for(ANIMATED_GIF)
+            .unwrap();
+        assert_eq!(
+            (all.frame_count, all.animated),
+            (None, true),
+            "-1 is every frame"
+        );
+
+        let one = parse(vec![("pages", Value::Number(1.0))])
+            .options_for(ANIMATED_GIF)
+            .unwrap();
+        assert_eq!((one.frame_count, one.animated), (Some(1), false));
+
+        let tiff = b"II*\0\x08\0\0\0";
+        let page = parse(vec![("page", Value::Number(2.0))])
+            .options_for(tiff)
+            .unwrap();
+        assert_eq!((page.page, page.first_frame), (2, 0));
+        let error = parse(vec![("pages", Value::Number(2.0))])
+            .options_for(tiff)
+            .unwrap_err();
+        assert_eq!(error.code().as_str(), "unsupported");
+    }
+
+    #[test]
+    fn an_animation_is_processed_and_written_frame_by_frame() {
+        let image = run(ANIMATED_GIF.to_vec(), animated(), vec![]).unwrap();
+        assert_eq!(image.frame_count(), 2);
+
+        let output = parse_output(Some(&object(vec![
+            ("format", s("gif")),
+            ("loop", Value::Number(3.0)),
+            (
+                "delay",
+                Value::Array(vec![Value::Number(40.0), Value::Number(60.0)]),
+            ),
+        ])))
+        .unwrap();
+        let (bytes, format) = run_encode(
+            ANIMATED_GIF.to_vec(),
+            animated(),
+            vec![step(vec![
+                s("resize"),
+                Value::Number(4.0),
+                Value::Number(0.0),
+            ])],
+            output,
+        )
+        .unwrap();
+        assert_eq!(format, Format::Gif);
+        let back = run(bytes, Open::default(), vec![]).unwrap();
+        let animation = back.animation().expect("still animated");
+        assert_eq!(animation.frame_count, 2);
+        assert_eq!(animation.loop_count, 3);
+        assert_eq!(animation.frame_durations_ms, vec![40, 60]);
+        assert_eq!(back.descriptor().unwrap().width, 4);
+
+        for format in ["webp", "jxl"] {
+            let output = parse_output(Some(&object(vec![("format", s(format))]))).unwrap();
+            let (bytes, _) = run_encode(ANIMATED_GIF.to_vec(), animated(), vec![], output).unwrap();
+            let back = run(bytes, Open::default(), vec![]).unwrap();
+            assert_eq!(back.animation().map(|a| a.frame_count), Some(2), "{format}");
+        }
+    }
+
+    #[test]
+    fn an_animation_becomes_a_still_only_when_asked() {
+        let png_out = || parse_output(Some(&object(vec![("format", s("png"))]))).unwrap();
+        let error = run_encode(ANIMATED_GIF.to_vec(), animated(), vec![], png_out()).unwrap_err();
+        assert_eq!(error.code().as_str(), "unsupported", "no silent strip");
+
+        let (bytes, _) = run_encode(
+            ANIMATED_GIF.to_vec(),
+            animated(),
+            vec![Step::Frame(1)],
+            png_out(),
+        )
+        .unwrap();
+        let frame = run(bytes, Open::default(), vec![]).unwrap();
+        assert_eq!(frame.descriptor().unwrap().height, 8);
+
+        let (bytes, _) = run_encode(
+            ANIMATED_GIF.to_vec(),
+            animated(),
+            vec![Step::StackFrames],
+            png_out(),
+        )
+        .unwrap();
+        let strip = run(bytes, Open::default(), vec![]).unwrap();
+        let d = strip.descriptor().unwrap();
+        assert_eq!((d.width, d.height), (8, 16));
+
+        let error = run(ANIMATED_GIF.to_vec(), animated(), vec![Step::Frame(2)])
+            .and_then(|i| i.descriptor())
+            .unwrap_err();
+        assert_eq!(error.code().as_str(), "invalid_argument");
+    }
+
+    #[test]
+    fn timing_a_still_is_an_invalid_argument() {
+        let output = parse_output(Some(&object(vec![
+            ("format", s("gif")),
+            ("loop", Value::Number(1.0)),
+        ])))
+        .unwrap();
+        let error = run_encode(png(4, 4), Open::default(), vec![], output).unwrap_err();
+        assert_eq!(error.code().as_str(), "invalid_argument");
+    }
+
+    #[test]
+    fn parses_animated_output_options() {
+        let output = parse_output(Some(&object(vec![
+            ("format", s("gif")),
+            ("delay", Value::Number(70.0)),
+            ("interFrameMaxError", Value::Number(8.0)),
+            ("interPaletteMaxError", Value::Number(10.0)),
+            ("keepDuplicateFrames", Value::Bool(true)),
+        ])))
+        .unwrap();
+        assert_eq!(output.delay, Some(Delay::Every(70)));
+        let expected = EncodeOptions::default()
+            .with_inter_frame_max_error(8.0)
+            .and_then(|o| o.with_inter_palette_max_error(10.0))
+            .unwrap()
+            .with_keep_duplicate_frames(true);
+        assert_eq!(output.options, expected);
+        assert!(
+            parse_output(Some(&object(vec![(
+                "interFrameMaxError",
+                Value::Number(40.0)
+            )])))
+            .is_err()
+        );
+        assert!(
+            parse_output(Some(&object(vec![(
+                "delay",
+                Value::Array(vec![s("soon")])
+            )])))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_call_files_its_cancel_until_it_settles() {
+        let cancels: Cancels = Rc::default();
+        let (cancel, filed) = file_cancel(&cancels, Some(&Value::Number(7.0)), None).unwrap();
+        assert!(!cancel.is_never());
+        assert!(cancels.borrow().contains_key(&7));
+        assert!(
+            file_cancel(&cancels, Some(&Value::Number(7.0)), None).is_err(),
+            "an id in use is refused"
+        );
+        cancels.borrow()[&7].cancel();
+        assert!(cancel.is_cancelled(), "the filed flag is the run's");
+        drop(filed);
+        assert!(cancels.borrow().is_empty(), "removed when the call settles");
+
+        let (never, _) = file_cancel(&cancels, None, None).unwrap();
+        assert!(never.is_never(), "no signal and no timeout costs nothing");
+        assert!(cancels.borrow().is_empty());
+        let (deadline, _) = file_cancel(&cancels, None, Some(Duration::ZERO)).unwrap();
+        assert!(deadline.is_cancelled(), "a passed deadline cancels");
+        assert!(file_cancel(&cancels, Some(&Value::Number(-1.0)), None).is_err());
+    }
+
+    #[test]
+    fn a_cancelled_run_fails_as_cancelled() {
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let error = pipeline(png(64, 64), Open::default(), vec![Step::Blur(4.0)], &cancel)
+            .and_then(|image| image.output(Format::Png, EncodeOptions::default()).bytes())
+            .unwrap_err();
+        assert_eq!(error.code().as_str(), "cancelled");
+
+        let open = parse_open(Some(&object(vec![("timeout", Value::Number(250.0))]))).unwrap();
+        assert_eq!(open.timeout, Some(Duration::from_millis(250)));
+        for unbounded in [f64::INFINITY, 1e300, f64::NAN] {
+            let open =
+                parse_open(Some(&object(vec![("timeout", Value::Number(unbounded))]))).unwrap();
+            assert_eq!(open.timeout, None, "{unbounded}");
+        }
     }
 }
