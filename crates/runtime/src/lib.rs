@@ -49,6 +49,11 @@ mod msgpack;
 mod my_ops;
 mod mysql;
 mod net_ops;
+/// The op-boundary fuzzer's harness (D253): the cargo-fuzz `ops` target, and a
+/// seeded run in this crate's tests. Not public API.
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod op_fuzz;
 pub mod otlp;
 mod pdf_ops;
 mod pg_ops;
@@ -1704,7 +1709,7 @@ mod tests {
 
     /// Serializes V8-touching tests in this binary (see the engine crate's note:
     /// V8's snapshot/isolate global state is not safe under the parallel harness).
-    fn v8_guard() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn v8_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

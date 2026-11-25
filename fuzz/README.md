@@ -25,11 +25,18 @@ committed seed crashes. A real campaign belongs on dedicated infrastructure.
 | `keys` | The hand-written RFC 8410 key DER parsers, and `atob` |
 | `bson` | BSON validation and the element walk the engine's decoder makes, and Decimal128 text, parsed and printed back |
 | `dns` | DNS responses as `resolveDns` reads them: counts, record lengths, compressed-name pointers, and each record type's layout |
+| `ops` | Every op, called with argument lists the input describes — numbers at every edge, BigInts, lone surrogates, huge strings, detached and shared buffers, cycles, deep nesting, throwing getters and proxies. The finding is a Rust panic under an op (`crates/runtime/src/op_fuzz.rs`) |
 
-The JS↔Rust marshaler and the streams are deliberately absent: they need a live
-isolate, and standing V8 up per iteration would cut the iteration rate by orders
-of magnitude and mostly fuzz V8. They are covered by the conformance suite and
-the Rust tests instead.
+`ops` is the one target with a live isolate. Standing V8 up per input would cut
+the rate by orders of magnitude and mostly fuzz V8, so one runtime serves 256
+inputs before it is rebuilt — about 1,900 inputs a second here. Every
+capability is granted and no provider that reaches the host is installed, so a
+gated op gets through its argument checks and finds nothing to act on; the few
+ops that act on the fuzzing process itself are skipped by name. It runs without
+leak detection, which V8's own allocations defeat. The same harness runs a
+seeded few thousand calls in the runtime's ordinary tests
+(`no_op_panics_on_arbitrary_arguments`). The streams are still absent, covered
+by the conformance suite and the Rust tests.
 
 ## Seeds
 

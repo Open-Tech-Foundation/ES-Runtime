@@ -27,7 +27,7 @@ host="$(rustc -vV | awk '/^host: /{print $2}')"
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=(url encoding urlpattern compression serialization yaml keys cbor archive image pdf bson dns json json_edit http_h1_request http_h1_chunked http_h1_response hpack h2_frame h2_server ws_frame)
+  targets=(url encoding urlpattern compression serialization yaml keys cbor archive image pdf bson dns json json_edit http_h1_request http_h1_chunked http_h1_response hpack h2_frame h2_server ws_frame ops)
 fi
 
 for target in "${targets[@]}"; do
@@ -39,8 +39,19 @@ for target in "${targets[@]}"; do
   # means libFuzzer expects it to already exist, and on a fresh checkout — which
   # is every CI run — none of them do.
   mkdir -p "fuzz/corpus/$target"
-  cargo +nightly fuzz run --target "$host" "$target" \
+  # `ops` runs V8, whose own allocations LeakSanitizer reports as leaks: V8
+  # keeps pointers where LSan does not look (the microtask queue's buffer is
+  # the first it finds). That target is after panics and memory errors in the
+  # ops, so it runs without leak detection; the parsers keep it.
+  # Both switches: libFuzzer's per-input check, and ASan's own at exit.
+  extra=()
+  asan="${ASAN_OPTIONS:-}"
+  if [ "$target" = ops ]; then
+    extra=(-detect_leaks=0)
+    asan="detect_leaks=0${asan:+:$asan}"
+  fi
+  ASAN_OPTIONS="$asan" cargo +nightly fuzz run --target "$host" "$target" \
     "fuzz/corpus/$target" "fuzz/seeds/$target" \
-    -- "-max_total_time=$seconds" -rss_limit_mb=4096
+    -- "-max_total_time=$seconds" -rss_limit_mb=4096 "${extra[@]}"
   echo "::endgroup::"
 done

@@ -197,3 +197,10 @@ name = "ws_frame"
 path = "fuzz_targets/ws_frame.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "ops"
+path = "fuzz_targets/ops.rs"
+test = false
+doc = false
+bench = false

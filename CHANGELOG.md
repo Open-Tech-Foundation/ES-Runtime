@@ -24,6 +24,12 @@ namespace) is unstable and may change between minor releases until the API freez
   built-in modules may make. Speed is unchanged: op cost, async crossing,
   isolate start and process startup were measured before and after.
 
+- **The op boundary is fuzzed.** A new cargo-fuzz target, `ops`, calls every op
+  with argument lists the input describes: edge numbers, BigInts, lone
+  surrogates, detached and shared buffers, cycles, deep nesting, throwing
+  getters and proxies. Any Rust panic under an op counts as a finding. A
+  seeded run of the same harness is part of the ordinary test suite.
+
 - **A deeply nested `blob:` URL no longer crashes the process
   (RUSTSEC-2026-0592).** Before 2.5.9, the `url` crate recursed once per
   `blob:` when computing an origin. So `new URL("blob:".repeat(100000) +
