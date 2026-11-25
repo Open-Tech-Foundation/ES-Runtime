@@ -99,3 +99,14 @@ a finding — and what runs is the part that holds for every backend.
 Adding a networked backend needs **no new runtime code** — a driver is JS over
 [`runtime:net`](/api/net). See [Databases](/docs/db) for the guide and
 [Internals](/docs/internals/database) for why it is built this way.
+
+## Errors
+
+A driver's own failures reach the program as the portable codes on the
+[queries page](/api/db/queries#errors), mapped with `mapError` / `asDbError`.
+The driver API itself refuses a malformed driver where it is defined, so the
+mistake surfaces once, at import, rather than at the first query:
+
+| Error | When |
+| --- | --- |
+| `ERR_DB_UNSUPPORTED` | `defineDriver` is given no `name`, no `Dialect`, no `open(url, options)`, or a `pooled` that is not a function; `connect` is given no `driver`, or a value that is not one `defineDriver` made. |

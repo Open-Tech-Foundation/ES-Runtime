@@ -15,7 +15,8 @@ Node.js, Bun, and Deno are general-purpose runtimes. esrun is narrower: a
 secure, standards-first server runtime with deny-by-default permissions.
 Dev tooling lives in [`esdev`](/esdev), never in production.
 
-**Runtimes measured**
+**Runtimes measured** — unless a section names its own versions, as the later
+ones do, each was checked against:
 
 - esrun 0.38.0
 - Node.js 24.21.0 (LTS)
@@ -331,7 +332,7 @@ to misreport Node alone.
 Bun 1.4.2, esrun 0.32.0 (2026-09-26). Cluster/Sentinel/private-CA rows check
 API presence — one server cannot exercise them.
 
-| | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
+| | esrun<br/>`@opentf/esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
 | --- | :---: | :---: | :---: | :---: |
 | Ships with the runtime | <No /> | <No /> | <No /> | <Yes /> |
 | RESP3 negotiated by default | <Yes /> | <Yes /> | <Yes /> | <Yes /> |

@@ -10,13 +10,14 @@ esdev start
 ```
 
 It is [`esdev build`](/esdev/build) on a loop. A dev build differs from a
-release build in four ways and no more: `process.env.NODE_ENV` is
+release build in five ways and no more: `process.env.NODE_ENV` is
 `"development"`, nothing is content-hashed, the browser bundle is built so
-a module can be replaced in place — and it is written under the dev
-directory (`.dev` by default) rather than where `esdev build` deploys.
+a module can be replaced in place — which also turns tree-shaking off, as the
+bundler's dev mode requires ([HMR](/esdev/start/hmr)) — and it is written under
+the dev directory (`.dev` by default) rather than where `esdev build` deploys.
 
 The server it runs gets `RUNTIME_ENV=development` unless your shell sets one,
-so [`environment()`](/api/process#environment-where-the-program-is-deployed)
+so [`environment()`](/api/process#environment--where-the-program-is-deployed)
 reports where it runs; see [The RUNTIME_ENV convention](/docs/deployment/runtime-env).
 
 On a change: rebuild, restart the server if its bundle moved, and patch the

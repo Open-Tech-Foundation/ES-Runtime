@@ -54,8 +54,10 @@ Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
   directory, not the project root.
 - `--allow-net` names hosts, and has been checked against what the service calls
   on its *error* paths too: retries, telemetry, crash reporters.
-- `--allow-read` and `--allow-write` entries are all inside the project root, so
-  none of them is inert.
+- Every `--allow-read` and `--allow-write` entry is one the service needs. Inside
+  the project root an entry narrows the grant; outside it, an entry *adds* that
+  path — a certificate, a log — so name the file rather than its directory where
+  one file is all it reads or writes.
 - A bundled service runs without `--allow-imports`, and its build is held to a
   [dependency policy](/docs/security/dependency-policy).
 - The permission flags precede the script path.

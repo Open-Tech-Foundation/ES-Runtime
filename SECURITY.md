@@ -268,11 +268,12 @@ the environment is an explicit host decision**, and so that secret values resist
 nothing and reaches nothing, so what it tells a caller is a fact about data they
 already hold. Three things about it are security-relevant.
 
-- **A salt is randomness, and randomness is granted.** `password.hash()` draws
-  its salt in JavaScript from `crypto.getRandomValues`, so it needs `Entropy`
-  like every other random byte here — no op helps itself to entropy.
-  `password.verify()` needs **nothing**: the salt is inside the stored string,
-  so a service that only checks passwords is granted nothing at all.
+- **A salt is randomness, and randomness has one source.** `password.hash()`
+  draws its salt in JavaScript from `crypto.getRandomValues` — the host's
+  `Entropy` provider, which no permission gates — like every other random byte
+  here: no op helps itself to entropy, so a deterministic provider seeds all of
+  it. `password.verify()` reads the salt from the stored string. Either works
+  with nothing granted.
 - **The parameters live in the stored hash, not in the configuration.**
   Verification reads the algorithm, cost and salt from the string it is given,
   so raising a default never invalidates existing hashes. `needsRehash()` is how

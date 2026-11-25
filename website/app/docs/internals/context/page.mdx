@@ -174,9 +174,9 @@ cannot see its own transaction opens a second one.
 sampled, never filtered, because losing a value is a correctness bug and possibly
 a security one. Anything that may be sampled and dropped is a different concern
 with opposite requirements, and building the two as one mechanism is what made
-Node's `async_hooks` unfixable. If a diagnostics module lands, it will read a
-trace id from here and nothing will read back the other way: no context value
-will live on a diagnostics record or be reachable through a diagnostics export.
+Node's `async_hooks` unfixable. [`runtime:diagnostics`](/api/diagnostics) reads
+a trace id from here and nothing reads back the other way: no context value
+lives on a diagnostics record or is reachable through a diagnostics export.
 
 **Not `async_hooks`.** There is no per-operation JS callback, and no resource
 object is ever handed to JS. Exposing the raw handle is what pinned objects,

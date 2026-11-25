@@ -83,7 +83,8 @@ cases above it.
 ## Test options and `test.fails`
 
 A test takes options after its body or before it: a number of milliseconds, or
-`{ timeout, retry }`.
+an object — `timeout`, `retry` and `repeats` below, `concurrent`
+([Concurrent tests](#concurrent-tests)) and `tags` ([Tags](#tags)).
 
 ```js
 test("loads", async () => { … }, 5000);
@@ -128,6 +129,17 @@ See [Benchmarks](/esdev/test/bench).
 comment labels the file. `test.tags` in esdev.json defines them and the
 options each gives, `--tags-filter` selects by expression, and
 `matchesTags(tags)` asks the same at run time. See [Tags](/esdev/test/tags).
+
+## Errors
+
+A test fails by throwing, and `runtime:test`'s own failures are plain `Error`s
+whose message names what was expected — so a failure reads the same whichever
+assertion raised it.
+
+| Error | When |
+| --- | --- |
+| `Error` | An assertion or `expect` matcher fails (the message shows the actual and expected values); a test outlives its `timeout` ("the test did not finish within …ms"); a `test.fails` test passes. |
+| `TypeError` | The API is called wrongly: options that are not an object or a number; a `timeout` that is not above zero; a `retry` or `repeats` that is not a whole number; `concurrent` that is not a boolean; a `tags` that is not a name or a list of names; a fixture `scope` other than `"test"`, `"file"` or `"worker"`; `expect.poll` / `waitFor` options that are not milliseconds; an inline snapshot that is not a string; bad `bench` or `clock` arguments. |
 
 ## The test context and `test.extend`
 

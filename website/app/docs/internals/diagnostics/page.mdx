@@ -227,9 +227,8 @@ decision. A record says *what* ran and on what (`name`, plus `file.path` /
 `db.query.text` / `url.full` under `detail`); it does not say which line of your
 code issued it.
 
-The only way to know a line is a JS stack frame, and measurement put that at
-~1.5µs per span even for a single unformatted frame — an order of magnitude more
-than the rest of a span costs. No other runtime provides it either: Deno's
+The only way to know a line is a JS stack frame, and capturing even a single
+unformatted frame costs more than everything else a span does. No other runtime provides it either: Deno's
 auto-instrumented spans carry no `code.filepath`, and OpenTelemetry's own
 convention for auto-instrumentation is a good `name` plus attributes. If it comes
 back it will be a per-subscription flag, so the cost lands on whoever asked.
@@ -240,14 +239,15 @@ attributes a continuation to its turn.
 **`worker`, pool saturation, and `link.traceparent`** — all waiting on a
 scheduler that may never exist.
 
-**OTLP metrics and logs.** Only traces are exported; `metrics()` is readable
-in-process but is not shipped. **Protobuf**, for the same reason as above.
+**Most OTLP metrics, and logs.** Traces are exported, and one metric —
+`http.server.request.duration` (D206, see [Telemetry](/api/cli#telemetry)).
+The rest of `metrics()` — loop lag, GC, CPU, resident memory — is readable
+in-process but not shipped. **Protobuf**, for the same reason as above.
 
-**Memory, CPU and GC.** The runtime reports nothing about its own heap, its CPU
-time or its collections — see the gap named on the
-[loop metrics](#what-it-costs-measured) above, which covers the loop and nothing
-else. Notably, this runtime *enforces* a heap ceiling and gives no way to observe
-approaching it.
+Memory, CPU and collections are readable, not exported: `memoryUsage()`,
+`cpuTime()` and `uptime()` in [`runtime:process`](/api/process) answer for the
+calling agent — `heapLimit - heapUsed` is how close it is to the heap ceiling —
+and `metrics()` adds `gc`, `cpu` and the process's `rss` (D91).
 
 See [D89](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md)
 for the decision record.

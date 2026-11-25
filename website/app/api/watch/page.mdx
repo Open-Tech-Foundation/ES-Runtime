@@ -92,3 +92,19 @@ for await (const { kind, path } of changes) {
   for (const dep of rebuild()) changes.add(dep);
 }
 ```
+
+## Errors
+
+Every path is resolved through the root jail and the `read` list before the
+watcher exists — the way [`runtime:fs`](/api/fs#errors) resolves one — so a path
+that cannot be watched fails `watch()` or `add()` itself, never a watcher that
+silently never fires.
+
+| Error | When |
+| --- | --- |
+| `TypeError` | No path given, or `options` that is not an object. |
+| `DOMException` | name `"NotAllowedError"` — the `read` permission is not granted. |
+| `ERR_PERMISSION_DENIED` | `read` is granted as a list and the path is not on it. |
+| `ERR_JAIL_ESCAPE` | The path resolves outside the project root and every path granted. |
+| `ERR_NOT_FOUND` | The path does not exist. |
+| `Error` | `add()` on a watcher that has been closed. |

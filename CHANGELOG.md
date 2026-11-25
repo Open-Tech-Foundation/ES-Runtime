@@ -20,6 +20,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`connect()` without a driver names all four built-ins** — `sqlite`,
+  `postgres`, `mysql` and `mongodb`; it named two.
+
 - **WASI descriptors do what they were opened with, and seek without a read
   grant.** `fd_seek` and `fd_tell` required `--allow-read`, so a file opened for
   writing could not be positioned; offsets past 2^53 were rounded; and a
@@ -142,6 +145,20 @@ namespace) is unstable and may change between minor releases until the API freez
   second of CPU in one turn now ends with `ERR_ISOLATE_CPU_LIMIT`.
 
 ### Documentation
+
+- **A second docs review, verified against the binary and fixed.** Among the
+  corrections: `password.hash()` and the TOTP secret generators need no
+  permission (they draw randomness as `crypto.getRandomValues` does); `args` and
+  `exit` need nothing; wasm threads run on Workers over a shared `Memory`;
+  `.cjs` loads as an ES module; `new Response(file(path))` does set
+  `Content-Type`; an invalid cookie `expires` is a `RangeError`; `wss:` servers
+  work; `mongodb+srv://` and every built-in statement cache are current; an
+  uncompilable plugin filter is refused; a dev build also disables
+  tree-shaking. `esrun --help` and the CLI page now list `--eval` and the
+  `--otel*` flags; `runtime:system`, `runtime:watch`, `runtime:test` and the
+  driver API gain Errors sections; and an async crossing is about 9 µs, not
+  17–22 µs (`bench/async-crossing.js`). The docs test now also fails on a link to
+  a section a page does not have.
 
 - **Every page is held to the code it describes.** A test now fails CI when any
   page names an error code no source defines, cites a decision that does not

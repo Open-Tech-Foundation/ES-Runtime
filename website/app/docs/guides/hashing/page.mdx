@@ -245,10 +245,9 @@ const key = await crypto.subtle.deriveKey(
 
 <Callout type="tip" title="Hashing needs nothing">
   Hashing reads nothing and reaches nothing, so every function here works under
-  nothing granted. The one exception is `password.hash()`, which draws a random salt
-  and so needs **Entropy** — `password.verify()` needs nothing, because the salt
-  is inside the stored string. A service that only checks passwords is granted
-  nothing at all.
+  nothing granted. `password.hash()` draws a random salt as
+  `crypto.getRandomValues` does, which no permission gates either, and
+  `password.verify()` reads the salt from the stored string.
 </Callout>
 
 ## How this compares
@@ -285,10 +284,10 @@ const key = await crypto.subtle.deriveKey(
 > refuses them.
 
 > **Why the salt comes from JavaScript.** A password hash needs randomness, and
-> randomness here is the Entropy provider's to give. Rather than let a host op
-> help itself, the module calls `crypto.getRandomValues` — so hashing a password
-> needs Entropy because it genuinely needs randomness, and verifying one needs
-> nothing at all.
+> randomness here comes from one place, the host's Entropy provider, which backs
+> `crypto.getRandomValues`. Rather than let a host op help itself to randomness,
+> the module calls `crypto.getRandomValues` — so every random byte a program
+> uses comes from the same source, the one a deterministic test can seed.
 
 See the [API reference](/api/hashing) for every option, and the
 [benchmarks](/docs/benchmarks) for what the encoded and incremental paths cost.

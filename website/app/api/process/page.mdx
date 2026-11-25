@@ -64,7 +64,7 @@ On Windows a variable name is case-insensitive, so `env.PATH` reads the
 variable Windows spells `Path`, and writing or deleting it in any case changes
 that one variable. On Linux and macOS names are exact. The same rule applies to
 [`--allow-env`](/api/cli#scoped-grants) and to a child's
-[`env`](/api/system#new-command-program-options).
+[`env`](/api/system#new-commandprogram-options).
 
 ## environment — where the program is deployed
 
@@ -254,7 +254,8 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 | `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for any other name, and for a second argument. |
 
 `PermissionName` is `"read"`, `"write"`, `"imports"`, `"net"`, `"listen"`,
-`"env"`, `"run"`, `"signals"` — the same words the `--deny-<name>` flags use.
+`"env"`, `"run"`, `"signals"`, `"workers"`, `"diagnostics"`,
+`"diagnostics-detail"` — the same words the `--deny-<name>` flags use.
 Needs no capability, so it answers with everything denied too.
 
 A [scoped grant](/api/cli#scoped-grants) reports `true`: `--allow-env=PORT`

@@ -10,7 +10,8 @@ import { Callout } from "@opentf/afw-docs";
 ### 1. Environment and process globals
 
 In Node.js `process` is ambient. In esrun, `env`, `args`, `cwd` and `exit` are
-imported from `runtime:process`, and reading any of them needs `--allow-env`.
+imported from `runtime:process`; `env` and `cwd()` need `--allow-env`, while
+`args` and `exit` need nothing.
 
 ```js
 // ❌ Node.js

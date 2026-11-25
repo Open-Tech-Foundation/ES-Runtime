@@ -155,7 +155,7 @@ one stretch of the isolate's code, from when it gets its thread until it next
 waits:
 
 ```js
-new Isolate(code, { memory: 32, cpuTime: 50 });
+new Isolate({ source: code }, { memory: 32, cpuTime: 50 });
 ```
 
 A loop that never ends, `for (;;) await null` included, is one turn, so it is

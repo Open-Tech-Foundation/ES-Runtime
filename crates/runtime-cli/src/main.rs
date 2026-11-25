@@ -53,7 +53,8 @@ after it belongs to the script, readable as `args` from runtime:process.
 USAGE:
     esrun [options] <file> [args...]
                                 Run a JavaScript module file
-    esrun -e=<code>             Run an inline module snippet
+    esrun -e=<code>, --eval=<code>
+                                Run an inline module snippet
     esrun -h, --help            Show this help
     esrun -v, -V, --version     Show the version
 
@@ -86,6 +87,12 @@ OPTIONS:
     --no-proxy=<list>           Targets that go direct: domains, IPs, CIDR
                                 blocks, host:port (repeatable). Loopback
                                 always does
+    --otel[=<url>]              Export OpenTelemetry to a collector (bare:
+                                http://localhost:4318). Needs no permission
+    --otel-service=<name>       service.name on what is exported (default: the
+                                entry file's name)
+    --otel-min-duration=<ms>    Drop spans shorter than this before export
+    --otel-sample=<0..1>        Fraction of traces to export (default 1)
 
 Nothing is granted by default: a run reaches what the command line that started
 it named, and nothing else. Widen it in one of two directions, never both, so
@@ -447,6 +454,31 @@ mod tests {
         }
         let after_separator = ["--".to_string(), "--otel=http://x:4318".to_string()];
         assert!(reject_esrun_flags_after_source(&after_separator, "app.js").is_ok());
+    }
+
+    /// The help names every flag the shared parser takes: `--otel*` and
+    /// `--eval` were missing from it, and so from the page copied from it.
+    #[test]
+    fn the_usage_names_every_shared_flag() {
+        for flag in [
+            "--timeout",
+            "--max-heap",
+            "--env-file",
+            "--env-override",
+            "--shutdown-grace",
+            "--tls-ca",
+            "--tls-crl",
+            "--proxy",
+            "--no-proxy",
+            "--otel",
+            "--otel-service",
+            "--otel-min-duration",
+            "--otel-sample",
+        ] {
+            assert!(RunOptions::is_shared_flag(flag), "{flag} is not shared");
+            assert!(USAGE.contains(flag), "--help does not name {flag}");
+        }
+        assert!(USAGE.contains("--eval"), "--help does not name --eval");
     }
 
     /// The help names every permission, from the vocabulary it is part of.

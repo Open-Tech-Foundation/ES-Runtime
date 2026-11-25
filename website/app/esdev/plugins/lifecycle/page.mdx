@@ -101,7 +101,7 @@ Its context is the one every hook gets, with no module in hand:
 
 | | |
 | --- | --- |
-| `ctx.command` | `"build"` or `"start"` |
+| `ctx.command` | `"build"`, `"start"`, `"test"` or `"run"` — as on [every hook](/esdev/plugins/context) |
 | `ctx.platform` | `"browser"` or `"server"` |
 | `ctx.target` | The target being built |
 | `ctx.hot` | `true` in a hot dev build |
@@ -261,10 +261,9 @@ of them on a middling app, to reach the one `.mdx` file you wanted. The filter
 is matched on the host's side, before anything crosses.
 
 A pattern the matcher cannot evaluate — JavaScript's regular expressions are
-larger than what it supports, so lookbehind and backreferences are out — stops
-filtering rather than failing. The hook is then called for everything and your
-own code decides, because excluding modules a plugin was meant to see is the
-expensive way to be wrong.
+larger than what it supports, so lookbehind and backreferences are out — is
+refused where the plugin declares it, with how to rewrite it. Matching it some
+other way would decide, silently, which modules the plugin sees.
 
 `start` and `end` run once for the whole build, with no module in hand, so a
 filter on either is refused rather than ignored.

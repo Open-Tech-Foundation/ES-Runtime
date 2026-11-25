@@ -384,3 +384,116 @@ fn every_flag_on_an_esrun_or_esdev_command_is_one_a_parser_takes() {
     found.dedup();
     fail_if_any("flags no esrun or esdev parser takes", found);
 }
+
+/// A heading's id as the site generates it — checked against the built site:
+/// lowercase; letters, digits, `-` and `_` kept; each space a `-`; anything
+/// else dropped (`mongodb+srv://` is `mongodbsrv`). A repeated id gets `-1`,
+/// `-2`, ….
+fn slug(heading: &str) -> String {
+    // Link text, not the link: `[text](url)` → `text`.
+    let mut text = String::new();
+    let mut rest = heading;
+    while let Some(open) = rest.find('[') {
+        text.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match (after.find("]("), after.find(')')) {
+            (Some(close), Some(end)) if close < end => {
+                text.push_str(&after[..close]);
+                rest = &after[end + 1..];
+            }
+            _ => {
+                text.push('[');
+                rest = after;
+            }
+        }
+    }
+    text.push_str(rest);
+    text.trim()
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() {
+                Some(c.to_lowercase().next().unwrap_or(c))
+            } else if c == ' ' {
+                Some('-')
+            } else if c == '-' || c == '_' {
+                Some(c)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The fragment ids a page has: its headings' slugs, and any `id="…"` it sets.
+fn anchors(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut seen = std::collections::BTreeMap::<String, usize>::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let hashes = line.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+            let base = slug(&line[hashes + 1..]);
+            let n = seen.entry(base.clone()).or_insert(0);
+            out.insert(if *n == 0 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            });
+            *n += 1;
+        }
+    }
+    for (at, _) in text.match_indices("id=\"") {
+        let id: String = text[at + 4..].chars().take_while(|c| *c != '"').collect();
+        out.insert(id);
+    }
+    out
+}
+
+#[test]
+fn every_section_link_reaches_a_heading() {
+    let site = repo().join("website/app");
+    let page_of = |route: &str| site.join(route.trim_start_matches('/')).join("page.mdx");
+    let mut found = Vec::new();
+    for p in files("website/app", &|p| ext(p, &["mdx"])) {
+        let text = std::fs::read_to_string(&p).unwrap();
+        let here = anchors(&text);
+        for (open, close) in [("](", ')'), ("href=\"", '"')] {
+            for (at, _) in text.match_indices(open) {
+                let target: String = text[at + open.len()..]
+                    .chars()
+                    .take_while(|c| *c != close && !c.is_whitespace())
+                    .collect();
+                let Some((path, fragment)) = target.split_once('#') else {
+                    continue;
+                };
+                if fragment.is_empty() || path.starts_with("http") || path.contains('.') {
+                    continue;
+                }
+                let ok = if path.is_empty() {
+                    here.contains(fragment)
+                } else if path.starts_with('/') {
+                    let target_page = page_of(path.trim_end_matches('/'));
+                    match std::fs::read_to_string(&target_page) {
+                        Ok(t) => anchors(&t).contains(fragment),
+                        // A route with no page.mdx is the other test's concern.
+                        Err(_) => true,
+                    }
+                } else {
+                    true
+                };
+                if !ok {
+                    found.push(format!("{}: {target}", rel(&p)));
+                }
+            }
+        }
+    }
+    found.dedup();
+    fail_if_any("links to a section the page does not have", found);
+}

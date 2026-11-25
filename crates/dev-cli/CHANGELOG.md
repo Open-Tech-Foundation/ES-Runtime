@@ -28,6 +28,9 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ### Fixed
 
+- **A test's options error lists every option** — `timeout`, `retry`,
+  `repeats`, `concurrent` and `tags`; it named the first two.
+
 - **A program whose top-level `await` nothing can settle fails instead of
   hanging** — the run is esrun's (D248).
 

@@ -35,8 +35,9 @@ serve(
 | `"on"` without cert/key | `TypeError` |
 | Failed handshake | ends that connection only |
 
-`wss:` WebSocket servers are still a follow-up — see
-[WebSockets](/docs/guides/websocket).
+A `wss:` WebSocket server is `runtime:websocket`'s `serve` with
+`secureTransport: "on"`, or a WebSocket upgraded on an HTTPS server, so one port
+serves `https:` and `wss:` — see [WebSockets](/docs/guides/websocket).
 
 ## HTTP/2
 

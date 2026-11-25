@@ -13,9 +13,9 @@ runs incrementally, encoded output, and passwords.
 
 <Callout type="info" title="Capability: none">
   Hashing reads nothing and reaches nothing, so every function here works under
-  nothing granted. The exception is `password.hash()`, which draws a random salt
-  and so needs **Entropy**; `password.verify()` needs nothing. Status:
-  **Available**.
+  nothing granted — `password.hash()` and the `totp` functions that make
+  secrets included: they draw their randomness as `crypto.getRandomValues` does,
+  and no permission gates that. Status: **Available**.
 </Callout>
 
 ## Import
@@ -148,13 +148,13 @@ if (await password.verify(input, user.hash)) {
 
 Time-based one-time passwords (RFC 6238) for two-factor sign-in (D164).
 
-| Function | Description | Capability |
+| Function | Description | Randomness |
 | --- | --- | --- |
-| `totp.generateSecret()` | A base32 secret of 20 random bytes. | Entropy |
+| `totp.generateSecret()` | A base32 secret of 20 random bytes. | yes |
 | `totp.uri({ secret, issuer, account, algorithm?, digits?, period? })` | The `otpauth://totp/issuer:account?…` URI for a QR code. `issuer` and `account` are required and may not contain `:`. | — |
 | `totp.generate(secret, { algorithm?, digits?, period?, time? })` | The code for `time` (a `Date` or milliseconds; default now). | — |
 | `totp.verify(code, secret, { window?, after?, algorithm?, digits?, period?, time? })` | The time step `code` matched, or `null`. | — |
-| `totp.backupCodes(count?)` | `count` (default 10, at most 100) recovery codes, `xxxxx-xxxxx`, from Crockford's base32 alphabet. | Entropy |
+| `totp.backupCodes(count?)` | `count` (default 10, at most 100) recovery codes, `xxxxx-xxxxx`, from Crockford's base32 alphabet. | yes |
 
 `secret` is a base32 string (any case; spaces and `=` ignored) or bytes, at
 least 16 bytes. The defaults are SHA-1, 6 digits and 30 seconds; `algorithm` may

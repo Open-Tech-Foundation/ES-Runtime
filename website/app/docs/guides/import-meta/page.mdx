@@ -43,7 +43,7 @@ What each runtime puts on `import.meta` when a module runs:
 | --- | --- | --- | --- | --- | --- |
 | `url` | Yes | Yes | Yes | Yes | Yes |
 | `resolve(specifier)` | Yes | Yes | Yes | Yes | Yes |
-| `resolve(specifier, parent)` | No | No — esdev has [`resolve(specifier, from)`](/api/build#resolve-specifier-from) in `runtime:build` | Behind `--experimental-import-meta-resolve` | No | No |
+| `resolve(specifier, parent)` | No | No — esdev has [`resolve(specifier, from)`](/api/build#resolvespecifier-from) in `runtime:build` | Behind `--experimental-import-meta-resolve` | No | No |
 | `dirname` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
 | `filename` | No | No | Yes (20.11, 21.2) | Yes, local modules | Yes |
 | `main` | No | No | Experimental (22.18, 24.2) | Yes | Yes |
@@ -58,7 +58,7 @@ from Vite, and esdev provides two of them in its own form:
 
 | Member | Vite | esdev |
 | --- | --- | --- |
-| `import.meta.env` | `VITE_*` variables, `MODE`, `BASE_URL`, `DEV`, `PROD`, `SSR` | `PUBLIC_*` variables, `MODE`, `DEV`, `PROD` — in [`esdev build`](/esdev/build/project#import-meta-env) output only |
+| `import.meta.env` | `VITE_*` variables, `MODE`, `BASE_URL`, `DEV`, `PROD`, `SSR` | `PUBLIC_*` variables, `MODE`, `DEV`, `PROD` — in [`esdev build`](/esdev/build/project#importmetaenv) output only |
 | `import.meta.hot` | The HMR API | A subset of Vite's, with `signal` and `keep` added — in [`esdev start`](/esdev/start/hmr) bundles only |
 | `import.meta.glob(pattern)` | Imports every file a pattern matches | Not provided |
 
@@ -111,7 +111,7 @@ a run that may not import may not locate a package either. A URL it returns is a
 A tool that has to resolve from somewhere other than its own module — a dev
 server finding the project's copy of a package rather than one nested under
 the tool — does it under esdev, with `resolve(specifier, from)` from
-[`runtime:build`](/api/build#resolve-specifier-from). The production binary
+[`runtime:build`](/api/build#resolvespecifier-from). The production binary
 serves neither that module nor the argument:
 
 ```js
@@ -123,7 +123,7 @@ resolve("@opentf/afw", root);                       // the project's copy, not t
 
 **At build time, in esdev only:**
 
-- `import.meta.env` is replaced in what [`esdev build`](/esdev/build/project#import-meta-env)
+- `import.meta.env` is replaced in what [`esdev build`](/esdev/build/project#importmetaenv)
   writes. In a module run unbundled, with `esdev <file>` or `esdev test`, it is
   `undefined`.
 - `import.meta.hot` exists in the bundles [`esdev start`](/esdev/start/hmr)
@@ -182,7 +182,7 @@ The standard `resolve` resolves from the calling module only. Node has a
 second argument behind a flag; Deno, Bun and esrun do not. Portable code
 resolves from a module that lives where resolution should start. Code that only
 ever runs under esdev, such as a dev server or a build step, can use
-[`resolve(specifier, from)`](/api/build#resolve-specifier-from) from
+[`resolve(specifier, from)`](/api/build#resolvespecifier-from) from
 `runtime:build`.
 
 ### Environment values

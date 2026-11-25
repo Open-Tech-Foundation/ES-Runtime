@@ -39,8 +39,9 @@ export const message = greet("world");
 
 ## What can be imported
 
-An import loads a **module file**: `.js`, `.mjs` or `.cjs`, `.json` with
-`with { type: "json" }`, or `.wasm`. Any other file — `.env`, `config.yaml`,
+An import loads a **module file**: `.js` or `.mjs`, `.json` with
+`with { type: "json" }`, or `.wasm`. A `.cjs` file is accepted but read as an ES
+module — CommonJS in it (`module.exports`, `require`) does not run. Any other file — `.env`, `config.yaml`,
 `notes.txt`, a name with no extension — is refused with
 `ERR_UNKNOWN_FILE_EXTENSION` before it is read, as Node refuses it. Read such
 files with [`runtime:fs`](/api/fs), which `--allow-read` governs.

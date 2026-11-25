@@ -142,7 +142,7 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 ```
 
 Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`,
-`workers` — the same words the `--deny-<name>` and `--allow-<name>` flags take,
+`workers`, `diagnostics`, `diagnostics-detail` — the same words the `--deny-<name>` and `--allow-<name>` flags take,
 and the same words [`new Worker(url, { permissions })`](/docs/internals/workers)
 takes. Any other name throws a `TypeError`.
 

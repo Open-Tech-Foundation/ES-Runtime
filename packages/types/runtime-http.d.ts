@@ -132,7 +132,7 @@ declare module "runtime:http" {
     getSigned(name: string, options: { secrets: CookieSecrets }): string | null;
     /**
      * Sets a cookie whose value is encrypted and authenticated with AES-256-GCM
-     * (D161). `secrets[0]` seals. Draws a random nonce, so it needs Entropy.
+     * (D161). `secrets[0]` seals. Draws a random nonce, as `crypto.getRandomValues` does.
      */
     setSealed(name: string, value: string, options: CookieInit & { secrets: CookieSecrets }): void;
     /**

@@ -63,8 +63,9 @@ case for an internal service.
 
 ## Per connection, trust is only added
 
-`runtime:net`'s `ca`, the drivers' `sslRootCert` and MongoDB's `ca` add a CA for
-one connection. The hostname and validity checks still apply, so a program can
+`runtime:net`'s `ca`, the SQL drivers' `sslRootCert`, MongoDB's `ca` option and
+`tlsCAFile` URL parameter, and the Redis package's `tlsCa` each add a CA for one
+connection. The hostname and validity checks still apply, so a program can
 widen whom one connection trusts but cannot turn verification off. There is no
 option anywhere that skips it.
 

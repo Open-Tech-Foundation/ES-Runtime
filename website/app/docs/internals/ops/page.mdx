@@ -92,7 +92,7 @@ A typed array passed to an op is copied into Rust memory. A byte buffer returned
 from one becomes the `Uint8Array`'s backing store without a copy.
 
 Borrowing the caller's buffer instead was built and measured. It gained nothing
-measurable, because an op worth calling with bytes does per-byte work slower than
-a memory copy: hashing runs at ~0.3 GB/s, a copy at ~30 GB/s. It would also hand
+measurable, because an op worth calling with bytes does per-byte work far slower
+than a memory copy — hashing a buffer costs many times what copying it does. It would also hand
 Rust a view of memory that JavaScript can change during the call, and that
 asynchronous ops outlive.

@@ -23,24 +23,25 @@ import { env, args } from "runtime:process";
 
 ## Built-in modules
 
-| Module | Status | Capability |
+| Module | Status | Permission |
 | --- | --- | --- |
 | [`runtime:context`](/api/context) | Available | **—** |
-| [`runtime:diagnostics`](/api/diagnostics) | Available | DiagnosticsObserve / DiagnosticsDetail |
-| [`runtime:process`](/api/process) | Available | Env / Signals |
-| [`runtime:path`](/api/path) | Available | Env (only to read `cwd()`) |
-| [`runtime:fs`](/api/fs) | Available | FileRead / FileWrite |
-| [`runtime:net`](/api/net) | Available | Net / NetListen |
-| [`runtime:http`](/api/http) | Available | NetListen |
-| [`runtime:websocket`](/api/websocket#server) | Available | NetListen |
+| [`runtime:diagnostics`](/api/diagnostics) | Available | `diagnostics` / `diagnostics-detail` |
+| [`runtime:process`](/api/process) | Available | `env` / `signals` (`args`, `exit` and `permissions` need none) |
+| [`runtime:path`](/api/path) | Available | `env` (only to read `cwd()`) |
+| [`runtime:fs`](/api/fs) | Available | `read` / `write` |
+| [`runtime:net`](/api/net) | Available | `net` / `listen` |
+| [`runtime:http`](/api/http) | Available | `listen` |
+| [`runtime:websocket`](/api/websocket#server) | Available | `listen` |
+| [`runtime:db`](/api/db) | Available | `read` / `write` for a `sqlite:` file; `net` for a network database |
 | [`runtime:serialization`](/api/serialization) | Available | — |
-| [`runtime:hashing`](/api/hashing) | Available | — (Entropy for `password.hash`) |
-| [`runtime:images`](/api/images) | Available | — (FileRead / FileWrite for a `file()`) |
-| [`runtime:pdf`](/api/pdf) | Available | — (FileRead / FileWrite for a `file()`) |
-| [`runtime:archive`](/api/archive) | Available | — (FileRead / FileWrite for a `file()`) |
-| [`runtime:system`](/api/system) | Available | Run |
-| [`runtime:workers`](/api/workers) | Available | FileRead / FileWrite |
-| [`runtime:wasi`](/api/wasi) | Available | — to construct; its file calls need FileRead / FileWrite |
-| [`runtime:build`](/api/build) | Available — **`esdev` only** | FileRead (FileWrite to `write()`) |
+| [`runtime:hashing`](/api/hashing) | Available | — |
+| [`runtime:images`](/api/images) | Available | — (`read` / `write` for a `file()`) |
+| [`runtime:pdf`](/api/pdf) | Available | — (`read` / `write` for a `file()`) |
+| [`runtime:archive`](/api/archive) | Available | — (`read` / `write` for a `file()`) |
+| [`runtime:system`](/api/system) | Available | `run` |
+| [`runtime:workers`](/api/workers) | Available | `workers` (and `imports` for a file entry); durable workers `read` / `write` |
+| [`runtime:wasi`](/api/wasi) | Available | — to construct; its file calls need `read` / `write` |
+| [`runtime:build`](/api/build) | Available — **`esdev` only** | `read` (`write` to `write()`) |
 | [`runtime:test`](/api/test) | Available — **`esdev` only** | — |
-| [`runtime:watch`](/api/watch) | Available — **`esdev` only** | FileRead |
+| [`runtime:watch`](/api/watch) | Available — **`esdev` only** | `read` |

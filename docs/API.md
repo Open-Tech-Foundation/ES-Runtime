@@ -2456,7 +2456,7 @@ session ID, a random nonce, its issue time and its lifetime; nothing is stored.
 
 | Function | Description |
 | --- | --- |
-| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a nonce, so it needs Entropy. |
+| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a random nonce, as `crypto.getRandomValues` does; no permission needed. |
 | `CSRF.verify(token, { secret, sessionId, maxAge?, request?, trustedOrigins? })` | `true` if `token` was issued for `sessionId` under the secret and is younger than both its lifetime and `maxAge` (default 24 hours). |
 
 `secret` is a string, bytes or `Secret` of at least 32 bytes, or an array of them

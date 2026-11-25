@@ -147,7 +147,7 @@ immediate end-of-file.
 
 | Caveat | Detail |
 | --- | --- |
-| No wasm threads in practice | `SharedArrayBuffer`, `Atomics`, and shared `Memory` all work, and threads *validate* — but there are no [Workers](/docs/scope), so nothing can run on a second thread |
+| Threads run on Workers | A shared `Memory` posted to a [`Worker`](/docs/guides/workers) is the same memory in both, so `Atomics` coordinate them — the way the web runs wasm threads. There is no `thread-spawn` import: a module expecting wasi-threads to start its own threads gets none |
 | Streaming compiles buffer | `compileStreaming` / `instantiateStreaming` read the `Response` fully before compiling |
 | No source-phase imports | `import source` is a `SyntaxError` (V8 gates it behind a flag that crashes on the first such import) |
 | WASI file calls block | The syscalls are synchronous, so they occupy the runtime's thread for the call's duration |

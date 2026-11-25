@@ -240,8 +240,6 @@ handler as the body stream erroring with `ERR_TIMED_OUT`.
 serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);
 ```
 
-## Connection limit
-
 ## Trace ids
 
 Every request runs in its own [`runtime:context`](/api/context) root scope with a
@@ -275,6 +273,8 @@ serve({ port: 8080, reusePort: true }, handler);
 ```
 
 A plain bind on a held port is still `ERR_ADDRESS_IN_USE`.
+
+## Connection limit
 
 `maxConnections` caps how many connections are served at once. Unlimited by
 default — the right number follows from your file-descriptor budget and the
@@ -326,8 +326,9 @@ The per-connection limits it multiplies against are fixed:
 
 A `runtime:fs` file is a body too: `new Response(file(path))` sends the file
 without reading it into JavaScript. Sending it needs the `read` permission. A file
-that can't be read is a `500` with an empty body, and the error is reported. No
-`Content-Type` is inferred; set it in the response headers.
+that can't be read is a `500` with an empty body, and the error is reported. The
+`Content-Type` is the file's [`type`](/api/fs) — from its extension — unless the
+response's headers set one.
 
 ```js
 import { file } from "runtime:fs";
@@ -396,7 +397,8 @@ yourself and use `toSetCookieHeaders()`. The API follows Bun's.
 happens when it is serialized or recorded with `set`/`delete`, and covers:
 
 - a name that is not a token;
-- a non-integer `maxAge`, or an invalid `expires`;
+- a non-integer `maxAge` (an `expires` that is not a valid date is a
+  `RangeError` instead — see [Errors](#errors));
 - `;` or a control character in `domain` or `path`;
 - `SameSite=None` or `Partitioned` without `Secure`;
 - a `__Secure-` cookie without `Secure`;
@@ -437,7 +439,7 @@ session ID, a random nonce, its issue time and its lifetime; nothing is stored.
 
 | Function | Description |
 | --- | --- |
-| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a nonce, so it needs Entropy. |
+| `CSRF.generate(secret, { sessionId, expiresIn? })` | A token (86 characters, base64url) for `sessionId`, valid for `expiresIn` milliseconds (default 24 hours). Draws a random nonce, as `crypto.getRandomValues` does; no permission needed. |
 | `CSRF.verify(token, { secret, sessionId, maxAge?, request?, trustedOrigins? })` | `true` if `token` was issued for `sessionId` under the secret and is younger than both its lifetime and `maxAge` (default 24 hours). |
 
 `secret` is a string, bytes or `Secret` of at least 32 bytes, or an array of them

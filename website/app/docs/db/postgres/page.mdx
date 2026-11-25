@@ -96,4 +96,4 @@ connection and waits for it, so the connection stays usable:
 await db.query("SELECT pg_sleep(60)", [], { signal: AbortSignal.timeout(5_000) });
 ```
 
-Every `postgres` option is listed in the [`connect()` reference](/api/db/connection#connect-url-options).
+Every `postgres` option is listed in the [`connect()` reference](/api/db/connection#connecturl-options).

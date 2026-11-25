@@ -7,8 +7,8 @@ description: The WHATWG WebSocket on both sides — a client global and a runtim
 
 esrun ships the classic WHATWG [`WebSocket`](/api/websocket) on both sides: a
 **client** as a global (like `fetch`) and a **server** as the `runtime:websocket`
-module. Both speak `ws:` and `wss:` (client); messages ride the runtime's event
-loop — no extra threads.
+module. Both speak `ws:` and `wss:`; messages ride the runtime's event loop — no
+extra threads.
 
 ## Client
 
@@ -93,8 +93,8 @@ for await (const ws of server) {
 ```
 
 See the [WebSocket benchmarks](/docs/benchmarks#websocket) for fan-out
-throughput. Pub/sub topics are on the roadmap; `wss:` works today by upgrading
-on an HTTPS server, below.
+throughput. Pub/sub topics are on the roadmap. A `wss:` server is `serve` with
+`secureTransport: "on"`, or an upgrade on an HTTPS server, below.
 
 ### One port for your API and your sockets
 

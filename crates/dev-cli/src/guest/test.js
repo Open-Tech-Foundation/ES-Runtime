@@ -502,7 +502,9 @@ function optionsOf(name, value) {
   if (value === undefined) return {};
   if (typeof value === "number") value = { timeout: value };
   if (value === null || typeof value !== "object") {
-    throw new TypeError(`${where}: options are { timeout, retry }, or a number of milliseconds`);
+    throw new TypeError(
+      `${where}: options are { timeout, retry, repeats, concurrent, tags }, or a number of milliseconds`,
+    );
   }
   const { timeout, retry, repeats } = value;
   const tags = tagsOf(where, value.tags);

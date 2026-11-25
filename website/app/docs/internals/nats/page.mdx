@@ -137,8 +137,7 @@ and the right answer to it is a fresh connection, not the end of the client.
 Core NATS has no goodbye, so whatever is still queued when `close()` is called is
 everything the server will ever get. nats.js flushes before it closes, and code
 written against it publishes without awaiting and then closes; tearing the
-socket down first delivered none of it (0 of 2 000, measured against a real
-server). `close()` gives the queue up to 5 s, then aborts a write that is stuck
+socket down first delivered none of it. `close()` gives the queue up to 5 s, then aborts a write that is stuck
 behind a server that stopped reading.
 
 The client reads the socket eagerly, so the server never sees a slow reader and

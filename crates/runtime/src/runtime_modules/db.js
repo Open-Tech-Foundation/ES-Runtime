@@ -1742,7 +1742,7 @@ async function connect(url, options = {}) {
   if (!(driver instanceof Driver)) {
     throw dbError(
       driver === undefined
-        ? 'a driver is required: connect(url, { driver }). The built-ins are `sqlite` and `postgres` from "runtime:db"; others are packages, e.g. `import { driver } from "@opentf/esrun-redis"`.'
+        ? 'a driver is required: connect(url, { driver }). The built-ins are `sqlite`, `postgres`, `mysql` and `mongodb` from "runtime:db"; others are packages, e.g. `import { driver } from "@opentf/esrun-redis"`.'
         : "options.driver must be a driver from defineDriver()",
       DbErrorCode.Unsupported,
     );

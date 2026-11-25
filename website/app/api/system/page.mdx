@@ -103,6 +103,21 @@ return new Response(child.stdout);
 await new Command("slow-tool", { timeout: 30_000, killSignal: "SIGKILL" }).output();
 ```
 
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | A missing or non-string program name; `args` not an array, or an element that is not a string, number or boolean; `cwd` neither a string nor a `file:` URL; `env` not an object of strings; an unknown option or `stdio` mode; `signal` not an `AbortSignal`; a `timeout` that is not a positive number; a stdin write of anything but a string or bytes. |
+| `DOMException` | name `"NotAllowedError"` — the `run` permission is not granted. |
+| `ERR_PERMISSION_DENIED` | `run` is granted as a list and the program is not on it (matched by its real path). |
+| `Error` | On Windows, a `.bat` or `.cmd` file, which only the command interpreter could run. |
+| `ERR_NOT_FOUND` | The program does not resolve to a file. |
+| `ERR_MAX_BUFFER` | `output()`: the child wrote more than `maxBuffer`; it is killed first. |
+| `DOMException` | name `"TimeoutError"` — `output()` after `timeout` elapsed; the child is killed. |
+| `ERR_FOREIGN_HANDLE` | A child handle this agent did not start. |
+
+A child that exits with a non-zero status is not an error: `status` reports it.
+
 ## Not provided
 
 | Absent | Why |

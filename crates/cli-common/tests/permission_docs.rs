@@ -14,13 +14,15 @@ fn repo() -> PathBuf {
 }
 
 /// Every page that lists the permission names for a reader.
-const PAGES: [&str; 6] = [
+const PAGES: [&str; 8] = [
     "README.md",
     "SECURITY.md",
     "docs/API.md",
     "docs/ARCHITECTURE.md",
     "website/app/docs/security/permissions/page.mdx",
     "website/app/api/cli/page.mdx",
+    "website/app/docs/process/page.mdx",
+    "website/app/api/process/page.mdx",
 ];
 
 fn names() -> Vec<&'static str> {
@@ -42,6 +44,7 @@ fn every_page_lists_every_permission_name() {
         for name in names() {
             // ARCHITECTURE writes the list as one code span, `read, write, …`.
             let listed = text.contains(&format!("`{name}`"))
+                || text.contains(&format!("`\"{name}\"`"))
                 || text.contains(&format!("--allow-{name}`"))
                 || text.contains(&format!("`{name},"))
                 || text.contains(&format!(", {name},"))

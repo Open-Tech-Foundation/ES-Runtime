@@ -20,14 +20,15 @@ by default, and `esrun` grants none.
 
 ```text
 esrun <file>                Run a JavaScript module file
-esrun -e=<code>             Run an inline module snippet
+esrun -e=<code>, --eval=<code>
+                            Run an inline module snippet
 esrun --allow-<name>        Grant one capability; repeatable
 esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the eleven)
 esrun --allow-all, -A       Grant everything (unsandboxed)
 esrun --deny-<name>         Take one back; requires --allow-all; repeatable
 esrun --deny-all            Grant nothing — the default, said outright
 esrun -t=<ms>, --timeout=<ms>
-                            Stop execution after <ms> ms (watchdog)
+                            Stop execution after <ms> ms and exit 124
 esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as the
                             ceiling its workers inherit (default: from the host)
 esrun --env-file=<path>     Load env vars from a .env file
@@ -40,6 +41,12 @@ esrun --tls-ca=<file|bundled>
 esrun --tls-crl=<file>      Check servers against these CRLs; repeatable
 esrun --proxy=<url>         Send fetch, WebSocket and --otel through a proxy
 esrun --no-proxy=<list>     Targets that go direct; repeatable
+esrun --otel[=<url>]        Export OpenTelemetry to a collector (bare:
+                            http://localhost:4318)
+esrun --otel-service=<name> service.name on exported telemetry
+esrun --otel-min-duration=<ms>
+                            Drop spans shorter than this before export
+esrun --otel-sample=<0..1>  Fraction of traces to export (default 1)
 esrun -h, --help            Show this help
 esrun -v, --version         Show the version
 ```
@@ -82,7 +89,7 @@ script that genuinely wants a flag esrun also knows.
 | `--tls-ca=<file\|bundled>` | The certificate authorities every TLS client trusts; repeatable. Default: the bundled Mozilla roots. See [TLS trust](#tls-trust). |
 | `--tls-crl=<file>` | CRLs every TLS client checks servers against; repeatable. See [TLS trust](#tls-trust). |
 | `--proxy=<url>` | The outbound proxy for `fetch`, `WebSocket` and `--otel`. See [Outbound proxy](#outbound-proxy). |
-| `--no-proxy=<list>` | Targets that go direct; requires `--proxy`; repeatable. See [Outbound proxy](#outbound-proxy). |
+| `--no-proxy=<list>` | Targets that go direct; repeatable. In `esrun` it requires `--proxy`; `esdev`, which also reads the proxy environment variables, takes it alone (`--no-proxy=*` turns proxying off). See [Outbound proxy](#outbound-proxy). |
 | `--otel[=<url>]` | Export OpenTelemetry traces to a collector. Bare, it uses `http://localhost:4318`. The **runtime** exports — your program needs no capability and no code. See [Telemetry](#telemetry). |
 | `--otel-service=<name>` | `service.name` on exported telemetry. Default: the entry file's name. |
 | `--otel-min-duration=<ms>` | Drop spans shorter than this before exporting. |

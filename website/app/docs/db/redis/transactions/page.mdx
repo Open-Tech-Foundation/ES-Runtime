@@ -19,9 +19,9 @@ const users = await p.exec();
 ```
 
 The reason is arithmetic rather than taste: a Redis command's whole cost is a
-round trip, so a loop of `await`s spends its time on the network. Measured on
-loopback, where a round trip is nearly free, **500 `INCR`s took 102 ms one at a
-time and 6 ms pipelined**.
+round trip, so a loop of `await`s spends its time on the network — even on
+loopback, where a round trip is nearly free, the pipelined form is many times
+faster (`bench/db/redis/run.sh` measures the gap).
 
 A pipeline is **not** a transaction — another client's commands may land among
 yours, and one failing does not stop the rest. Failed commands come back as

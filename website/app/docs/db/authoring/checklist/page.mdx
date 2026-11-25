@@ -13,7 +13,7 @@ wrote it:
 - `sql\`\`` binds every interpolation as a parameter, rendering placeholders
   through the backend's own `Dialect` — one template targets `$1`, `?` and
   `:name` backends unchanged.
-- `Dialect.placeholder(i)` and `quoteIdent(name)` are how you build SQL for a
+- A dialect's `placeholder(i)` and `quoteIdent(name)` are how you build SQL for a
   backend you were not written for. Quote identifiers with `quoteIdent`; never
   interpolate a name.
 - `transaction(fn)` commits on return and rolls back on throw, and **nests via
@@ -52,7 +52,7 @@ it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
 
 ## A checklist
 
-- [ ] `defineDriver`, exported as your package's default — that *is* the API
+- [ ] `defineDriver`, exported as `driver` and nothing as the default, as every driver package does — that *is* the API
 - [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
 - [ ] `supports` states what you take and what you have — `queryText`, `queryAst`, `transactions`, plus any capability of your own an ORM should be able to branch on
 - [ ] Rows as bytes if that is what you were handed, as records if they are already JavaScript — never encode objects to satisfy the byte layout

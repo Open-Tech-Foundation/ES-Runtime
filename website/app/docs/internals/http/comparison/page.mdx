@@ -29,8 +29,8 @@ The HTTP/2 rows are read off the wire from each server's `SETTINGS` frame, which
 is what it tells every client its limits are. Node and Bun advertise unlimited
 concurrent streams; Deno and ES-Runtime cap them.
 
-None of this makes one runtime better than another — Node's 5s keep-alive is
-more aggressive than ours, and its 88s header bound is looser. It is here so
+None of this makes one runtime better than another — Node's keep-alive (5s by
+default, measured above as 6.0s with the probe's polling) is more aggressive than ours, and its 88s header bound is looser. It is here so
 that a number in this documentation can be checked rather than believed.
 
 ## See also
