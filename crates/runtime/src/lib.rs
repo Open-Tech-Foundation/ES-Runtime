@@ -3006,6 +3006,11 @@ mod tests {
     }
 
     impl TestWorkerHost {
+        /// What `recv` has not handed out yet.
+        fn unread(&self) -> usize {
+            self.inbox.lock().expect("inbox").len()
+        }
+
         fn calls(&self) -> Vec<String> {
             self.calls.lock().expect("calls").clone()
         }
@@ -3228,6 +3233,58 @@ mod tests {
         assert_eq!(
             rt.eval("globalThis.__seen").unwrap(),
             Value::String("RangeError|out of range|file:///w.mjs|2|9|true".into())
+        );
+    }
+
+    /// An isolate that fails — its CPU or memory limit, a module that throws —
+    /// still reads on to the host's `Closed`. That read is what retires the
+    /// agent on the host; an `Isolate` that stopped at the failure left its
+    /// entry registered for good, and ten thousand such failures (the pooled
+    /// host's ceiling) refused every later `new Isolate()`. Found by the
+    /// isolates soak scenario.
+    #[test]
+    fn a_failed_isolate_reads_on_to_its_close() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        host.queue(WorkerIncoming::Error {
+            error: UncaughtError::new(
+                "ERR_ISOLATE_CPU_LIMIT",
+                "isolate terminated: a turn used more than its 50 ms of CPU",
+                "",
+            ),
+        });
+        host.queue(WorkerIncoming::Closed);
+        let mut rt = Runtime::new(
+            Box::new(V8Engine::new(es_runtime_common::Limits::default()).expect("engine")),
+            HostProviders::new(
+                Arc::new(FixedClock {
+                    monotonic: 0,
+                    wall: 0,
+                }),
+                Arc::new(TestConsole::default()),
+                Arc::new(MockNet::stub()),
+                Arc::new(TestEntropy::new()),
+            )
+            .with_isolates(host.clone()),
+        )
+        .expect("runtime");
+        rt.set_capabilities(CapabilitySet::all());
+        drive_worker_main(
+            &mut rt,
+            "import { Isolate } from 'runtime:workers'; \
+             globalThis.__code = null; \
+             const iso = new Isolate({ source: 'export const f = () => 1;' }); \
+             iso.onerror = (e) => e.preventDefault(); \
+             iso.exports.catch((e) => { __code = e.code; });",
+        );
+        assert_eq!(
+            rt.eval("globalThis.__code").unwrap(),
+            Value::String("ERR_ISOLATE_CPU_LIMIT".into())
+        );
+        assert_eq!(
+            host.unread(),
+            0,
+            "the Closed after the failure was never read"
         );
     }
 

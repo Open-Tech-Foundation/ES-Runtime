@@ -268,10 +268,14 @@ class Isolate extends EventTarget {
     return this.#id;
   }
 
+  // Reads until the host says the agent is gone (`close`, or nothing left),
+  // not until this side thinks it ended. That last read is what retires the
+  // agent on the host; a failure ends the isolate here first, and a pump that
+  // stopped there left every failed isolate registered for good. After
+  // `terminate()` the host has already let it go, and the read returns null.
   async #pump() {
     try {
       for (;;) {
-        if (this.#terminated) return;
         let event;
         try {
           event = await __ops.isolate_recv(this.#id);

@@ -72,6 +72,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An `Isolate` that fails no longer keeps its slot.** An isolate ended by
+  its CPU or memory limit, or by a module that threw, stopped reading from
+  its host before the host said it was gone, and that last read is what frees
+  it. Each failure left an entry behind, and after 10,000 of them (the pool's
+  ceiling) `new Isolate()` failed with "too many workers" for the rest of the
+  process. A program that runs untrusted code and limits it is exactly the
+  one that meets this. Found by the new isolates soak scenario.
+
 - **`crypto.subtle` converts and checks numbers as the standard says (D256).**
   Lengths, `modulusLength`, `saltLength`, `iterations` and `deriveBits`'s
   `length` are converted per WebIDL: out of range or `NaN` is a `TypeError`, a
