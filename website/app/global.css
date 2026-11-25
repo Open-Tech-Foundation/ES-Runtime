@@ -586,3 +586,12 @@ button:not(:disabled),
   vertical-align: middle;
   flex-shrink: 0;
 }
+
+/* The image demo's backdrop: a dark checkerboard, so a transparent corner
+ * reads as transparent rather than as black. The panel is dark in both
+ * themes, so there is one version. */
+.esr-checker {
+  background-color: #18181b;
+  background-image: conic-gradient(#232326 25%, transparent 0 50%, #232326 0 75%, transparent 0);
+  background-size: 16px 16px;
+}

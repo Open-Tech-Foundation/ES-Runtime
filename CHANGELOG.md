@@ -197,6 +197,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Documentation
 
+- **The homepage shows `runtime:images` at work.** A new section runs four
+  chains on the James Webb "Cosmic Cliffs" image: a thumbnail in four formats,
+  a watermark, a rotation by any angle, and an animation resized frame by
+  frame. Each sits beside the file esrun made from it. The pictures and every
+  size beside them come from `website/scripts/images-demo/build.mjs`. The
+  image's CC BY 4.0 credit (NASA, ESA, CSA, STScI) and the changes made are
+  shown under it.
+
 - **The comparison page is re-measured on current runtimes.** esrun 0.49, Node
   26.13 (the current LTS), Bun 1.4.5 and Deno 2.9.7. A new
   `bench/compare/features.sh` calls each API the capability tables list on each
