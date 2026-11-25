@@ -204,3 +204,21 @@ path = "fuzz_targets/ops.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "msgpack"
+path = "fuzz_targets/msgpack.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "db_wire"
+path = "fuzz_targets/db_wire.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "request_parsers"
+path = "fuzz_targets/request_parsers.rs"
+test = false
+doc = false

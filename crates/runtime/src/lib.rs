@@ -63,6 +63,12 @@ mod process_ops;
 mod rsa_ops;
 mod runtime_modules;
 mod scram;
+/// Fuzz harnesses that run JavaScript in a live runtime: the cargo-fuzz
+/// `db_wire` and `request_parsers` targets, and a seeded run of each in this
+/// crate's tests. Not public API.
+#[cfg(any(test, feature = "fuzzing"))]
+#[doc(hidden)]
+pub mod script_fuzz;
 pub mod serialization_ops;
 mod sync_fs_ops;
 mod system_ops;

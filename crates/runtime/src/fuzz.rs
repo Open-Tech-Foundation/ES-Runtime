@@ -80,6 +80,13 @@ pub fn decode_cbor(bytes: &[u8]) {
     crate::cbor::fuzz_round_trip(bytes);
 }
 
+/// Decodes MessagePack, checks the fast path's validation agrees with the
+/// reader, and round-trips what decodes. Hand-written over untrusted lengths,
+/// like CBOR.
+pub fn decode_msgpack(bytes: &[u8]) {
+    crate::msgpack::fuzz_round_trip(bytes);
+}
+
 /// Decodes base64 the way `atob` does, including its stricter-than-usual
 /// whitespace and padding rules.
 pub fn atob(input: &str) {

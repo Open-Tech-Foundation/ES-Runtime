@@ -1,0 +1,5 @@
+Content-Type: text/plain
+Set-Cookie: a=b; Path=/
+Set-Cookie: c=d
+X-Empty:
+Accept: */*

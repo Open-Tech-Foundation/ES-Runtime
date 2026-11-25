@@ -13,6 +13,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Security
 
+- **Database drivers and request parsing are fuzzed.** Three new cargo-fuzz
+  targets: `db_wire` answers the PostgreSQL, MySQL and MongoDB drivers with
+  the input through a scripted network, from sessions recorded against real
+  servers, so the handshake, authentication, framing and every value decoder
+  meet what a hostile server could send; `request_parsers` feeds `formData()`,
+  `Headers`, cookies and `URLSearchParams` in the runtime's own JavaScript;
+  `msgpack` round-trips the MessagePack reader and writer. A seeded run of
+  each is part of the ordinary tests.
+
 - **A WebCrypto length can no longer allocate gigabytes (D256).** One call to
   `crypto.subtle.generateKey({ name: "HMAC", length: 2 ** 32 - 1 })` allocated
   512 MB, as did a PBKDF2 `deriveBits` of the same length; HKDF allocated

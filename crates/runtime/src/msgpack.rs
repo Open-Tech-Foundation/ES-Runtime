@@ -488,6 +488,23 @@ fn describe(v: &Value) -> &'static str {
     }
 }
 
+/// Fuzz entry: decodes MessagePack and, when a document decodes, re-encodes
+/// the value and decodes it again. `validate` and `needs_value_tree` are the
+/// fast path's view of the same bytes, so they must agree with the reader
+/// about which documents are valid.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_round_trip(bytes: &[u8]) {
+    let valid = validate(bytes).is_ok();
+    let _ = needs_value_tree(bytes);
+    let Ok(value) = read_value(bytes) else {
+        assert!(!valid, "validate accepted what the reader refused");
+        return;
+    };
+    assert!(valid, "the reader accepted what validate refused");
+    let encoded = write_value(&value).expect("a decoded value must re-encode");
+    read_value(&encoded).expect("the encoder's own output must decode");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

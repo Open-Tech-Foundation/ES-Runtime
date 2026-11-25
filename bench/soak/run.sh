@@ -6,14 +6,22 @@
 # descriptors and threads — and fails when any of them is still climbing at the
 # end, when a process dies, or when a scenario reports a wrong answer.
 #
-#   http      server.js under oha load, with client.js churning fetch bodies and
-#             WebSocket connections against it (both processes are watched)
+#   http      server.js under oha load, HTTP/1.1 in clear and HTTP/2 over TLS,
+#             with client.js churning fetch bodies over both and WebSocket
+#             connections against it (both processes are watched)
 #   workers   start, message and terminate workers, four at a time
 #   db        runtime:db SQLite connections opened and closed beside a pool
-#   images    runtime:images decode, resize and encode in every output format
+#   images    runtime:images decode, resize and encode in every output format,
+#             animations frame by frame, and runs aborted part way
+#   isolates  create, call, message and terminate Isolates, some ended by
+#             their CPU or memory limit
 #
 # Usage:  bench/soak/run.sh                     every scenario, 10 minutes each
 #         SOAK_MINUTES=120 bench/soak/run.sh http
+#
+# Scenarios run one after another. To run them side by side, start one run per
+# scenario with its own SOAK_PORT (the http scenario uses three ports from it)
+# and SOAK_OUT.
 #
 # Linux only: it reads /proc. Needs a current release esrun (`cargo build
 # --release -p es-runtime-cli`) and `oha` for the http scenario. Run it from the
@@ -34,7 +42,7 @@ mkdir -p "$OUT"
 [ -x "$ESRUN" ] || { echo "soak: no esrun at $ESRUN — cargo build --release -p es-runtime-cli" >&2; exit 2; }
 
 scenarios=("$@")
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(http workers db images)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(http workers db images isolates)
 
 pids=()
 cleanup() { [ ${#pids[@]} -gt 0 ] && kill "${pids[@]}" 2>/dev/null; wait 2>/dev/null; }
@@ -115,16 +123,36 @@ wait_port() { # port
   return 1
 }
 
+# A throwaway CA and a certificate for localhost it signed, for the TLS port.
+make_tls() {
+  command -v openssl >/dev/null || { echo "  ✗ http: needs openssl"; return 1; }
+  (
+    cd "$OUT" &&
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+        -subj "/CN=soak CA" -keyout ca-key.pem -out ca.pem &&
+      openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+        -subj "/CN=localhost" -keyout tls-key.pem -out tls.csr &&
+      openssl x509 -req -in tls.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -days 2 \
+        -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE") \
+        -out tls-cert.pem
+  ) >"$OUT/tls.log" 2>&1 || { echo "  ✗ http: could not make a certificate (see tls.log)"; return 1; }
+}
+
 run_http() {
   command -v oha >/dev/null || { echo "  ✗ http: needs oha (cargo install oha)"; return 1; }
-  (cd "$OUT" && SOAK_PORT=$PORT exec "$ESRUN" --allow-listen --allow-env server.js) >"$OUT/http-server.log" 2>&1 &
+  make_tls || return 1
+  (cd "$OUT" && SOAK_PORT=$PORT exec "$ESRUN" --allow-listen --allow-env --allow-read server.js) >"$OUT/http-server.log" 2>&1 &
   local server=$!; pids+=("$server")
-  wait_port "$PORT" && wait_port $((PORT + 1)) || { echo "  ✗ http: server did not start"; return 1; }
+  wait_port "$PORT" && wait_port $((PORT + 1)) && wait_port $((PORT + 2)) || { echo "  ✗ http: server did not start"; return 1; }
   # A steady rate rather than flat out: the question is what a busy server does
-  # over time, not how fast it can go.
+  # over time, not how fast it can go. One load in clear over HTTP/1.1, one over
+  # TLS with HTTP/2 multiplexing streams on each connection.
   oha -z "${MINUTES}m" -q 2000 -c 32 --no-tui "http://127.0.0.1:$PORT/" >"$OUT/http-oha.log" 2>&1 &
   pids+=($!)
-  (cd "$OUT" && SOAK_PORT=$PORT exec "$ESRUN" --allow-net --allow-env client.js) >"$OUT/http-client.log" 2>&1 &
+  oha -z "${MINUTES}m" -q 1000 -c 8 -p 4 --http2 --cacert "$OUT/ca.pem" --no-tui \
+    "https://localhost:$((PORT + 2))/" >"$OUT/http2-oha.log" 2>&1 &
+  pids+=($!)
+  (cd "$OUT" && SOAK_PORT=$PORT exec "$ESRUN" --allow-net --allow-env --tls-ca="$OUT/ca.pem" client.js) >"$OUT/http-client.log" 2>&1 &
   local client=$!; pids+=("$client")
   sample "$OUT/http.csv" http "$server" "$client" || return 1
   judge "$OUT/http.csv" http
@@ -140,7 +168,7 @@ run_script() { # name flags...
 
 # A run reaches only its working directory, so the scripts run from a copy in
 # the output directory, beside the database file and the logs.
-cp "$here"/*.js "$OUT"/
+cp "$here"/*.js "$here"/*.gif "$OUT"/
 echo "soak: $("$ESRUN" --version), ${MINUTES} min per scenario, logs in $OUT"
 status=0
 for scenario in "${scenarios[@]}"; do
@@ -149,7 +177,8 @@ for scenario in "${scenarios[@]}"; do
     http) run_http ;;
     workers) run_script workers --allow-workers --allow-imports ;;
     db) run_script db --allow-read --allow-write ;;
-    images) run_script images ;;
+    images) run_script images --allow-read ;;
+    isolates) run_script isolates --allow-workers ;;
     *) echo "  ✗ unknown scenario: $scenario"; false ;;
   esac || status=1
   cleanup; pids=()

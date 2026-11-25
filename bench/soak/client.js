@@ -5,6 +5,8 @@
 import { env, exit } from "runtime:process";
 
 const BASE = `http://127.0.0.1:${env.SOAK_PORT}`;
+// TLS, where ALPN picks HTTP/2: a stream per request on one connection.
+const SECURE = `https://localhost:${Number(env.SOAK_PORT) + 2}`;
 const WS = `ws://127.0.0.1:${Number(env.SOAK_PORT) + 1}`;
 let done = 0;
 
@@ -13,12 +15,12 @@ function fail(message) {
   exit(1);
 }
 
-async function fetchLoop() {
+async function fetchLoop(base) {
   for (;;) {
     const body = { n: done, pad: "x".repeat(1024) };
-    const echoed = await (await fetch(`${BASE}/echo`, { method: "POST", body: JSON.stringify(body) })).json();
+    const echoed = await (await fetch(`${base}/echo`, { method: "POST", body: JSON.stringify(body) })).json();
     if (echoed.n !== body.n) fail(`echo returned ${echoed.n} for ${body.n}`);
-    const streamed = await (await fetch(`${BASE}/stream`)).arrayBuffer();
+    const streamed = await (await fetch(`${base}/stream`)).arrayBuffer();
     if (streamed.byteLength !== 8 * 16 * 1024) fail(`stream returned ${streamed.byteLength} bytes`);
     done++;
   }
@@ -45,6 +47,15 @@ async function wsLoop() {
 }
 
 setInterval(() => console.log(`progress ${done}`), 10_000);
-await Promise.all([fetchLoop(), fetchLoop(), fetchLoop(), fetchLoop(), wsLoop(), wsLoop(), wsLoop(), wsLoop()]).catch(
+await Promise.all([
+  fetchLoop(BASE),
+  fetchLoop(BASE),
+  fetchLoop(SECURE),
+  fetchLoop(SECURE),
+  wsLoop(),
+  wsLoop(),
+  wsLoop(),
+  wsLoop(),
+]).catch(
   (e) => fail(e.message),
 );
