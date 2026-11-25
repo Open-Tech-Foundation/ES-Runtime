@@ -90,7 +90,7 @@ function behaviour() {
     return `| ${entry.name} | ${entry.group} | ${same("esdev")} | ${same("jsdom")} | ${same("happy-dom")} |`;
   });
   return {
-    counts: `${counts.match} of ${matrix.cases.length} cases match Chrome exactly, and ${counts["intentional-limit"] ?? 0} is a documented limit.`,
+    counts: limitsSentence(counts.match, matrix.cases.length, counts["intentional-limit"] ?? 0),
     table: ["| Case | Area | esdev | jsdom | happy-dom |", "| --- | --- | :--: | :--: | :--: |", ...rows].join("\n"),
   };
 }
@@ -233,4 +233,12 @@ if (Deno.args.includes("--check")) {
   await Deno.writeTextFile(outputs.doc, doc);
   await Deno.writeTextFile(outputs.site, site);
   console.log(`wrote docs/ESDEV-DOM-PARITY.md and website/app/esdev/test/dom/parity/page.mdx`);
+}
+
+/** The summary sentence, worded for however many limits there are. */
+function limitsSentence(match, total, limits) {
+  const head = `${match} of ${total} cases match Chrome exactly`;
+  if (limits === 0) return `${head}.`;
+  if (limits === 1) return `${head}, and the other is a documented limit.`;
+  return `${head}, and the other ${limits} are documented limits.`;
 }

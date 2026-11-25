@@ -31,7 +31,7 @@ keep current.
 
 ## Behaviour
 
-119 of 121 cases match Chrome exactly, and 2 is a documented limit. Each case runs the same code in all four runtimes and
+119 of 121 cases match Chrome exactly, and the other 2 are documented limits. Each case runs the same code in all four runtimes and
 compares the result.
 
 | Case | Area | esdev | jsdom | happy-dom |
