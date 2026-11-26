@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-26
+
 ### Security
 
 - **Database drivers and request parsing are fuzzed.** Three new cargo-fuzz
