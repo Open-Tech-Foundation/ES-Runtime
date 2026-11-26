@@ -212,7 +212,7 @@ run = "cargo build -p es-runtime-dev-cli && deno run --allow-read --allow-run --
 # The test-only DOM's own unit tests, one file per module it has them for. They
 # import the module factories directly, so they check tree, event and parsing
 # behaviour without going through a whole `esdev test --dom` process the way
-# `crates/dev-cli/tests/cli.rs` does. Run on our own binary, and on PATH the
+# `crates/dev-cli/tests/cli/` does. Run on our own binary, and on PATH the
 # same way `test:serialization` is, for the same reason.
 [tasks."test:dom-unit"]
 run = "esdev test"

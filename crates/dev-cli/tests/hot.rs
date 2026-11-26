@@ -64,7 +64,7 @@ fn chromium() -> Option<&'static str> {
 /// On `Drop` rather than at the end of a passing test: an assertion that fires
 /// unwinds past any explicit stop, and what would be left behind is a dev server
 /// holding a port and a headless browser holding a profile — which the *next*
-/// run then collides with. The same lesson `tests/cli.rs` learned.
+/// run then collides with. The same lesson `tests/cli/` learned.
 struct Fixture {
     dir: PathBuf,
     /// esdev's output, kept outside the project so writing it does not count
@@ -113,7 +113,7 @@ impl Drop for Fixture {
 /// at once for the kernel to have taken one of these numbers.
 ///
 /// Even numbers in 30000–31998, with the browser on the odd one after, stays
-/// under the 32768 floor and clear of the 20000–29999 that `tests/cli.rs`
+/// under the 32768 floor and clear of the 20000–29999 that `tests/cli/`
 /// takes. Stepping by two is what keeps one fixture's server off another
 /// fixture's debugger.
 ///

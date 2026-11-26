@@ -61,6 +61,13 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
   running out of heap inside a timer did, silently. `esdev <file>` now exits
   `124` for a timeout and `1`, with the error, for the heap ceiling.
 
+### Changed
+
+- esdev's end-to-end tests move out of the one `tests/cli.rs` (22,211 lines)
+  into `tests/cli/`, a file per command or area — build, `--lib`, `create`,
+  `start`, `esdev test` and its DOM, browser runs, plugins, `runtime:build` and
+  so on — still one test binary, `--test cli`. The same 473 tests, unchanged.
+
 ## [0.30.0] - 2026-11-19
 
 ### Added

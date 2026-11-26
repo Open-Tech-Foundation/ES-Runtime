@@ -29,7 +29,7 @@
 //! **adds** to it (`--define`, `--conditions`, `--allow-read`, and `--alias`
 //! by name, the flag winning), or is **refused** in a mode it cannot mean
 //! anything in. The rules are the methods below; the table test in
-//! `tests/cli.rs` runs every flag against a project and fails on one that is
+//! `tests/cli/alias_env.rs` runs every flag against a project and fails on one that is
 //! neither applied nor refused.
 
 use std::path::PathBuf;

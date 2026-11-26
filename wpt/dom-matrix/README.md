@@ -31,5 +31,5 @@ A case runs in all four runtimes in one process, so it must be one every
 runtime *returns* from. An emulator that hangs takes the matrix with it and
 there is no way to interrupt it from the outside — happy-dom 20.0.11 hangs on
 `insertAdjacentHTML` with an invalid position, for instance. Assertions about
-refusals belong in `crates/dev-cli/tests/cli.rs`, which runs against esdev
+refusals belong in `crates/dev-cli/tests/cli/`, which runs against esdev
 alone.
