@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-26
+
 ### Added
 
 - `runtime:images`: animations (`animated` and `pages` options, `frame()`,

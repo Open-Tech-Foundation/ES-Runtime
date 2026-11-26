@@ -26,6 +26,8 @@ rest of a developer's tools, where `esrun` takes only `--proxy` (D205).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-26
+
 ### Security
 
 - **Programs run by `esdev` cannot reach the op table either (D253).** The test
