@@ -287,6 +287,13 @@ fn install_channel(
             Box::pin(async move {
                 let id = owned.check(id)?;
                 let event = require(&host)?.recv(id).await.map_err(map_err)?;
+                // The end of the stream is the end of the id (D183): nothing
+                // more can arrive for it, and the prelude stops reading here,
+                // so the id leaves this agent's table rather than staying in
+                // it for the life of the process.
+                if matches!(event, None | Some(WorkerIncoming::Closed)) {
+                    owned.release(id);
+                }
                 Ok(match event {
                     // `null` ends the prelude's pump: the worker is gone and its
                     // queue is drained.
@@ -311,9 +318,9 @@ fn install_channel(
         let owned = owned.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
-            // Checked but not released: `terminate()` is idempotent, and the
-            // prelude's pump may still be draining what the worker already
-            // sent, which it addresses by the same id.
+            // Checked but not released: the prelude's pump may still be
+            // draining what the worker already sent, which it addresses by the
+            // same id. The receive that reports the end releases it (D183).
             let id = owned.check(id)?;
             // Terminating a worker that is already gone is a no-op, not an
             // error — `terminate()` is idempotent by specification.

@@ -148,12 +148,13 @@ pub(crate) fn install(
             ),
         };
         Box::pin(async move {
-            // Every id in the fan-out, not just the first: a broadcast is a
-            // list of sends, and one foreign entry is one foreign send.
-            let ids = ids
-                .into_iter()
-                .map(|id| owned.check(id))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            // Only this agent's connections, and an id no longer in its table
+            // is skipped rather than refused: the prelude builds the list from
+            // its own connection objects (guest code cannot reach this op,
+            // D253), so a missing id is one whose stream ended and was
+            // released (D183) while the fan-out was on its way. Refusing it
+            // would keep the message from every connection still open.
+            let ids: Vec<u64> = ids.into_iter().filter(|&id| owned.owns(id)).collect();
             require(&w)?
                 .broadcast(ids, message)
                 .await
@@ -168,7 +169,14 @@ pub(crate) fn install(
         let w = w.clone();
         let owned = owned.clone();
         async move {
-            match require(&w)?.recv(owned.check(id)?).await.map_err(map_err)? {
+            let incoming = require(&w)?.recv(owned.check(id)?).await.map_err(map_err)?;
+            // A close frame or the end of the stream is the end of the id
+            // (D183): every reader in the prelude stops there, and what is
+            // still sent or closed afterwards is refused quietly by it.
+            if matches!(incoming, None | Some(WsIncoming::Close { .. })) {
+                owned.release(id);
+            }
+            match incoming {
                 Some(WsIncoming::Text(s)) => Ok(frame("text", Value::String(s))),
                 Some(WsIncoming::Binary(b)) => Ok(frame("binary", Value::Bytes(b))),
                 Some(WsIncoming::Close { code, reason }) => Ok(Value::Object(vec![
@@ -197,10 +205,8 @@ pub(crate) fn install(
             // Checked, not released. Closing a WebSocket does not end the id:
             // the prelude's drain keeps calling `ws_recv` afterwards, because a
             // local close is a *request* to close and `closed` settles on the
-            // peer's answering frame. There is no single op that means "this
-            // connection is over", and a connection is long-lived by design —
-            // so this kind is retained rather than released, unlike a request
-            // or a socket, whose ends are exact.
+            // peer's answering frame. `ws_recv` releases it when that frame,
+            // or the end of the stream, arrives (D183).
             require(&w)?
                 .close(owned.check(id)?, code, reason)
                 .await

@@ -3805,7 +3805,7 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 
 **Not here:** the other sample types sharp names (`char`, `short`, `int`, `uint`, `double`, `complex`, `dpcomplex`), 16-bit grey with alpha, and `create`'s `noise`.
 
-### D183 — A worker's or WebSocket's id is released when its stream ends · *Proposed (2026-10-22)* · *amends D50* · *deferred until after the public alpha*
+### D183 — A worker's, isolate's or WebSocket's id is released when its stream ends · *Accepted (2026-11-26)* · *amends D50*
 
 **Context:** the soak suite (`bench/soak/`) runs workers and WebSocket connections through hundreds of thousands of lifetimes. After the provider-side leaks were fixed (a peer-closed WebSocket's slot, a fetch response's trailers), one growth remains in both: the runtime's per-agent ownership set (D50, `handles.rs`) keeps every worker and WebSocket id forever. `worker_terminate` and `ws_close` check an id but never release it, deliberately: the prelude may still be draining what arrived, and the specs make `postMessage()`, `send()`, `terminate()` and `close()` on a finished object a no-op, which a released id would turn into an `ERR_FOREIGN_HANDLE` thrown at the caller. `broadcast()` checks every id in its list, so one connection that closed mid-fan-out would reject the whole broadcast. Measured: about 31 bytes per worker under churn, the same order per WebSocket connection; roughly 30 MB per million.
 
@@ -3815,7 +3815,16 @@ Others: Deno routes `Deno.*` file calls through one `FileSystem` trait and check
 - **A finished object short-circuits in JavaScript before any op.** `postMessage`, `send`, `terminate`, `close` on a worker or socket the prelude has seen end return without calling the host, which is what the specs require anyway.
 - **`broadcast()` skips ended connections** rather than checking them, so a fan-out racing a close still reaches everyone else; a foreign id still rejects, as D50 requires.
 
-**Why deferred:** it changes D50's ownership rule for two handle kinds and every guest-facing method on them, and the remaining growth is small enough (tens of MB per million lifetimes) that no alpha workload should meet it. The soak suite is the check: with this in place, the workers scenario's slow climb should go flat.
+**Why deferred** (2026-10-22): it changes D50's ownership rule for two handle kinds and every guest-facing method on them, and the remaining growth is small enough (tens of MB per million lifetimes) that no alpha workload should meet it. The soak suite is the check: with this in place, the workers scenario's slow climb should go flat.
+
+**Accepted (maintainer, 2026-11-26), before the alpha after all.** `Isolate` (D227) goes through the same agent ops, and an isolate a request is a workload that meets the growth within the day: measured over 400,000 isolate lifetimes, after warm-up RSS grew ~27 bytes an isolate, the id's own cost — at 1,000 requests a second, ~2.5 GB a day. As built:
+
+- **`worker_recv`, `isolate_recv` and `ws_recv` release the id when they report the end** — `Closed` or nothing for an agent, a close frame or nothing for a WebSocket. Every reader in the prelude stops there.
+- **The prelude reads a refusal of its own id as "ended".** The host releases the id a moment before the prelude's pump hears of the end, so a `postMessage`, `queued` or `terminate()` in that moment reaches an op that no longer knows the id. Guest code cannot reach an op (D253) and every id the prelude passes comes from its own private fields, so `ERR_FOREIGN_HANDLE` on one can only mean released: `Worker` and `Isolate` treat it as ended and do nothing, and `terminate()` catches it rather than leaving an unhandled rejection. A flag set where the pump exits answers the common case without an op.
+- **`ws_broadcast` skips ids the agent no longer owns** instead of refusing the whole fan-out. Its list is built from the connection objects `runtime:websocket` keeps in a private `WeakMap`, so for the same reason a missing id is a closed connection, not a foreign one.
+- **`runtime:diagnostics`' `inventory()` reports these three kinds as live**; listeners, HTTP servers and in-flight requests are still kept and over-report.
+
+Tests: `an_ended_workers_id_is_released_and_later_calls_are_no_ops`, `a_failed_isolates_id_is_released` (both with the release taken out, both fail naming the kind left behind), and `a_websockets_id_is_released_when_it_closes` end to end, including a broadcast that names a closed connection.
 
 ### D184 — An error says where a relative path landed, and a file is typed by its name · *Proposed (2026-10-23)* · *amends D141*
 

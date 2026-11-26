@@ -256,10 +256,20 @@
 
   // ---- the parent's half: `Worker` ------------------------------------------
 
+  // Whether an op refused a handle because it is no longer this agent's. The
+  // host releases a worker's id when its stream ends (D183), a moment before
+  // this side's pump hears of it; only the prelude ever passes the id, so the
+  // refusal means the worker has ended, which every caller treats as such.
+  const released = (e) => e?.code === "ERR_FOREIGN_HANDLE";
+
   class Worker extends EventTarget {
     #id = null;
     #ready;
     #terminated = false;
+    // Whether the worker has ended on its own: its stream is over and the
+    // host has let its id go (D183). Posting to it is then a no-op, as HTML
+    // has it, and terminating it has nothing left to do.
+    #ended = false;
     // Whether this worker is a reason for the process to stay up. `true` from
     // the moment it starts, as in Node; `unref()` gives that up. Tracked here
     // rather than counted host-side per call so the count can never drift: the
@@ -349,7 +359,7 @@
       // every steady-state `postMessage` in order.
       const pending = this.#pending;
       this.#pending = [];
-      for (const bytes of pending) __ops.worker_post(this.#id, bytes);
+      for (const bytes of pending) this.#post(bytes);
       this.#pump();
       return this.#id;
     }
@@ -364,6 +374,7 @@
       try {
         await this.#receive();
       } finally {
+        this.#ended = true;
         this.#setReferenced(false);
       }
     }
@@ -483,7 +494,31 @@
      */
     get queued() {
       if (this.#id === null) return this.#pending.length;
-      return this.#terminated ? 0 : __ops.worker_queued(this.#id);
+      if (this.#terminated || this.#ended) return 0;
+      try {
+        return __ops.worker_queued(this.#id);
+      } catch (e) {
+        if (!released(e)) throw e;
+        this.#ended = true;
+        return 0;
+      }
+    }
+
+    // A post to a worker that ended a moment ago is dropped, not an error.
+    #post(bytes) {
+      if (this.#ended) return;
+      try {
+        __ops.worker_post(this.#id, bytes);
+      } catch (e) {
+        if (!released(e)) throw e;
+        this.#ended = true;
+      }
+    }
+
+    #terminateHost(id) {
+      Promise.resolve(__ops.worker_terminate(id)).catch((e) => {
+        if (!released(e)) throw e;
+      });
     }
 
     postMessage(message, options) {
@@ -493,7 +528,7 @@
         this.#pending.push(bytes);
         return;
       }
-      __ops.worker_post(this.#id, bytes);
+      this.#post(bytes);
     }
 
     terminate() {
@@ -502,14 +537,15 @@
       this.#pending = [];
       // Idempotent, and safe before the spawn has resolved: the `then` runs
       // once there is an id to terminate.
+      if (this.#ended) return;
       if (this.#id !== null) {
-        __ops.worker_terminate(this.#id);
+        this.#terminateHost(this.#id);
       } else {
         // Still starting. `#ready` settles with the id, or with null if the
         // spawn failed — in which case there is nothing left to terminate.
         this.#ready.then(
           (id) => {
-            if (id !== null) __ops.worker_terminate(id);
+            if (id !== null) this.#terminateHost(id);
           },
           () => {},
         );

@@ -314,6 +314,20 @@ fn upgrades_a_websocket_on_the_http_server_that_is_serving_requests() {
 }
 
 #[test]
+fn a_websockets_id_is_released_when_it_closes() {
+    // D183: both ends of a closed connection leave the agent's handle table,
+    // so a server that churns connections does not grow by one id each, and a
+    // broadcast naming a connection that closed still reaches the others.
+    let out = run_file("websocket-release.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("open 4"), "{stdout}");
+    assert!(stdout.contains("after-close 2"), "{stdout}");
+    assert!(stdout.contains("broadcast still-here"), "{stdout}");
+    assert!(stdout.contains("all-closed 0"), "{stdout}");
+}
+
+#[test]
 fn serves_http2_to_a_cleartext_client_that_opens_with_the_preface() {
     // A real `serve()` under the real binary, answering hand-written HTTP/2
     // frames over `runtime:net` — `fetch` would talk HTTP/1.1 to a cleartext

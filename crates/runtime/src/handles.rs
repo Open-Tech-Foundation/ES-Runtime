@@ -73,6 +73,12 @@ impl Handles {
         id
     }
 
+    /// Whether this agent owns `id`, for a caller that skips rather than
+    /// refuses what it does not.
+    pub(crate) fn owns(&self, id: u64) -> bool {
+        self.ids.borrow().contains(&id)
+    }
+
     /// `id` if this agent owns it, else a refusal naming what was asked for.
     ///
     /// [`ErrorCode::ForeignHandle`] rather than `ERR_CAPABILITY_DENIED`: the
@@ -130,11 +136,12 @@ impl Handles {
 /// # What this reports, exactly
 ///
 /// **Handles this agent owns — not handles that are live.** D50 made releasing a
-/// per-kind judgment: a socket, a child, an fd, a database connection and a
-/// worker are released when they end, but a listener, an HTTP server, a
-/// WebSocket and an in-flight request are deliberately kept, because their ends
-/// of life are not exact and releasing early would answer an ordinary teardown
-/// with `ERR_FOREIGN_HANDLE`. Those four kinds therefore over-report here.
+/// per-kind judgment: a socket, a child, an fd, a database connection, a
+/// worker, an isolate and a WebSocket are released when they end (the last
+/// three when their stream ends, D183), but a listener, an HTTP server and an
+/// in-flight request are deliberately kept, because their ends of life are not
+/// exact and releasing early would answer an ordinary teardown with
+/// `ERR_FOREIGN_HANDLE`. Those three kinds therefore over-report here.
 ///
 /// The alternative was a diagnostics-only release, which would trade a security
 /// invariant for a tidier field. The field is named for what it is instead.

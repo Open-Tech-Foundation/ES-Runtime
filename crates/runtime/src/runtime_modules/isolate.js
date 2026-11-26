@@ -180,6 +180,26 @@ function isolateCheckCode(code, opts) {
  * rule.terminate();
  * ```
  */
+// Whether an op refused a handle because it is no longer this agent's. The
+// host releases an isolate's id when its stream ends (D183), a moment before
+// this side's pump hears of it; only this module ever passes the id, so the
+// refusal means the isolate has ended.
+const isolateReleased = (e) => e?.code === "ERR_FOREIGN_HANDLE";
+
+function isolatePost(id, bytes) {
+  try {
+    __ops.isolate_post(id, bytes);
+  } catch (e) {
+    if (!isolateReleased(e)) throw e;
+  }
+}
+
+function isolateTerminateHost(id) {
+  Promise.resolve(__ops.isolate_terminate(id)).catch((e) => {
+    if (!isolateReleased(e)) throw e;
+  });
+}
+
 class Isolate extends EventTarget {
   #id = null;
   #ready;
@@ -260,10 +280,10 @@ class Isolate extends EventTarget {
     const pending = this.#pending;
     this.#pending = [];
     if (this.#terminated) {
-      __ops.isolate_terminate(this.#id);
+      isolateTerminateHost(this.#id);
       return this.#id;
     }
-    for (const bytes of pending) __ops.isolate_post(this.#id, bytes);
+    for (const bytes of pending) isolatePost(this.#id, bytes);
     this.#pump();
     return this.#id;
   }
@@ -349,7 +369,7 @@ class Isolate extends EventTarget {
     } catch (error) {
       bytes = isolateSerialize([4, id, false, isolateErrorPieces(error)]);
     }
-    __ops.isolate_post(this.#id, bytes);
+    isolatePost(this.#id, bytes);
   }
 
   #call(name, args) {
@@ -373,7 +393,7 @@ class Isolate extends EventTarget {
   #send(bytes) {
     if (this.#terminated) return;
     if (this.#id === null) this.#pending.push(bytes);
-    else __ops.isolate_post(this.#id, bytes);
+    else isolatePost(this.#id, bytes);
   }
 
   /** Every call still waiting, and the exports if they never came, end with `error`. */
@@ -428,7 +448,7 @@ class Isolate extends EventTarget {
     if (this.#terminated) return;
     this.#end(isolateTerminated("the isolate has been terminated"));
     if (this.#id !== null) {
-      __ops.isolate_terminate(this.#id);
+      isolateTerminateHost(this.#id);
     }
     // Still starting: `#start` sees the flag once the spawn resolves.
   }

@@ -81,6 +81,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Workers, isolates and WebSockets no longer leave their id behind (D183).**
+  Each one that ended kept an entry in its agent's handle table for the life
+  of the process — about 30 MB per million, which a server creating an
+  `Isolate` per request reaches within hours. The id now goes when the stream
+  ends. Calls on an ended one stay quiet, as the specs require, and
+  `broadcast()` naming a connection that just closed still reaches the rest
+  instead of failing. `inventory()` now lists these three kinds only while
+  they are live.
+
 - **An isolate ended by its CPU budget no longer leaks.** The budget handed V8
   a reference with each interrupt request, and V8 drops a request still
   pending when the isolate is disposed, so every isolate the budget ended kept

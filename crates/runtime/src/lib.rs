@@ -3009,9 +3009,19 @@ mod tests {
         /// The `WorkerSpec` of the most recent spawn, so a test can assert what
         /// the runtime narrowed before asking for an agent.
         last: Arc<std::sync::Mutex<Option<WorkerSpec>>>,
+        /// With nothing queued, `recv` waits instead of reporting the end: a
+        /// worker that is alive and idle, for tests about a live one.
+        held_open: bool,
     }
 
     impl TestWorkerHost {
+        fn held_open() -> Self {
+            TestWorkerHost {
+                held_open: true,
+                ..TestWorkerHost::default()
+            }
+        }
+
         /// What `recv` has not handed out yet.
         fn unread(&self) -> usize {
             self.inbox.lock().expect("inbox").len()
@@ -3079,6 +3089,9 @@ mod tests {
                     Some(inbox.remove(0))
                 }
             };
+            if next.is_none() && self.held_open {
+                return Box::pin(std::future::pending());
+            }
             Box::pin(std::future::ready(Ok(next)))
         }
 
@@ -3294,11 +3307,90 @@ mod tests {
         );
     }
 
+    /// A worker's id leaves this agent's table when its stream ends (D183), so
+    /// a program that churns workers does not grow by one id each. What is
+    /// called on it afterwards is a no-op, as HTML has it: no throw, and
+    /// nothing reaches the host.
+    #[test]
+    fn an_ended_workers_id_is_released_and_later_calls_are_no_ops() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        host.queue(WorkerIncoming::Closed);
+        let mut rt = runtime_with_workers(host.clone());
+        drive_worker_main(
+            &mut rt,
+            "import { inventory } from 'runtime:diagnostics'; \
+             const w = new Worker('./w.mjs'); \
+             globalThis.__kinds = () => inventory().handles.map((h) => h.kind).join(','); \
+             globalThis.__after = () => { w.postMessage(1); const q = w.queued; w.terminate(); return q; };",
+        );
+        assert_eq!(host.unread(), 0, "the end was read");
+        assert_eq!(rt.eval("__kinds()").unwrap(), Value::String(String::new()));
+        assert_eq!(rt.eval("__after()").unwrap(), Value::Number(0.0));
+        for _ in 0..8 {
+            rt.tick(0);
+        }
+        assert_eq!(host.calls(), vec!["spawn file:///app/w.mjs".to_string()]);
+    }
+
+    /// The same for an isolate, which ends by failing: the id goes with the
+    /// close that follows the failure.
+    #[test]
+    fn a_failed_isolates_id_is_released() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        host.queue(WorkerIncoming::Error {
+            error: UncaughtError::new("ERR_ISOLATE_MEMORY_LIMIT", "isolate terminated", ""),
+        });
+        host.queue(WorkerIncoming::Closed);
+        let mut rt = Runtime::new(
+            Box::new(V8Engine::new(es_runtime_common::Limits::default()).expect("engine")),
+            HostProviders::new(
+                Arc::new(FixedClock {
+                    monotonic: 0,
+                    wall: 0,
+                }),
+                Arc::new(TestConsole::default()),
+                Arc::new(MockNet::stub()),
+                Arc::new(TestEntropy::new()),
+            )
+            .with_isolates(host.clone()),
+        )
+        .expect("runtime");
+        rt.set_capabilities(CapabilitySet::all());
+        drive_worker_main(
+            &mut rt,
+            "import { Isolate } from 'runtime:workers'; \
+             import { inventory } from 'runtime:diagnostics'; \
+             const iso = new Isolate({ source: 'export const f = () => 1;' }); \
+             iso.onerror = (e) => e.preventDefault(); \
+             iso.exports.catch(() => {}); \
+             globalThis.__kinds = () => inventory().handles.map((h) => h.kind).join(','); \
+             globalThis.__after = () => { iso.postMessage(1); iso.terminate(); return 'ok'; };",
+        );
+        assert_eq!(host.unread(), 0);
+        assert_eq!(rt.eval("__kinds()").unwrap(), Value::String(String::new()));
+        assert_eq!(rt.eval("__after()").unwrap(), Value::String("ok".into()));
+        for _ in 0..8 {
+            rt.tick(0);
+        }
+        assert!(
+            !host
+                .calls()
+                .iter()
+                .any(|c| c.starts_with("post") || c.starts_with("terminate")),
+            "{:?}",
+            host.calls()
+        );
+    }
+
     /// `terminate()` reaches the host, and stops the runtime asking for more.
     #[test]
     fn terminate_reaches_the_host_and_ends_the_pump() {
         let _g = v8_guard();
-        let host = Arc::new(TestWorkerHost::default());
+        // Alive and idle: a worker that already ended has nothing for
+        // `terminate()` to reach (D183).
+        let host = Arc::new(TestWorkerHost::held_open());
         let mut rt = runtime_with_workers(host.clone());
         drive_worker_main(&mut rt, "globalThis.__w = new Worker('./w.mjs');");
         rt.eval("__w.terminate(); __w.postMessage('dropped');")
@@ -5363,6 +5455,9 @@ mod tests {
         pending_accepts: std::sync::Mutex<std::collections::VecDeque<u64>>,
         /// The id lists `broadcast` was called with, in order.
         broadcasts: std::sync::Mutex<Vec<Vec<u64>>>,
+        /// With no frame queued, `recv` waits instead of reporting the end:
+        /// connections that stay open, for tests about live ones.
+        held_open: bool,
     }
     impl MockWs {
         fn new(frames: Vec<es_runtime_providers::WsIncoming>, protocol: &str) -> Self {
@@ -5372,6 +5467,7 @@ mod tests {
                 served: std::sync::Mutex::new(Vec::new()),
                 pending_accepts: std::sync::Mutex::new(std::collections::VecDeque::new()),
                 broadcasts: std::sync::Mutex::new(Vec::new()),
+                held_open: false,
             }
         }
 
@@ -5380,6 +5476,13 @@ mod tests {
         fn accepting(self, n: u64) -> Self {
             *self.pending_accepts.lock().unwrap() = (1..=n).collect();
             self
+        }
+
+        fn held_open(self) -> Self {
+            MockWs {
+                held_open: true,
+                ..self
+            }
         }
     }
     impl es_runtime_providers::WebSocketProvider for MockWs {
@@ -5433,6 +5536,9 @@ mod tests {
             >,
         > {
             let item = self.inbound.lock().unwrap().pop_front();
+            if item.is_none() && self.held_open {
+                return Box::pin(std::future::pending());
+            }
             Box::pin(async move { Ok(item) })
         }
         fn close(
@@ -5870,7 +5976,8 @@ mod tests {
     #[test]
     fn ws_broadcast_still_reaches_every_valid_connection() {
         let _g = v8_guard();
-        let ws = Arc::new(MockWs::new(vec![], "").accepting(3));
+        // Open connections: one whose stream had ended would be skipped (D183).
+        let ws = Arc::new(MockWs::new(vec![], "").accepting(3).held_open());
         let mut rt = runtime_with_ws(ws.clone());
         run_module(
             &mut rt,

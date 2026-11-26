@@ -187,9 +187,10 @@ inventory().handles;
 // [{ kind: "HTTP server", count: 1, ids: [1] }]
 ```
 
-Not the same as "live": listeners, HTTP servers, WebSockets and in-flight
-requests are deliberately never released by the ownership registry, so those
-kinds over-report.
+Not the same as "live": listeners, HTTP servers and in-flight requests are
+deliberately never released by the ownership registry, so those kinds
+over-report. A worker, an isolate or a WebSocket leaves the list when its
+stream ends.
 
 ## Coming from Node
 
