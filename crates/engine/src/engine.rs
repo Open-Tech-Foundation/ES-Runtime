@@ -1742,6 +1742,33 @@ mod tests {
         );
     }
 
+    /// A check the isolate never gets to answer holds nothing: an isolate
+    /// ended and dropped with an interrupt still pending drops the request
+    /// without running it, and when the request owned a reference to the
+    /// budget, every isolate a budget ended leaked it and its isolate handle.
+    #[test]
+    fn a_pending_budget_check_holds_nothing() {
+        let _v8 = crate::v8_test_guard();
+        let engine = engine();
+        let budget = crate::CpuBudget::new(30, engine.interrupt_handle());
+        // The isolate is idle, so none of these requests is answered.
+        for _ in 0..3 {
+            budget.check();
+        }
+        assert_eq!(
+            std::sync::Arc::strong_count(&budget),
+            1,
+            "a request kept a reference"
+        );
+        drop(engine);
+        let weak = std::sync::Arc::downgrade(&budget);
+        drop(budget);
+        assert!(
+            weak.upgrade().is_none(),
+            "the budget outlived its last owner"
+        );
+    }
+
     /// A turn handle enters and leaves without borrowing the engine, and does
     /// nothing once the engine is gone — a drive that ends drops its runtime
     /// in the middle of the poll the handle wraps.

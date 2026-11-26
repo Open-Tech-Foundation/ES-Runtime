@@ -81,6 +81,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An isolate ended by its CPU budget no longer leaks.** The budget handed V8
+  a reference with each interrupt request, and V8 drops a request still
+  pending when the isolate is disposed, so every isolate the budget ended kept
+  the budget and its isolate handle: about 80 bytes each. The request now
+  carries an id, looked up when it runs.
+
 - **The MongoDB driver checks a cursor reply before reading it.** A reply with
   no `cursor`, a batch that is not an array or a cursor id that is not an
   integer failed with `TypeError: Cannot read properties of undefined`; it is
