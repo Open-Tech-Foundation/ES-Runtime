@@ -249,6 +249,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `Worker` for unbounded CPU work (D237). An isolate that spent more than a
   second of CPU in one turn now ends with `ERR_ISOLATE_CPU_LIMIT`.
 
+### Changed
+
+- `es-runtime`'s own tests move out of `lib.rs` (9,075 lines, 7,360 of them one
+  test module) into `src/tests/`: a file per subsystem — workers, WebSocket,
+  fetch, crypto, modules, the event loop and so on — with the fakes and helpers
+  they share in `tests/mod.rs`. The same 243 tests, unchanged.
+
 ### Documentation
 
 - **The homepage shows `runtime:images` at work.** A new section runs four
